@@ -103,6 +103,7 @@ test-suite gin-test
     Gin.DriverSpec
     Gin.E2ESpec
     Gin.Examples
+    Gin.ExamplesSpec
     Gin.Netlist.BuildSpec
     Gin.NormalizeSpec
     Gin.SimSpec

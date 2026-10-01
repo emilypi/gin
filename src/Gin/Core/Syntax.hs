@@ -80,8 +80,12 @@ data Port = Port
 -- > Signal d i1 -> .. -> Signal d ik -> Signal d o
 --
 -- where @d = domainName topDomain@, the @ij@ are the input port types in
--- order, and @o@ is the single output port type, or the 'TProd' of the
--- output port types when there are two or more. k may be 0.
+-- order, and @o@ is the single output port type or, for n >= 2 outputs,
+-- the right-nested binary product
+-- @TProd [o1, TProd [o2, .. TProd [o(n-1), on]]]@ (the shape of Lean's
+-- @o1 × o2 × … × on@); output j is read by projecting along that spine.
+-- k may be 0. 'topName' satisfies 'Gin.Netlist.Types.isLegalIdent', and
+-- port names are pairwise distinct.
 data TopEntity = TopEntity
   { topName :: !Text
   , topDomain :: !Domain

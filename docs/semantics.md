@@ -78,3 +78,9 @@ A run passes if and only if some output line contains `GIN-PASS` and no
 line contains `GIN-FAIL` or `GIN-MISMATCH`. Lines are matched by
 substring because simulators may prefix report output (nvc prints
 `** Note:`).
+
+## Multiple outputs
+
+A top entity with outputs `o1 … on` (n ≥ 2) returns the right-nested
+binary product `o1 × (o2 × … × (o(n-1) × on))`, the shape of Lean's
+`o1 × o2 × … × on`. Output `j` is the `j`-th component along that spine.

@@ -4,14 +4,22 @@
 -- Invariants, checked by 'Gin.Normalize.checkNormal':
 --
 --   1. Every type in an 'NModule' is scalar ('isScalar').
---   2. Every bound name is unique and distinct from every input name.
---   3. 'NPrim' carries only combinational prims ('isCombinational'),
---      saturated ('primArity' atoms), well-typed.
+--   2. Input names are pairwise distinct; every bound name is unique and
+--      distinct from every input name.
+--   3. Every right-hand side has its bind's type: 'NPrim' carries only
+--      combinational prims ('isCombinational'), saturated ('primArity'
+--      atoms), typed per "Gin.Core.Prim" on its atoms' types; 'NMux''s
+--      condition is 'TBool' and both branches have the bind's type;
+--      'NAtom''s atom and 'NReg''s argument have the bind's type. Every
+--      'NOutput' atom has type 'noTy'.
 --   4. Every variable referenced is an input or a bind.
 --   5. The dependency graph over binds, ignoring the argument edge of
 --      'NReg', is acyclic, and 'nmBinds' is in a topological order of it
 --      (an 'NReg' argument may refer forward).
 --   6. Each 'NReg' initial value has the bind's type.
+--   7. Every bind is reachable from an output (no dead binds), and no
+--      bind is an 'NAtom' copy (copies are propagated away).
+--   8. At most 'Gin.Limits.maxNormalBinds' binds.
 --
 -- Semantics: every name denotes one value per clock cycle. Inputs take
 -- the driven value; 'NReg' denotes its initial value at cycle 0 and the

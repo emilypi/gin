@@ -4,12 +4,19 @@
 -- assumed by every backend:
 --
 --   1. Every 'Ident' satisfies 'isLegalIdent'.
---   2. Net names (inputs, outputs, declared nets, clock, reset) are
---      pairwise distinct, and case-insensitively distinct (VHDL).
+--   2. The module name and the net names (inputs, outputs, declared nets,
+--      clock, reset) are pairwise distinct, also case-insensitively
+--      (VHDL).
 --   3. Every 'Operand' reference names an input or a declared net (never
 --      an output port, the clock or the reset).
 --   4. Expressions are well-typed per the table on 'HExpr'.
 --   5. The 'DAssign' dependency graph is acyclic.
+--   6. The operand of 'HSlice' is an 'ORef' (slices of constants are
+--      folded to constants).
+--   7. The amount of 'HShl' and 'HLshr' is less than the operand width
+--      (larger shifts are folded to the zero constant).
+--   8. Every declared net is read by some declaration or output. Inputs,
+--      the clock and the reset may be unread.
 --
 -- Clocking: every 'DReg' updates on the rising edge of 'modClock'; when
 -- 'modReset' is high at that edge it loads its reset value, otherwise
@@ -50,7 +57,8 @@ newtype Ident = Ident {unIdent :: Text}
   deriving newtype (Eq, Ord)
 
 -- | @[a-z][a-z0-9_]*@, at most 64 characters, no @__@, no trailing @_@,
--- and not a reserved word of any target language.
+-- no @gin_@ prefix (reserved for identifiers backends generate), and not
+-- a reserved word of any target language or tool.
 isLegalIdent :: Text -> Bool
 isLegalIdent t = case Text.uncons t of
   Just (c, rest) ->
@@ -59,11 +67,14 @@ isLegalIdent t = case Text.uncons t of
       && Text.length t <= 64
       && not ("__" `Text.isInfixOf` t)
       && not ("_" `Text.isSuffixOf` t)
+      && not ("gin_" `Text.isPrefixOf` t)
       && not (t `Set.member` reservedWords)
   Nothing -> False
 
 -- | Union of Verilog-2005, SystemVerilog-2017 and VHDL-2008 reserved
--- words, plus names gin's testbenches use internally.
+-- words, words the supported tools reject as identifiers, and predeclared
+-- names the generated VHDL relies on. Generated HDL may reference a
+-- predeclared library name only if it is in this set.
 reservedWords :: Set Text
 reservedWords =
   Set.fromList . Text.words $
@@ -106,10 +117,25 @@ reservedWords =
          \restrict_guarantee return rol ror select sequence severity shared signal sla sll \
          \sra srl strong subtype then to transport type unaffected units until use \
          \variable vmode vprop vunit wait when while with xnor xor "
-      -- VHDL standard library names gin's output imports, and testbench internals
+      -- VHDL predeclared names that generated designs and testbenches use
       <> "std ieee std_logic std_logic_vector std_ulogic numeric_std unsigned signed \
          \resize to_unsigned to_integer rising_edge natural integer boolean \
-         \gin_tb gin_cycle gin_errors gin_dut"
+         \work line write writeline to_string to_hstring shift_left shift_right \
+         \textio output env finish stop now time string character bit bit_vector \
+         \ns note error warning failure true false "
+      -- Rejected by Icarus Verilog 13, Verilator 5.052 (-Wall SYMRSVDWORD) or
+      -- nvc 1.23 although not reserved by the language standards
+      <> "bool wone wreal reverse_range mailbox semaphore randomize abort alignas \
+         \alignof and_eq asm atomic_cancel atomic_commit atomic_noexcept auto bitand \
+         \bitor catch cdecl char char16_t char32_t compl complex concept const_cast \
+         \const_iterator constexpr decltype delete double dynamic_cast explicit far \
+         \float friend goto huge inline interrupt iterator long mutable namespace near \
+         \noexcept not_eq nullptr operator or_eq override pascal private public queue \
+         \reference requires sc_clock sc_in sc_inout sc_out sc_signal sensitive \
+         \sensitive_neg sensitive_pos short sizeof stack static_assert static_cast \
+         \switch synchronized template thread_local throw transaction_safe \
+         \transaction_safe_dynamic try type_info typeid typename uint16_t uint32_t \
+         \uint8_t using volatile wchar_t xor_eq"
 
 -- | Hardware types: Bool maps to a single bit, @BitVec n@ to an n-bit vector.
 data HwType

@@ -36,12 +36,15 @@ data Backend = Backend
   -- ^ A self-checking testbench (module/entity @<modName>_tb@) that
   -- instantiates the design, replays the vectors per the testbench
   -- protocol in @docs/semantics.md@, and prints exactly one
-  -- 'passMarker' or 'failMarker' line at the end.
+  -- 'passMarker' or 'failMarker' line at the end. Precondition (checked
+  -- by the driver): the vectors' input and output ports equal the
+  -- module's by name, order and type (Bool as 'HBit', BitVec n as 'HVec'
+  -- n).
   }
 
--- | Testbench output protocol. The driver only looks for lines
--- containing these markers (simulators may prefix report lines);
--- everything after a marker is informational.
+-- | Testbench output protocol. Testbenches print these lines to standard
+-- output; the driver reads only standard output and only looks for lines
+-- containing a marker; everything after a marker is informational.
 --
 -- > GIN-PASS cycles=<n>
 -- > GIN-FAIL mismatches=<k>

@@ -74,10 +74,16 @@ simulators:
    mismatches and `GIN-FAIL mismatches=<k>` otherwise, then finish the
    simulation.
 
-A run passes if and only if some output line contains `GIN-PASS` and no
-line contains `GIN-FAIL` or `GIN-MISMATCH`. Lines are matched by
-substring because simulators may prefix report output (nvc prints
-`** Note:`).
+Every protocol line goes to standard output: Verilog and SystemVerilog
+use `$display`; VHDL uses `std.textio` (`write` then
+`writeline(output, …)`). VHDL `report` and `assert` must not carry
+protocol lines, because nvc writes them to standard error.
+
+A run passes if and only if the simulator exits 0 within the time
+limit, standard output contains exactly one line containing
+`GIN-PASS cycles=<N>` where `N` is the number of vector cycles, and no
+line of standard output contains `GIN-FAIL` or `GIN-MISMATCH`. Standard
+error is not inspected for markers.
 
 ## Multiple outputs
 

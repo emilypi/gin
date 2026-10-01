@@ -1,4 +1,3 @@
--- | Owner: p4.
 module Gin.NormalizeSpec (spec) where
 
 import Test.Hspec (Spec)

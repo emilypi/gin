@@ -1,6 +1,4 @@
 -- | Types of the gin core IR.
---
--- FROZEN CONTRACT (c-core-ast).
 module Gin.Core.Type
   ( Domain (..)
   , Ty (..)
@@ -14,7 +12,7 @@ import Data.Text (Text)
 import Numeric.Natural (Natural)
 
 -- | A synchronous clock domain. Every domain has one clock and one
--- synchronous, active-high reset (C-3).
+-- synchronous, active-high reset.
 data Domain = Domain
   { domainName :: !Text
   , domainPeriodPs :: !Natural
@@ -32,7 +30,7 @@ data Ty
     TSignal !Text !Ty
   deriving stock (Eq, Ord, Show)
 
--- | Largest bit-vector width gin accepts (C-2). Bounds memory use when
+-- | Largest bit-vector width gin accepts. Bounds memory use when
 -- decoding untrusted IR.
 maxWidth :: Natural
 maxWidth = 4096

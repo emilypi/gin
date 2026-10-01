@@ -1,7 +1,5 @@
 -- | Runtime values shared by literals, register initialisers, simulation
 -- and test vectors.
---
--- FROZEN CONTRACT (c-core-ast).
 module Gin.Core.Value
   ( Value (..)
   , mkBV
@@ -22,7 +20,7 @@ data Value
   deriving stock (Eq, Ord, Show)
 
 -- | Smart constructor: reduces the payload modulo @2^width@ (two's
--- complement wrap-around, C-4).
+-- complement wrap-around).
 mkBV :: Natural -> Integer -> Value
 mkBV w v = VBV w (v `mod` (2 ^ w))
 

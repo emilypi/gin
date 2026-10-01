@@ -1,4 +1,3 @@
--- | Owner: p8.
 module Gin.SimSpec (spec) where
 
 import Test.Hspec (Spec)

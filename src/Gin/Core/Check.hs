@@ -1,6 +1,4 @@
 -- | Type checker for the core IR.
---
--- Owner: p3.
 module Gin.Core.Check
   ( checkProgram
   ) where
@@ -12,4 +10,4 @@ import Gin.Error (GinError)
 -- top-entity shape ('Gin.Core.Syntax.TopEntity'), scalar ports, unique
 -- def names, and no recursion between globals. Errors use 'StCheck'.
 checkProgram :: Program -> Either GinError ()
-checkProgram = error "TODO(p3): checkProgram"
+checkProgram = error "not yet implemented: checkProgram"

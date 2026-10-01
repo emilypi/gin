@@ -1,7 +1,7 @@
 -- | Target-independent netlist: one operator per net, every net typed.
 --
--- FROZEN CONTRACT (c-netlist). Invariants (established by
--- 'Gin.Netlist.Build.buildNetlist', assumed by every backend):
+-- Invariants, established by 'Gin.Netlist.Build.buildNetlist' and
+-- assumed by every backend:
 --
 --   1. Every 'Ident' satisfies 'isLegalIdent'.
 --   2. Net names (inputs, outputs, declared nets, clock, reset) are
@@ -13,7 +13,7 @@
 --
 -- Clocking: every 'DReg' updates on the rising edge of 'modClock'; when
 -- 'modReset' is high at that edge it loads its reset value, otherwise
--- its next operand (synchronous, active-high reset, C-3).
+-- its next operand (synchronous, active-high reset).
 module Gin.Netlist.Types
   ( Ident (..)
   , isLegalIdent

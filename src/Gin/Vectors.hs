@@ -1,7 +1,7 @@
 -- | Cycle-by-cycle test vectors: produced by the Lean exporter from the
 -- Lean semantics, consumed by the simulators and HDL testbenches.
 --
--- FROZEN CONTRACT (c-vectors). JSON form is c-vectors-json.
+-- The JSON form is specified in @docs/file-formats.md@.
 module Gin.Vectors
   ( Vectors (..)
   , Cycle (..)
@@ -28,6 +28,6 @@ data Cycle = Cycle
   }
   deriving stock (Eq, Show)
 
--- | Largest vector set gin accepts (C-5).
+-- | Largest vector set gin accepts.
 maxCycles :: Int
 maxCycles = 100000

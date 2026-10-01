@@ -1,6 +1,4 @@
--- | Certificate policy (c-cert-policy).
---
--- Owner: p3.
+-- | Certificate policy: which axioms a proof may depend on.
 module Gin.Certificate
   ( CertPolicy (..)
   , defaultPolicy
@@ -18,7 +16,7 @@ newtype CertPolicy = CertPolicy
   }
   deriving stock (Eq, Show)
 
--- | Lean's three standard axioms (C-1). @sorryAx@ is never allowed.
+-- | Lean's three standard axioms. @sorryAx@ is never allowed.
 defaultPolicy :: CertPolicy
 defaultPolicy = CertPolicy (Set.fromList ["propext", "Classical.choice", "Quot.sound"])
 
@@ -26,4 +24,4 @@ defaultPolicy = CertPolicy (Set.fromList ["propext", "Classical.choice", "Quot.s
 -- policy in either 'certAxioms' or 'certImplAxioms', and @sorryAx@ even
 -- if a caller's policy lists it. Errors use 'StCertificate'.
 checkCertificate :: CertPolicy -> Certificate -> Either GinError ()
-checkCertificate = error "TODO(p3): checkCertificate"
+checkCertificate = error "not yet implemented: checkCertificate"

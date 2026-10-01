@@ -1,7 +1,5 @@
 -- | Abstract syntax of the gin core IR, the language the Lean exporter
--- emits (as JSON, c-ir-json) and the normalizer consumes.
---
--- FROZEN CONTRACT (c-core-ast).
+-- emits (as JSON, see @docs/file-formats.md@) and the normalizer consumes.
 module Gin.Core.Syntax
   ( Name (..)
   , Expr (..)
@@ -96,7 +94,7 @@ data TopEntity = TopEntity
 
 -- | Evidence, produced by the Lean exporter, that the implementation was
 -- proven against a specification. gin cannot re-check the proof; it
--- enforces a policy on these fields (c-cert-policy) and carries the
+-- enforces a policy on these fields ('Gin.Certificate') and carries the
 -- statement into generated HDL headers for human review.
 data Certificate = Certificate
   { certTheorem :: !Text

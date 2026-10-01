@@ -1,8 +1,6 @@
--- | JSON encoding of the core IR (c-ir-json) and test vectors
--- (c-vectors-json). Explicit functions rather than instances, so the
--- frozen types carry no orphan instances.
---
--- Owner: p3.
+-- | JSON encoding of the core IR and test vectors, as specified in
+-- @docs/file-formats.md@. Explicit functions rather than instances, so
+-- the core types carry no aeson dependency and no orphan instances.
 module Gin.Core.Json
   ( decodeProgram
   , encodeProgram
@@ -18,13 +16,13 @@ import Gin.Vectors (Vectors)
 -- | Decode and structurally validate (format tag, value invariants, width
 -- and size bounds). Type checking is 'Gin.Core.Check.checkProgram'.
 decodeProgram :: LazyByteString -> Either GinError Program
-decodeProgram = error "TODO(p3): decodeProgram"
+decodeProgram = error "not yet implemented: decodeProgram"
 
 encodeProgram :: Program -> LazyByteString
-encodeProgram = error "TODO(p3): encodeProgram"
+encodeProgram = error "not yet implemented: encodeProgram"
 
 decodeVectors :: LazyByteString -> Either GinError Vectors
-decodeVectors = error "TODO(p3): decodeVectors"
+decodeVectors = error "not yet implemented: decodeVectors"
 
 encodeVectors :: Vectors -> LazyByteString
-encodeVectors = error "TODO(p3): encodeVectors"
+encodeVectors = error "not yet implemented: encodeVectors"

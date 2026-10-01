@@ -1,7 +1,6 @@
 -- | Uniform error type for every compiler stage.
 --
--- FROZEN CONTRACT (c-error). Every stage function returns
--- @Either GinError a@; stages never throw.
+-- Every stage function returns @Either GinError a@; stages never throw.
 module Gin.Error
   ( Stage (..)
   , GinError (..)

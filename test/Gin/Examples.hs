@@ -1,7 +1,7 @@
 -- | Hand-written example circuits at every pipeline level, shared by all
 -- component test suites so packages can be tested in isolation.
 --
--- Owner: p1 (frozen; extend only via replan). These mirror, but are not
+-- These mirror, but are not
 -- byte-identical to, what the Lean exporter emits for the same circuits.
 module Gin.Examples
   ( -- * Shared

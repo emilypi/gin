@@ -1,6 +1,6 @@
 -- | Primitive operations of the gin core IR.
 --
--- FROZEN CONTRACT (c-core-ast, semantics in c-semantics).
+-- Semantics are specified in @docs/semantics.md@.
 --
 -- Typing rules (n, m, a, b range over widths >= 1; d over domains). A
 -- prim node in the IR carries its full instantiated type ('EPrim'), and
@@ -69,7 +69,7 @@ data PrimOp
     SigMealy !Value
   deriving stock (Eq, Ord, Show)
 
--- | The @op@ string used in the IR JSON (c-ir-json).
+-- | The @op@ string used in the IR JSON (@docs/file-formats.md@).
 primName :: PrimOp -> Text
 primName = \case
   BoolAnd -> "bool.and"

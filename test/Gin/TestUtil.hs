@@ -1,4 +1,4 @@
--- | Shared test helpers. Owner: p1 (frozen; extend only via replan).
+-- | Shared test helpers.
 module Gin.TestUtil
   ( goldenText
   , toolAvailable
@@ -42,7 +42,7 @@ toolAvailable :: String -> IO Bool
 toolAvailable t = isJust <$> findExecutable t
 
 -- | A test that needs external tools. Missing tools make it pending, or a
--- failure when @GIN_REQUIRE_TOOLS=1@ (set by every verify gate, C-6).
+-- failure when @GIN_REQUIRE_TOOLS=1@ (set this in CI).
 itWithTools :: [String] -> String -> Expectation -> SpecWith ()
 itWithTools tools name body = it name $ do
   missing <- filterMissing tools

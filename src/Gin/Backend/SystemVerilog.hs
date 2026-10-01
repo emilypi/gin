@@ -1,6 +1,4 @@
 -- | SystemVerilog-2017 backend.
---
--- Owner: p6.
 module Gin.Backend.SystemVerilog
   ( systemVerilog
   ) where
@@ -8,4 +6,4 @@ module Gin.Backend.SystemVerilog
 import Gin.Backend.Types (Backend)
 
 systemVerilog :: Backend
-systemVerilog = error "TODO(p6): systemVerilog"
+systemVerilog = error "not yet implemented: systemVerilog"

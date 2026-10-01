@@ -1,6 +1,4 @@
--- | Normal form to netlist (c-netlist).
---
--- Owner: p5.
+-- | Normal form to netlist ("Gin.Netlist.Types").
 module Gin.Netlist.Build
   ( buildNetlist
   ) where
@@ -12,4 +10,4 @@ import Gin.Netlist.Types (Module)
 -- | Precondition: 'Gin.Normalize.checkNormal' succeeded. Errors use
 -- 'StNetlist'.
 buildNetlist :: NModule -> Either GinError Module
-buildNetlist = error "TODO(p5): buildNetlist"
+buildNetlist = error "not yet implemented: buildNetlist"

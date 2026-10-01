@@ -1,4 +1,3 @@
--- | Owner: p9.
 module Gin.E2ESpec (spec) where
 
 import Test.Hspec (Spec)

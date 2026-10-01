@@ -1,6 +1,4 @@
 -- | VHDL-2008 backend.
---
--- Owner: p7.
 module Gin.Backend.VHDL
   ( vhdl
   ) where
@@ -8,4 +6,4 @@ module Gin.Backend.VHDL
 import Gin.Backend.Types (Backend)
 
 vhdl :: Backend
-vhdl = error "TODO(p7): vhdl"
+vhdl = error "not yet implemented: vhdl"

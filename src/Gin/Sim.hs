@@ -1,6 +1,4 @@
--- | Reference simulators (c-sim), used for translation validation.
---
--- Owner: p8.
+-- | Reference simulators, used for translation validation.
 module Gin.Sim
   ( simulateCore
   , simulateNormal
@@ -16,8 +14,8 @@ import Gin.Error (GinError)
 -- use 'StSim' (e.g. arity or type mismatch in a row, or a recursive let
 -- that is not productive).
 simulateCore :: Program -> [[Value]] -> Either GinError [[Value]]
-simulateCore = error "TODO(p8): simulateCore"
+simulateCore = error "not yet implemented: simulateCore"
 
 -- | Simulate a normal-form module, same row conventions.
 simulateNormal :: NModule -> [[Value]] -> Either GinError [[Value]]
-simulateNormal = error "TODO(p8): simulateNormal"
+simulateNormal = error "not yet implemented: simulateNormal"

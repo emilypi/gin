@@ -1,6 +1,4 @@
 -- | The interface every HDL backend implements.
---
--- FROZEN CONTRACT (c-backend).
 module Gin.Backend.Types
   ( Target (..)
   , targetName
@@ -36,12 +34,14 @@ data Backend = Backend
   -- ^ The design file. Defines one module/entity named 'modName'.
   , backendTestbench :: Module -> Vectors -> Text
   -- ^ A self-checking testbench (module/entity @<modName>_tb@) that
-  -- instantiates the design, replays the vectors per c-semantics and
-  -- prints exactly one of 'passMarker' / 'failMarker' lines at the end.
+  -- instantiates the design, replays the vectors per the testbench
+  -- protocol in @docs/semantics.md@, and prints exactly one
+  -- 'passMarker' or 'failMarker' line at the end.
   }
 
--- | Testbench output protocol (c-backend). The driver keys only on these
--- line prefixes; everything after the prefix is informational.
+-- | Testbench output protocol. The driver only looks for lines
+-- containing these markers (simulators may prefix report lines);
+-- everything after a marker is informational.
 --
 -- > GIN-PASS cycles=<n>
 -- > GIN-FAIL mismatches=<k>

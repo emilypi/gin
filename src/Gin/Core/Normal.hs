@@ -1,8 +1,7 @@
 -- | Normal form: the first-order, signal-erased, tuple-free program the
 -- normalizer produces and the netlist builder consumes.
 --
--- FROZEN CONTRACT (c-normal-form). Invariants (checked by
--- 'Gin.Normalize.checkNormal'):
+-- Invariants, checked by 'Gin.Normalize.checkNormal':
 --
 --   1. Every type in an 'NModule' is scalar ('isScalar').
 --   2. Every bound name is unique and distinct from every input name.
@@ -17,7 +16,7 @@
 -- Semantics: every name denotes one value per clock cycle. Inputs take
 -- the driven value; 'NReg' denotes its initial value at cycle 0 and the
 -- previous cycle's argument value afterwards; everything else is
--- combinational within the cycle (c-semantics).
+-- combinational within the cycle (see @docs/semantics.md@).
 module Gin.Core.Normal
   ( Atom (..)
   , NRhs (..)

@@ -1,22 +1,144 @@
 -- | Normal form ("Gin.Core.Normal") to netlist ("Gin.Netlist.Types").
+--
+-- 'buildNetlist' emits at most one declaration per normal-form bind, in
+-- bind order, and establishes every invariant listed in
+-- "Gin.Netlist.Types":
+--
+-- [Names] The top name and the port names are a public interface and are
+--   never renamed: they must already be legal identifiers
+--   ('isLegalIdent') and pairwise distinct, case-insensitively (VHDL),
+--   also from the clock @clk@ and the reset @rst@ that every module gets
+--   (see @docs/semantics.md@). Bind names are then made legal and fresh
+--   with 'sanitize', in bind order.
+--
+-- [Folding] A shift by at least the operand width becomes the zero
+--   constant, and an extract of a literal becomes a literal. Declarations
+--   that folding leaves unread are then dropped, repeatedly, until every
+--   declared net is read by a declaration or an output.
 module Gin.Netlist.Build
   ( buildNetlist
   , sanitize
   ) where
 
+import Control.Monad (foldM, when)
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit, toLower)
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
-import Gin.Core.Normal (NModule)
-import Gin.Error (GinError)
-import Gin.Netlist.Types (Module, isLegalIdent, reservedWords)
+import Gin.Core.Normal (Atom (..), NBind (..), NModule (..), NOutput (..), NRhs (..))
+import Gin.Core.Syntax
+  ( Name (..)
+  , PrimOp (..)
+  , Ty (..)
+  , Value (..)
+  , isCombinational
+  , isScalar
+  , primArity
+  , primName
+  , validValue
+  , valueTy
+  )
+import Gin.Error (GinError, Stage (..), ginError, withContext)
+import Gin.Limits (maxNormalBinds)
+import Gin.Netlist.Types
+  ( BinOp (..)
+  , Decl (..)
+  , HExpr (..)
+  , HLit (..)
+  , HwType (..)
+  , Ident (..)
+  , Module (..)
+  , Net (..)
+  , Operand (..)
+  , Output (..)
+  , UnOp (..)
+  , declNet
+  , isLegalIdent
+  , reservedWords
+  )
+import Numeric.Natural (Natural)
 
 -- | Precondition: 'Gin.Normalize.checkNormal' succeeded. Errors use
--- 'StNetlist'.
+-- 'StNetlist': an illegal or colliding top or port name, and any breach
+-- of the precondition the builder trips over (an unknown variable, a
+-- non-scalar type, an invalid literal, an unsaturated or
+-- non-combinational primitive) instead of crashing.
 buildNetlist :: NModule -> Either GinError Module
-buildNetlist = error "not yet implemented: buildNetlist"
+buildNetlist m = do
+  when (length (nmBinds m) > maxNormalBinds) . Left . netlistError $
+    "more than " <> tshow maxNormalBinds <> " binds"
+  taken <- reserveInterface m
+  inputs <- traverse lowerInput (nmInputs m)
+  env <- nameBinds taken (nmInputs m) (nmBinds m)
+  decls <- traverse (lowerBind env) (nmBinds m)
+  outputs <- traverse (lowerOutput env) (nmOutputs m)
+  pure
+    Module
+      { modName = Ident (nmName m)
+      , modHeader = []
+      , modClock = clockName
+      , modReset = resetName
+      , modInputs = inputs
+      , modOutputs = outputs
+      , modDecls = dropUnread outputs decls
+      }
+
+clockName :: Ident
+clockName = Ident "clk"
+
+resetName :: Ident
+resetName = Ident "rst"
+
+----------------------------------------------------------------------
+-- Names
+
+-- | Reserve the top name, the clock, the reset, the input ports and the
+-- output ports, in that order. Each must be a legal identifier distinct
+-- from every name reserved before it. Returns the reserved names,
+-- lowercased.
+reserveInterface :: NModule -> Either GinError (Set Text)
+reserveInterface m = Map.keysSet <$> foldM reserve Map.empty interface
+  where
+    interface =
+      [ ("top name", nmName m)
+      , ("clock port", unIdent clockName)
+      , ("reset port", unIdent resetName)
+      ]
+        <> [("input port", unName n) | (n, _) <- nmInputs m]
+        <> [("output port", noName o) | o <- nmOutputs m]
+    -- Lowercased name -> what holds it, for the error message.
+    reserve :: Map Text Text -> (Text, Text) -> Either GinError (Map Text Text)
+    reserve held (what, name)
+      | not (isLegalIdent name) =
+          Left . netlistError $
+            what <> " " <> quote name <> " is not a legal identifier: " <> legalRule
+      | Just holder <- Map.lookup (Text.toLower name) held =
+          Left . netlistError $ what <> " " <> quote name <> " collides with the " <> holder
+      | otherwise = Right (Map.insert (Text.toLower name) (what <> " " <> quote name) held)
+    legalRule =
+      "it must match [a-z][a-z0-9_]*, have at most 64 characters, contain no \"__\", \
+      \not end in \"_\", not start with \"gin_\" and not be a reserved word of \
+      \Verilog, SystemVerilog, VHDL or the supported tools"
+
+-- | What each normal-form variable is called in the netlist, and its type.
+type Env = Map Name (Ident, Ty)
+
+-- | Inputs keep their (port) names; binds are named with 'sanitize', in
+-- order, against the reserved names and the binds named before them.
+nameBinds :: Set Text -> [(Name, Ty)] -> [NBind] -> Either GinError Env
+nameBinds reserved inputs binds = snd <$> foldM step (reserved, inputEnv) binds
+  where
+    inputEnv = Map.fromList [(n, (Ident (unName n), t)) | (n, t) <- inputs]
+    step (taken, env) b
+      | nbName b `Map.member` env =
+          Left . netlistError $
+            "bind name " <> quote (unName (nbName b)) <> " is already an input or a bind"
+      | otherwise =
+          let i = freshName taken (unName (nbName b))
+           in Right (Set.insert i taken, Map.insert (nbName b) (Ident i, nbTy b) env)
 
 -- | @sanitize taken name@ turns @name@ into a legal identifier
 -- ('isLegalIdent') that differs, case-insensitively, from every name in
@@ -49,7 +171,7 @@ freshName taken name
       | candidate `Set.notMember` taken && isLegalIdent candidate = candidate
       | otherwise = suffixed (k + 1)
       where
-        candidate = base <> "_" <> Text.pack (show k)
+        candidate = base <> "_" <> tshow k
 
 -- | Steps 1–4 of 'sanitize'.
 baseName :: Text -> Text
@@ -77,3 +199,172 @@ baseName =
         || t == "gin"
         || "gin_" `Text.isPrefixOf` t
     startsWithLetter = maybe False (isAsciiLower . fst) . Text.uncons
+
+----------------------------------------------------------------------
+-- Declarations
+
+lowerInput :: (Name, Ty) -> Either GinError Net
+lowerInput (n, t) =
+  withContext ("in input port " <> quote (unName n)) $
+    Net (Ident (unName n)) <$> hwType t
+
+lowerOutput :: Env -> NOutput -> Either GinError Output
+lowerOutput env o =
+  withContext ("in output port " <> quote (noName o)) $
+    Output <$> (Net (Ident (noName o)) <$> hwType (noTy o)) <*> operand env (noAtom o)
+
+lowerBind :: Env -> NBind -> Either GinError Decl
+lowerBind env b = withContext ("in bind " <> quote (unName (nbName b))) $ do
+  net <- Net <$> (fst <$> resolve env (nbName b)) <*> hwType (nbTy b)
+  case nbRhs b of
+    NPrim op args -> DAssign net <$> lowerPrim env op args
+    NMux c t e -> DAssign net <$> (HMux <$> operand env c <*> operand env t <*> operand env e)
+    NReg v a -> DReg net <$> literal v <*> operand env a
+    NAtom a -> DAssign net . HOperand <$> operand env a
+
+-- | Lower a saturated combinational primitive, folding shifts by at least
+-- the operand width (to zero) and extracts of literals (to literals).
+lowerPrim :: Env -> PrimOp -> [Atom] -> Either GinError HExpr
+lowerPrim env op args = case (op, args) of
+  (BoolAnd, [a, b]) -> bin BAnd a b
+  (BoolOr, [a, b]) -> bin BOr a b
+  (BoolXor, [a, b]) -> bin BXor a b
+  (BoolNot, [a]) -> un UNot a
+  (BoolEq, [a, b]) -> bin BEq a b
+  (BvAdd, [a, b]) -> bin BAdd a b
+  (BvSub, [a, b]) -> bin BSub a b
+  (BvMul, [a, b]) -> bin BMul a b
+  (BvNeg, [a]) -> un UNeg a
+  (BvAnd, [a, b]) -> bin BAnd a b
+  (BvOr, [a, b]) -> bin BOr a b
+  (BvXor, [a, b]) -> bin BXor a b
+  (BvNot, [a]) -> un UNot a
+  (BvShl k, [a]) -> shift HShl k a
+  (BvLshr k, [a]) -> shift HLshr k a
+  (BvEq, [a, b]) -> bin BEq a b
+  (BvUlt, [a, b]) -> bin BUlt a b
+  (BvUle, [a, b]) -> bin BUle a b
+  (BvConcat, [a, b]) -> HConcat <$> opnd a <*> opnd b
+  (BvExtract hi lo, [a]) -> extract hi lo a
+  (BvZext w, [a]) -> HZext w <$> opnd a
+  (BvOfBool, [a]) -> HBitToVec <$> opnd a
+  _
+    | isCombinational op ->
+        Left . netlistError $
+          primName op <> " takes " <> operands (primArity op) <> ", got " <> tshow (length args)
+    | otherwise -> Left (netlistError (primName op <> " is not a combinational primitive"))
+  where
+    opnd = operand env
+    operands = \case
+      1 -> "1 operand"
+      k -> tshow k <> " operands"
+    bin o a b = HBin o <$> opnd a <*> opnd b
+    un o a = HUn o <$> opnd a
+    shift mk k a = do
+      w <- vectorWidth env a
+      if k < w then mk k <$> opnd a else Right (HOperand (OConst (HLitVec w 0)))
+    extract hi lo a = do
+      w <- vectorWidth env a
+      when (hi < lo || hi >= w) . Left . netlistError $
+        "bv.extract " <> tshow hi <> " " <> tshow lo <> " of a " <> tshow w <> "-bit operand"
+      let width = hi - lo + 1
+      case a of
+        ALit (VBV _ v) ->
+          Right (HOperand (OConst (HLitVec width ((v `div` 2 ^ lo) `mod` 2 ^ width))))
+        _ -> HSlice hi lo <$> opnd a
+
+operand :: Env -> Atom -> Either GinError Operand
+operand env = \case
+  AVar n -> ORef . fst <$> resolve env n
+  ALit v -> OConst <$> literal v
+
+-- | The width of a bit-vector atom.
+vectorWidth :: Env -> Atom -> Either GinError Natural
+vectorWidth env a =
+  atomTy >>= \case
+    TBitVec w -> Right w
+    t -> Left (netlistError ("expected a bit-vector operand, got " <> tshow t))
+  where
+    atomTy = case a of
+      AVar n -> snd <$> resolve env n
+      ALit v -> Right (valueTy v)
+
+resolve :: Env -> Name -> Either GinError (Ident, Ty)
+resolve env n =
+  maybe (Left (netlistError ("unknown variable " <> quote (unName n)))) Right (Map.lookup n env)
+
+literal :: Value -> Either GinError HLit
+literal v
+  | not (validValue v) = Left (netlistError ("invalid literal " <> tshow v))
+  | otherwise = case v of
+      VBool b -> Right (HLitBit b)
+      VBV w x -> Right (HLitVec w x)
+      VTuple _ -> Left (netlistError ("non-scalar literal " <> tshow v))
+
+hwType :: Ty -> Either GinError HwType
+hwType t = case t of
+  TBool -> Right HBit
+  TBitVec w | isScalar t -> Right (HVec w)
+  _ -> Left (netlistError ("non-scalar type " <> tshow t))
+
+-- | Drop every declaration whose net neither an output nor a remaining
+-- declaration reads, until there is none. Only folding leaves nets unread
+-- (normal form has no dead binds). Nets that only read each other, such
+-- as a register loop only a folded shift observed, are all still read and
+-- are kept.
+dropUnread :: [Output] -> [Decl] -> [Decl]
+dropUnread outputs decls = filter ((`Set.notMember` dead) . netName . declNet) decls
+  where
+    byName = Map.fromList [(netName (declNet d), d) | d <- decls]
+    -- How often each net is read, by outputs and by declarations.
+    reads0 =
+      Map.fromListWith
+        (+)
+        [(i, 1 :: Int) | i <- concatMap (refs . outDriver) outputs <> concatMap declReads decls]
+    unread counts i = Map.findWithDefault 0 i counts == 0
+    dead = sweep reads0 Set.empty (filter (unread reads0) (Map.keys byName))
+    sweep counts done = \case
+      [] -> done
+      i : rest
+        | i `Set.member` done -> sweep counts done rest
+        | otherwise ->
+            let rs = maybe [] declReads (Map.lookup i byName)
+                counts' = foldl' (flip (Map.adjust (subtract 1))) counts rs
+                next = filter (\r -> Map.member r byName && unread counts' r) rs
+             in sweep counts' (Set.insert i done) (next <> rest)
+
+declReads :: Decl -> [Ident]
+declReads = \case
+  DAssign _ e -> concatMap refs (exprOperands e)
+  DReg _ _ o -> refs o
+
+exprOperands :: HExpr -> [Operand]
+exprOperands = \case
+  HOperand o -> [o]
+  HUn _ o -> [o]
+  HBin _ a b -> [a, b]
+  HMux c t e -> [c, t, e]
+  HShl _ o -> [o]
+  HLshr _ o -> [o]
+  HSlice _ _ o -> [o]
+  HConcat a b -> [a, b]
+  HZext _ o -> [o]
+  HBitToVec o -> [o]
+
+refs :: Operand -> [Ident]
+refs = \case
+  ORef i -> [i]
+  OConst _ -> []
+
+----------------------------------------------------------------------
+-- Helpers
+
+netlistError :: Text -> GinError
+netlistError = ginError StNetlist
+
+-- | Quote and escape a name from the IR for an error message.
+quote :: Text -> Text
+quote = tshow
+
+tshow :: (Show a) => a -> Text
+tshow = Text.pack . show

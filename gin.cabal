@@ -12,6 +12,7 @@ description:
 license:            BSD-3-Clause
 license-file:       LICENSE.md
 author:             Emily Pillmore
+copyright:          (c) 2026 Emily Pillmore <emilypi@cohomolo.gy>
 maintainer:         emilypi@cohomolo.gy
 category:           Hardware
 build-type:         Simple

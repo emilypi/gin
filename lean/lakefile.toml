@@ -1,0 +1,15 @@
+name = "gin"
+defaultTargets = ["Gin", "GinTest"]
+
+[leanOptions]
+autoImplicit = false
+relaxedAutoImplicit = false
+
+# The circuit DSL and the shipped examples.
+[[lean_lib]]
+name = "Gin"
+leanOptions = { linter.missingDocs = true }
+
+# Tests: `#guard`, `#guard_msgs` and theorems checked by `lake build`.
+[[lean_lib]]
+name = "GinTest"

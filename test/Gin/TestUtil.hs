@@ -8,6 +8,7 @@ module Gin.TestUtil
   ) where
 
 import Control.Monad (unless, when)
+import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as Text
@@ -38,7 +39,7 @@ goldenText rel actual = do
       actual `shouldBe` expected
 
 toolAvailable :: String -> IO Bool
-toolAvailable t = maybe False (const True) <$> findExecutable t
+toolAvailable t = isJust <$> findExecutable t
 
 -- | A test that needs external tools. Missing tools make it pending, or a
 -- failure when @GIN_REQUIRE_TOOLS=1@ (set by every verify gate, C-6).

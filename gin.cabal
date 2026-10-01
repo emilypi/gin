@@ -10,12 +10,15 @@ description:
   certificate policy, normalizes the IR to a first-order netlist, and
   renders HDL plus self-checking testbenches for translation validation.
 license:            BSD-3-Clause
+license-file:       LICENSE.md
 author:             Emily Pillmore
 maintainer:         emilypi@cohomolo.gy
 category:           Hardware
 build-type:         Simple
 tested-with:        GHC ==9.14.1
-extra-doc-files:    README.md
+extra-doc-files:
+  README.md
+  LICENSE.md
 
 common warnings
   ghc-options:

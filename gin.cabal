@@ -105,6 +105,7 @@ test-suite gin-test
     Gin.E2ESpec
     Gin.Examples
     Gin.ExamplesSpec
+    Gin.LeanExamplesSpec
     Gin.Netlist.BuildSpec
     Gin.NormalizeSpec
     Gin.SimSpec

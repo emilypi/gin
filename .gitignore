@@ -1,0 +1,8 @@
+dist-newstyle/
+lean/.lake/
+*.vcd
+/out/
+/build/
+work/
+*.o
+*.hi

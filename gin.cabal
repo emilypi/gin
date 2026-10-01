@@ -1,0 +1,119 @@
+cabal-version:      3.4
+name:               gin
+version:            0.1.0.0
+synopsis:           A Clash-style hardware compiler for proof-carrying Lean 4 circuits
+description:
+  gin compiles circuits written in a Lean 4 embedded DSL to Verilog-2005,
+  SystemVerilog and VHDL-2008. The Lean side exports a typed core IR
+  together with a certificate naming the kernel-checked theorem that
+  relates the implementation to its specification; gin checks the
+  certificate policy, normalizes the IR to a first-order netlist, and
+  renders HDL plus self-checking testbenches for translation validation.
+license:            BSD-3-Clause
+author:             Emily Pillmore
+maintainer:         emilypi@cohomolo.gy
+category:           Hardware
+build-type:         Simple
+tested-with:        GHC ==9.14.1
+extra-doc-files:    README.md
+
+common warnings
+  ghc-options:
+    -Wall -Wcompat -Widentities -Wincomplete-record-updates
+    -Wincomplete-uni-patterns -Wmissing-deriving-strategies
+    -Wredundant-constraints
+
+common lang
+  default-language:   GHC2024
+  default-extensions:
+    DerivingStrategies
+    LambdaCase
+    OverloadedStrings
+
+library
+  import:           warnings, lang
+  hs-source-dirs:   src
+  exposed-modules:
+    Gin.Backend.SystemVerilog
+    Gin.Backend.Types
+    Gin.Backend.Verilog
+    Gin.Backend.Verilog.Testbench
+    Gin.Backend.VHDL
+    Gin.Backend.VHDL.Testbench
+    Gin.Certificate
+    Gin.Core.Check
+    Gin.Core.Json
+    Gin.Core.Normal
+    Gin.Core.Prim
+    Gin.Core.Syntax
+    Gin.Core.Type
+    Gin.Core.Value
+    Gin.Driver
+    Gin.Error
+    Gin.Netlist.Build
+    Gin.Netlist.Types
+    Gin.Normalize
+    Gin.Normalize.Internal
+    Gin.Sim
+    Gin.Sim.Prim
+    Gin.Vectors
+
+  build-depends:
+    , aeson                 >=2.2  && <2.4
+    , base                  >=4.20 && <5
+    , bytestring            >=0.11 && <0.13
+    , containers            >=0.6  && <0.9
+    , directory             >=1.3  && <1.4
+    , filepath              >=1.4  && <1.6
+    , mtl                   >=2.3  && <2.4
+    , process               >=1.6  && <1.7
+    , scientific            >=0.3  && <0.4
+    , temporary             >=1.3  && <1.4
+    , text                  >=2.0  && <2.2
+    , vector                >=0.13 && <0.14
+
+executable gin
+  import:           warnings, lang
+  hs-source-dirs:   app
+  main-is:          Main.hs
+  ghc-options:      -threaded -rtsopts
+  build-depends:
+    , base
+    , gin
+    , optparse-applicative  >=0.18 && <0.20
+
+test-suite gin-test
+  import:             warnings, lang
+  type:               exitcode-stdio-1.0
+  hs-source-dirs:     test
+  main-is:            Spec.hs
+  ghc-options:        -threaded -rtsopts -with-rtsopts=-N
+  build-tool-depends: hspec-discover:hspec-discover >=2.11 && <2.12
+  other-modules:
+    Gin.Backend.SystemVerilogSpec
+    Gin.Backend.VerilogSpec
+    Gin.Backend.VHDLSpec
+    Gin.CertificateSpec
+    Gin.Core.CheckSpec
+    Gin.Core.JsonSpec
+    Gin.DriverSpec
+    Gin.E2ESpec
+    Gin.Examples
+    Gin.Netlist.BuildSpec
+    Gin.NormalizeSpec
+    Gin.SimSpec
+    Gin.TestUtil
+
+  build-depends:
+    , aeson
+    , base
+    , bytestring
+    , containers
+    , directory
+    , filepath
+    , gin
+    , hspec                 >=2.11 && <2.12
+    , process
+    , QuickCheck            >=2.14 && <2.17
+    , temporary
+    , text

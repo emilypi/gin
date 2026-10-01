@@ -54,6 +54,7 @@ library
     Gin.Core.Value
     Gin.Driver
     Gin.Error
+    Gin.Limits
     Gin.Netlist.Build
     Gin.Netlist.Types
     Gin.Normalize

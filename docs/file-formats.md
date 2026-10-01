@@ -18,7 +18,7 @@ Program := {
   "format": "gin-ir/1",
   "producer": {"tool": String, "leanVersion": String},
   "top": {
-    "name": String,
+    "name": Ident,                                     -- legal HDL identifier
     "domain": {"name": String, "periodPs": Nat},
     "inputs":  [ {"name": String, "type": Type} ],     -- may be empty
     "outputs": [ {"name": String, "type": Type} ],     -- non-empty
@@ -92,6 +92,28 @@ The decoder is strict about structure and lenient about extra keys:
   then decoding is the identity. The encoder emits keys in the order
   shown above and always emits `"params"`.
 
+`Ident` is a name accepted by `Gin.Netlist.Types.isLegalIdent`; port
+names must be pairwise distinct. Port and top names are part of the
+generated hardware interface and are never renamed.
+
+### Resource limits
+
+Input files are untrusted. Each bound below is checked before the work
+it guards (constants in `Gin.Limits`):
+
+| Bound                                         | Limit                    |
+| --------------------------------------------- | ------------------------ |
+| File size                                     | 16 MiB                   |
+| JSON nesting depth                            | 4096                     |
+| Any JSON number                               | integer, 0 … 2^31 − 1    |
+| Length of a `"val"` decimal string            | 1234 digits              |
+| Duplicate keys in one JSON object             | rejected                 |
+| Bit-vector width                              | 1 … 4096                 |
+| Vector cycles                                 | 1 … 100000               |
+| Vector payload (cycles × summed port widths)  | 2^18 bits                |
+| Normal-form size                              | 65536 bindings           |
+| External tool run                             | 300 s (configurable)     |
+
 ## Test vectors (`gin-vectors/1`)
 
 ```
@@ -109,5 +131,7 @@ during cycle `t` and the output values expected during that cycle, each
 in port order (see [semantics.md](semantics.md)).
 
 The decoder rejects a wrong format tag, zero cycles or more than 100000,
-rows whose length differs from the port lists, and values whose type
-differs from the port type.
+a payload over the limit above, rows whose length differs from the port
+lists, and values whose type differs from the port type. Commands that
+take both files also reject vectors whose `top`, inputs or outputs
+(names, types and order) differ from the program's top entity.

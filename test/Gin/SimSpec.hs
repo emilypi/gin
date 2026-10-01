@@ -2,22 +2,38 @@
 -- semantics ('Gin.Sim.Prim') specified in @docs/semantics.md@.
 module Gin.SimSpec (spec) where
 
+import Control.Exception (evaluate)
+import Data.Either (isRight)
 import Data.Foldable (for_)
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Gin.Core.Normal
 import Gin.Core.Syntax
 import Gin.Error (GinError (..), Stage (..), renderError)
+import Gin.Examples
+import Gin.Sim (simulateCore, simulateNormal)
 import Gin.Sim.Prim (evalPrim)
+import Gin.Vectors (Cycle (..), Vectors (..), maxCycles)
 import Numeric.Natural (Natural)
+import System.Timeout (timeout)
 import Test.Hspec
 import Test.QuickCheck
 
 spec :: Spec
-spec =
+spec = do
   describe "evalPrim" $ do
     primTableSpec
     primRejectSpec
     primLawSpec
+  describe "simulateCore" $ do
+    coreExampleSpec
+    coreSemanticsSpec
+    coreLetRecSpec
+  describe "simulateNormal" normalSpec
+  describe "both simulators" $ do
+    multiOutputSpec
+    zeroInputSpec
+    rowsRejectSpec
 
 ----------------------------------------------------------------------
 -- Primitive table
@@ -344,10 +360,121 @@ primLawSpec = do
         Left e -> counterexample (Text.unpack (renderError e)) False
 
 ----------------------------------------------------------------------
+-- Example circuits
+
+examples :: [(String, Program, NModule, Vectors)]
+examples =
+  [ ("counter", counterProgram, counterNormal, counterVectors)
+  , ("mac", macProgram, macNormal, macVectors)
+  , ("detector", detectorProgram, detectorNormal, detectorVectors)
+  ]
+
+inputRows, outputRows :: Vectors -> [[Value]]
+inputRows = fmap cycInputs . vecCycles
+outputRows = fmap cycOutputs . vecCycles
+
+coreExampleSpec :: Spec
+coreExampleSpec = do
+  for_ examples $ \(name, prog, _, vs) ->
+    it ("[sim-core-examples] reproduces the " <> name <> " vectors") $
+      simulateCore prog (inputRows vs) `shouldBe` Right (outputRows vs)
+  it "[sim-core-examples] simulates exactly one cycle per input row" $
+    for_ [0 .. 8] $ \k ->
+      simulateCore counterProgram (take k (inputRows counterVectors))
+        `shouldBe` Right (take k (outputRows counterVectors))
+
+----------------------------------------------------------------------
 -- Building blocks for small programs
 
-b8 :: Integer -> Value
+prim :: PrimOp -> [Ty] -> Ty -> Expr
+prim op args res = EPrim op (tFuns args res)
+
+var :: Text -> Expr
+var = EVar . Name
+
+b4, b8 :: Integer -> Value
+b4 = VBV 4
 b8 = VBV 8
+
+-- | A binary bit-vector prim of width @n@ applied to two operands.
+bvBin :: PrimOp -> Natural -> Expr -> Expr -> Expr
+bvBin op n a b = EApp (prim op [bv n, bv n] (bv n)) [a, b]
+
+bvEq8 :: Expr -> Expr -> Expr
+bvEq8 a b = EApp (prim BvEq [bv 8, bv 8] TBool) [a, b]
+
+-- | @bv.add@ at width @n@, unapplied.
+addPrim :: Natural -> Expr
+addPrim n = prim BvAdd [bv n, bv n] (bv n)
+
+-- | @bv.add 1@ at width @n@: a partially applied prim.
+incr :: Natural -> Expr
+incr n = EApp (addPrim n) [ELit (VBV n 1)]
+
+-- | @sig.lift k f s1 .. sk@ with element types @args@ and result @res@.
+liftE :: [Ty] -> Ty -> Expr -> [Expr] -> Expr
+liftE args res f ss =
+  EApp
+    (prim (SigLift (fromIntegral (length args))) (tFuns args res : fmap sig args) (sig res))
+    (f : ss)
+
+registerE :: Value -> Expr -> Expr
+registerE v s = EApp (prim (SigRegister v) [sig t] (sig t)) [s]
+  where
+    t = valueTy v
+
+pureE :: Ty -> Expr -> Expr
+pureE t x = EApp (prim SigPure [t] (sig t)) [x]
+
+-- | @sig.mealy v f s@ with input type @i@ and output type @o@.
+mealyE :: Value -> Ty -> Ty -> Expr -> Expr -> Expr
+mealyE v i o f s = EApp (prim (SigMealy v) [tFuns [st, i] (TProd [st, o]), sig i] (sig o)) [f, s]
+  where
+    st = valueTy v
+
+-- | Right-nested product of the output types, as a top entity returns it.
+outputSpine :: [Ty] -> Ty
+outputSpine = \case
+  [t] -> t
+  t : ts -> TProd [t, outputSpine ts]
+  [] -> TProd []
+
+-- | A program whose top entity @t@ is the def @T.top@ with the given body.
+programWith :: [Port] -> [Port] -> Expr -> [Def] -> Program
+programWith ins outs body defs =
+  Program
+    { progProducer = Producer "gin-sim-spec" "n/a"
+    , progTop =
+        TopEntity
+          { topName = "t"
+          , topDomain = sysDomain
+          , topInputs = ins
+          , topOutputs = outs
+          , topDef = "T.top"
+          }
+    , progDefs = Def "T.top" topTy body : defs
+    , progCertificate = testCertificate "T.top_correct"
+    }
+  where
+    topTy = tFuns (fmap (sig . portTy) ins) (sig (outputSpine (fmap portTy outs)))
+
+topProgram :: [Port] -> [Port] -> Expr -> Program
+topProgram ins outs body = programWith ins outs body []
+
+-- | Lambda over the input signals of the given ports.
+overPorts :: [Port] -> Expr -> Expr
+overPorts ps = ELam [(Name (portName p), sig (portTy p)) | p <- ps]
+
+normalModule :: [(Name, Ty)] -> [NOutput] -> [NBind] -> NModule
+normalModule ins outs binds =
+  NModule
+    { nmName = "t"
+    , nmDomain = sysDomain
+    , nmInputs = ins
+    , nmOutputs = outs
+    , nmBinds = binds
+    , nmCertificate = testCertificate "T.top_correct"
+    }
 
 -- | The result is a simulation error whose rendering mentions @needle@.
 shouldBeSimError :: (Show a) => Either GinError a -> Text -> Expectation
@@ -356,3 +483,530 @@ shouldBeSimError result needle = case result of
     errStage e `shouldBe` StSim
     renderError e `shouldSatisfy` Text.isInfixOf needle
   Right r -> expectationFailure ("expected a simulation error, got " <> show r)
+
+-- | Evaluate a result completely within ten seconds, so a simulator that
+-- loops fails the test instead of hanging the suite.
+settled :: (Show a) => a -> IO a
+settled x =
+  timeout 10000000 (evaluate (length (show x))) >>= \case
+    Just _ -> pure x
+    Nothing -> x <$ expectationFailure "simulation did not finish within 10 s"
+
+----------------------------------------------------------------------
+-- Core IR semantics
+
+bv8Ports :: [Text] -> [Port]
+bv8Ports = fmap (`Port` bv 8)
+
+ifPorts :: [Port]
+ifPorts = [Port "c" TBool, Port "a" (bv 8), Port "b" (bv 8)]
+
+ifProgram :: Program
+ifProgram =
+  topProgram ifPorts [Port "o" (bv 8)] . overPorts ifPorts $
+    liftE
+      [TBool, bv 8, bv 8]
+      (bv 8)
+      (ELam [("x", TBool), ("y", bv 8), ("z", bv 8)] (EIf (var "x") (var "y") (var "z")))
+      [var "c", var "a", var "b"]
+
+ifRows, ifOutputs :: [[Value]]
+ifRows =
+  [ [VBool True, b8 1, b8 2]
+  , [VBool False, b8 1, b8 2]
+  , [VBool True, b8 255, b8 0]
+  , [VBool False, b8 255, b8 0]
+  ]
+ifOutputs = [[b8 1], [b8 2], [b8 255], [b8 0]]
+
+-- | Higher-order global applied inside a lifted function.
+twiceProgram :: Program
+twiceProgram =
+  programWith
+    (bv8Ports ["x"])
+    (bv8Ports ["o"])
+    ( overPorts (bv8Ports ["x"]) $
+        liftE
+          [bv 8]
+          (bv 8)
+          (ELam [("v", bv 8)] (EApp (EGlobal "T.twice") [incr 8, var "v"]))
+          [var "x"]
+    )
+    [Def "T.twice" (tFuns [TFun (bv 8) (bv 8), bv 8] (bv 8)) twice]
+  where
+    twice =
+      ELam [("f", TFun (bv 8) (bv 8)), ("y", bv 8)] $
+        EApp (var "f") [EApp (var "f") [var "y"]]
+
+coreSemanticsSpec :: Spec
+coreSemanticsSpec = do
+  it "[sim-prim-table] if c t e is t when c holds and e otherwise" $
+    simulateCore ifProgram ifRows `shouldBe` Right ifOutputs
+  it "[sim-prim-table] sig.pure x is x at every cycle" $ do
+    let prog = topProgram [] (bv8Ports ["o"]) (pureE (bv 8) (ELit (b8 42)))
+    simulateCore prog (replicate 3 []) `shouldBe` Right (replicate 3 [b8 42])
+  it "[sim-prim-table] sig.lift 3 f applies f to the three inputs of each cycle" $ do
+    let ports = bv8Ports ["a", "b", "c"]
+        f =
+          ELam [("x", bv 8), ("y", bv 8), ("z", bv 8)] $
+            bvBin BvAdd 8 (var "x") (bvBin BvMul 8 (var "y") (var "z"))
+        prog =
+          topProgram ports (bv8Ports ["o"]) . overPorts ports $
+            liftE [bv 8, bv 8, bv 8] (bv 8) f [var "a", var "b", var "c"]
+    simulateCore prog [[b8 2, b8 3, b8 4], [b8 255, b8 16, b8 16], [b8 1, b8 255, b8 255]]
+      `shouldBe` Right [[b8 14], [b8 255], [b8 2]]
+  it "[sim-prim-table] sig.lift accepts a bare or partially applied prim as the function" $ do
+    let ports = bv8Ports ["x", "y"]
+        bare =
+          topProgram ports (bv8Ports ["o"]) . overPorts ports $
+            liftE [bv 8, bv 8] (bv 8) (addPrim 8) [var "x", var "y"]
+        partial =
+          topProgram ports (bv8Ports ["o"]) . overPorts ports $
+            liftE [bv 8] (bv 8) (incr 8) [var "y"]
+    simulateCore bare [[b8 3, b8 4], [b8 255, b8 1]] `shouldBe` Right [[b8 7], [b8 0]]
+    simulateCore partial [[b8 3, b8 4], [b8 255, b8 255]] `shouldBe` Right [[b8 5], [b8 0]]
+  it "sig.register v is v at cycle 0 and the previous input afterwards" $ do
+    let prog =
+          topProgram (bv8Ports ["x"]) (bv8Ports ["o"]) . overPorts (bv8Ports ["x"]) $
+            registerE (b8 7) (var "x")
+    simulateCore prog [[b8 1], [b8 2], [b8 3]] `shouldBe` Right [[b8 7], [b8 1], [b8 2]]
+  it "applies a higher-order global inside a lifted function" $
+    simulateCore twiceProgram [[b8 0], [b8 254]] `shouldBe` Right [[b8 2], [b8 0]]
+  it "passes a tuple of signals through a non-recursive let" $ do
+    let ports = bv8Ports ["a", "b"]
+        prog =
+          topProgram ports (bv8Ports ["o"]) . overPorts ports $
+            ELet
+              False
+              [ Bind "p" (TProd [sig (bv 8), sig (bv 8)]) (ETuple [var "a", var "b"])
+              , Bind "q" (sig (bv 8)) (EProj 1 (var "p"))
+              ]
+              ( liftE
+                  [bv 8, bv 8]
+                  (bv 8)
+                  (addPrim 8)
+                  [EProj 0 (var "p"), registerE (b8 0) (var "q")]
+              )
+    simulateCore prog [[b8 1, b8 10], [b8 2, b8 20]] `shouldBe` Right [[b8 1], [b8 12]]
+  it "rejects a program whose top def is missing" $
+    simulateCore counterProgram {progDefs = []} [[VBool True]] `shouldBeSimError` "Counter.counter"
+  it "rejects a top def whose result does not match the output ports" $ do
+    let prog = topProgram (bv8Ports ["x"]) [Port "o" TBool] (overPorts (bv8Ports ["x"]) (var "x"))
+    simulateCore prog [[b8 1]] `shouldBeSimError` "cycle 0"
+  it "reports an ill-typed lifted function in the cycle that evaluates it" $ do
+    let f =
+          ELam [("v", bv 8)] $
+            EIf
+              (bvEq8 (var "v") (ELit (b8 3)))
+              (bvBin BvAdd 8 (var "v") (ELit (VBool True)))
+              (var "v")
+        prog =
+          topProgram (bv8Ports ["x"]) (bv8Ports ["o"]) . overPorts (bv8Ports ["x"]) $
+            liftE [bv 8] (bv 8) f [var "x"]
+    simulateCore prog [[b8 1], [b8 2]] `shouldBe` Right [[b8 1], [b8 2]]
+    simulateCore prog [[b8 1], [b8 2], [b8 3]] `shouldBeSimError` "cycle 2"
+
+----------------------------------------------------------------------
+-- Recursive lets
+
+-- | @acc = register 0 (acc + x)@, with the binds in the given order.
+accumulator :: [Bind] -> Program
+accumulator binds =
+  topProgram (bv8Ports ["x"]) (bv8Ports ["acc"]) . overPorts (bv8Ports ["x"]) $
+    ELet True binds (var "acc")
+
+accReg, accNext :: Bind
+accReg = Bind "acc" (sig (bv 8)) (registerE (b8 0) (var "next"))
+accNext = Bind "next" (sig (bv 8)) (liftE [bv 8, bv 8] (bv 8) (addPrim 8) [var "acc", var "x"])
+
+accRows, accOutputs :: [[Value]]
+accRows = fmap (pure . b8) [1, 2, 3, 250, 0]
+accOutputs = fmap (pure . b8) [0, 1, 3, 6, 0]
+
+-- | @p = (register 0 (snd p), fst p + 1)@: feedback through a tuple.
+pairCounterProgram :: Program
+pairCounterProgram =
+  topProgram [] [Port "count" (bv 4)] $
+    ELet
+      True
+      [ Bind "p" (TProd [sig (bv 4), sig (bv 4)]) $
+          ETuple
+            [ registerE (b4 0) (EProj 1 (var "p"))
+            , liftE [bv 4] (bv 4) (incr 4) [EProj 0 (var "p")]
+            ]
+      ]
+      (EProj 0 (var "p"))
+
+-- | An inner recursive let whose binds read the outer bind @a@:
+-- @a = register 0 b@, @b = a + c@, @c = register 1 b@, so @a@ doubles.
+doublingProgram :: Program
+doublingProgram =
+  topProgram [] (bv8Ports ["a"]) $
+    ELet True [Bind "a" (sig (bv 8)) (registerE (b8 0) inner)] (var "a")
+  where
+    inner =
+      ELet
+        True
+        [ Bind "b" (sig (bv 8)) (liftE [bv 8, bv 8] (bv 8) (addPrim 8) [var "a", var "c"])
+        , Bind "c" (sig (bv 8)) (registerE (b8 1) (var "b"))
+        ]
+        (var "b")
+
+-- | A recursive signal next to a non-recursive constant it reads.
+stepProgram :: Program
+stepProgram =
+  topProgram [] (bv8Ports ["s"]) $
+    ELet
+      True
+      [ Bind "s" (sig (bv 8)) . registerE (b8 0) $
+          liftE [bv 8] (bv 8) (ELam [("v", bv 8)] (bvBin BvAdd 8 (var "v") (var "step"))) [var "s"]
+      , Bind "step" (bv 8) (ELit (b8 3))
+      ]
+      (var "s")
+
+-- | A zero-input top with one recursive Bool signal @s@.
+boolLoop :: Expr -> Program
+boolLoop rhs = topProgram [] [Port "o" TBool] (ELet True [Bind "s" (sig TBool) rhs] (var "s"))
+
+coreLetRecSpec :: Spec
+coreLetRecSpec = do
+  it "[sim-letrec] feeds a register back into its own input" $
+    simulateCore (accumulator [Bind "acc" (sig (bv 8)) (registerE (b8 0) (accNext' "acc"))]) accRows
+      `shouldBe` Right accOutputs
+  it "[sim-letrec] closes a loop over two binds in either order" $ do
+    simulateCore (accumulator [accReg, accNext]) accRows `shouldBe` Right accOutputs
+    simulateCore (accumulator [accNext, accReg]) accRows `shouldBe` Right accOutputs
+  it "[sim-letrec] closes a loop through the components of a recursive tuple" $
+    simulateCore pairCounterProgram (replicate 18 [])
+      `shouldBe` Right [[b4 (t `mod` 16)] | t <- [0 .. 17]]
+  it "[sim-letrec] nests recursive lets that read an enclosing recursive bind" $
+    simulateCore doublingProgram (replicate 11 [])
+      `shouldBe` Right (fmap (pure . b8) [0, 1, 2, 4, 8, 16, 32, 64, 128, 0, 0])
+  it "[sim-letrec] lets a recursive signal read a non-recursive bind of the same let" $
+    simulateCore stepProgram (replicate 4 []) `shouldBe` Right (fmap (pure . b8) [0, 3, 6, 9])
+  it "[sim-letrec] closes a loop through sig.mealy behind a register" $ do
+    let accIn = bvBin BvAdd 8 (var "acc") (var "i")
+        step = ELam [("acc", bv 8), ("i", bv 8)] (ETuple [accIn, accIn])
+        rhs = registerE (b8 1) (mealyE (b8 0) (bv 8) (bv 8) step (var "s"))
+        prog = topProgram [] (bv8Ports ["s"]) (ELet True [Bind "s" (sig (bv 8)) rhs] (var "s"))
+    simulateCore prog (replicate 6 []) `shouldBe` Right (fmap (pure . b8) [1, 1, 2, 4, 8, 16])
+  it "[sim-letrec] lets a recursive signal use a non-recursive function of the same let" $ do
+    let prog =
+          topProgram [] (bv8Ports ["s"]) $
+            ELet
+              True
+              [ Bind "s" (sig (bv 8)) (registerE (b8 0) (liftE [bv 8] (bv 8) (var "f") [var "s"]))
+              , Bind "f" (TFun (bv 8) (bv 8)) $
+                  ELam [("v", bv 8)] (bvBin BvAdd 8 (var "v") (ELit (b8 5)))
+              ]
+              (var "s")
+    simulateCore prog (replicate 4 []) `shouldBe` Right (fmap (pure . b8) [0, 5, 10, 15])
+  it "[sim-letrec] follows feedback through a global function" $ do
+    let sig8 = sig (bv 8)
+        delayInc =
+          Def "T.delayInc" (TFun sig8 sig8) . ELam [("x", sig8)] $
+            registerE (b8 0) (liftE [bv 8] (bv 8) (incr 8) [var "x"])
+        inc =
+          Def "T.inc" (TFun sig8 sig8) . ELam [("x", sig8)] $
+            liftE [bv 8] (bv 8) (incr 8) [var "x"]
+        through g =
+          programWith
+            []
+            (bv8Ports ["s"])
+            (ELet True [Bind "s" sig8 (EApp (EGlobal g) [var "s"])] (var "s"))
+            [delayInc, inc]
+    simulateCore (through "T.delayInc") (replicate 4 [])
+      `shouldBe` Right (fmap (pure . b8) [0, 1, 2, 3])
+    r <- settled (simulateCore (through "T.inc") (replicate 4 []))
+    r `shouldBeSimError` "not productive"
+  it "[sim-letrec] rejects a combinational loop through sig.lift" $ do
+    r <-
+      settled
+        ( simulateCore
+            (boolLoop (liftE [TBool] TBool (prim BoolNot [TBool] TBool) [var "s"]))
+            (replicate 3 [])
+        )
+    r `shouldBeSimError` "not productive"
+  it "[sim-letrec] rejects a signal defined as itself" $ do
+    r <- settled (simulateCore (boolLoop (var "s")) (replicate 3 []))
+    r `shouldBeSimError` "not productive"
+  it "[sim-letrec] rejects a loop through the input of sig.mealy" $ do
+    let step = ELam [("st", TBool), ("i", TBool)] (ETuple [var "st", var "i"])
+        prog = boolLoop (mealyE (VBool False) TBool TBool step (var "s"))
+    r <- settled (simulateCore prog (replicate 3 []))
+    r `shouldBeSimError` "not productive"
+  it "[sim-letrec] rejects a loop closed through a nested recursive let" $ do
+    let inner =
+          ELet
+            True
+            [ Bind "b" (sig (bv 8)) (liftE [bv 8, bv 8] (bv 8) (addPrim 8) [var "a", var "c"])
+            , Bind "c" (sig (bv 8)) (registerE (b8 0) (var "b"))
+            ]
+            (var "b")
+        prog = topProgram [] (bv8Ports ["a"]) (ELet True [Bind "a" (sig (bv 8)) inner] (var "a"))
+    r <- settled (simulateCore prog (replicate 3 []))
+    r `shouldBeSimError` "not productive"
+  it "[sim-letrec] rejects recursion through a plain value" $ do
+    let prog =
+          topProgram [] (bv8Ports ["o"]) $
+            ELet
+              True
+              [Bind "k" (bv 8) (bvBin BvAdd 8 (var "k") (ELit (b8 1)))]
+              (pureE (bv 8) (var "k"))
+    r <- settled (simulateCore prog (replicate 3 []))
+    r `shouldBeSimError` "recursive"
+  it "[sim-letrec] rejects a recursive function" $ do
+    let f = Bind "f" (TFun (bv 8) (bv 8)) (ELam [("v", bv 8)] (EApp (var "f") [var "v"]))
+        prog =
+          topProgram (bv8Ports ["x"]) (bv8Ports ["o"]) . overPorts (bv8Ports ["x"]) $
+            ELet True [f] (liftE [bv 8] (bv 8) (var "f") [var "x"])
+    r <- settled (simulateCore prog [[b8 1]])
+    r `shouldBeSimError` "recursive"
+  where
+    accNext' acc = liftE [bv 8, bv 8] (bv 8) (addPrim 8) [var acc, var "x"]
+
+----------------------------------------------------------------------
+-- Normal form
+
+ifNormal :: NModule
+ifNormal =
+  normalModule
+    [("c", TBool), ("a", bv 8), ("b", bv 8)]
+    [NOutput "o" (bv 8) (AVar "o_mux")]
+    [NBind "o_mux" (bv 8) (NMux (AVar "c") (AVar "a") (AVar "b"))]
+
+-- | Random rows of the given port types.
+genRows :: [Ty] -> Gen [[Value]]
+genRows tys = do
+  n <- chooseInt (0, 64)
+  vectorOf n (traverse genValue tys)
+  where
+    genValue = \case
+      TBitVec w -> genBV w
+      _ -> VBool <$> arbitrary
+
+normalSpec :: Spec
+normalSpec = do
+  for_ examples $ \(name, _, nm, vs) ->
+    it ("[sim-normal-examples] reproduces the " <> name <> " vectors") $
+      simulateNormal nm (inputRows vs) `shouldBe` Right (outputRows vs)
+  for_ examples $ \(name, prog, nm, vs) ->
+    it ("[sim-normal-examples] " <> name <> ": agrees with simulateCore on random inputs") $
+      property $
+        forAll (genRows (fmap portTy (vecInputs vs))) $ \rows ->
+          let core = simulateCore prog rows
+           in counterexample (show core) (isRight core .&&. simulateNormal nm rows === core)
+  it "[sim-normal-examples] both simulators run the counter for the maximum number of cycles" $ do
+    let rows = replicate maxCycles [VBool True]
+        lastTwo = drop (maxCycles - 2) (counts 8 maxCycles)
+    core <- settled (drop (maxCycles - 2) <$> simulateCore counterProgram rows)
+    core `shouldBe` Right lastTwo
+    normal <- settled (drop (maxCycles - 2) <$> simulateNormal counterNormal rows)
+    normal `shouldBe` Right lastTwo
+  it "[sim-prim-table] a mux selects its then-branch when the condition holds" $
+    simulateNormal ifNormal ifRows `shouldBe` Right ifOutputs
+  it "rejects a bind that reads a later non-register bind" $ do
+    let nm =
+          normalModule
+            [("x", bv 8)]
+            [NOutput "o" (bv 8) (AVar "a")]
+            [ NBind "a" (bv 8) (NPrim BvAdd [AVar "b", ALit (b8 1)])
+            , NBind "b" (bv 8) (NPrim BvAdd [AVar "x", ALit (b8 1)])
+            ]
+    simulateNormal nm [[b8 1]] `shouldBeSimError` "not an input or an earlier bind"
+  it "rejects a signal prim in a bind" $ do
+    let nm =
+          normalModule
+            [("x", bv 8)]
+            [NOutput "o" (bv 8) (AVar "a")]
+            [NBind "a" (bv 8) (NPrim (SigRegister (b8 0)) [AVar "x"])]
+    simulateNormal nm [[b8 1]] `shouldBeSimError` "sig.register"
+  it "rejects a register whose next value has the wrong type" $ do
+    let nm =
+          normalModule
+            [("x", TBool)]
+            [NOutput "o" (bv 8) (AVar "r")]
+            [NBind "r" (bv 8) (NReg (b8 0) (AVar "x"))]
+    simulateNormal nm [[VBool True], [VBool False]] `shouldBeSimError` "register r"
+
+----------------------------------------------------------------------
+-- Multiple outputs
+
+abPorts :: [Port]
+abPorts = bv8Ports ["a", "b"]
+
+abRows :: [[Value]]
+abRows = [[b8 3, b8 4], [b8 5, b8 5], [b8 255, b8 1]]
+
+-- | Outputs @sum = a + b@ and @same = a == b@.
+twoOutputProgram :: Program
+twoOutputProgram =
+  topProgram abPorts [Port "sum" (bv 8), Port "same" TBool] . overPorts abPorts $
+    liftE [bv 8, bv 8] (TProd [bv 8, TBool]) f [var "a", var "b"]
+  where
+    f =
+      ELam
+        [("x", bv 8), ("y", bv 8)]
+        (ETuple [bvBin BvAdd 8 (var "x") (var "y"), bvEq8 (var "x") (var "y")])
+
+-- | Outputs @sum = a + b@, @diff = a - b@ and @same = a == b@ on the
+-- right-nested spine @(sum, (diff, same))@.
+threeOutputProgram :: Program
+threeOutputProgram =
+  topProgram abPorts threeOutputPorts . overPorts abPorts $
+    liftE [bv 8, bv 8] (TProd [bv 8, TProd [bv 8, TBool]]) f [var "a", var "b"]
+  where
+    f =
+      ELam [("x", bv 8), ("y", bv 8)] $
+        ETuple
+          [ bvBin BvAdd 8 (var "x") (var "y")
+          , ETuple [bvBin BvSub 8 (var "x") (var "y"), bvEq8 (var "x") (var "y")]
+          ]
+
+threeOutputPorts :: [Port]
+threeOutputPorts = [Port "sum" (bv 8), Port "diff" (bv 8), Port "same" TBool]
+
+twoOutputNormal, threeOutputNormal :: NModule
+twoOutputNormal =
+  normalModule
+    [("a", bv 8), ("b", bv 8)]
+    [NOutput "sum" (bv 8) (AVar "s"), NOutput "same" TBool (AVar "e")]
+    [ NBind "s" (bv 8) (NPrim BvAdd [AVar "a", AVar "b"])
+    , NBind "e" TBool (NPrim BvEq [AVar "a", AVar "b"])
+    ]
+threeOutputNormal =
+  normalModule
+    [("a", bv 8), ("b", bv 8)]
+    [ NOutput "sum" (bv 8) (AVar "s")
+    , NOutput "diff" (bv 8) (AVar "d")
+    , NOutput "same" TBool (AVar "e")
+    ]
+    [ NBind "s" (bv 8) (NPrim BvAdd [AVar "a", AVar "b"])
+    , NBind "d" (bv 8) (NPrim BvSub [AVar "a", AVar "b"])
+    , NBind "e" TBool (NPrim BvEq [AVar "a", AVar "b"])
+    ]
+
+twoOutputs, threeOutputs :: [[Value]]
+twoOutputs = [[b8 7, VBool False], [b8 10, VBool True], [b8 0, VBool False]]
+threeOutputs = [[b8 7, b8 255, VBool False], [b8 10, b8 0, VBool True], [b8 0, b8 254, VBool False]]
+
+multiOutputSpec :: Spec
+multiOutputSpec = do
+  it "[sim-multi-output] simulateCore reads two outputs off a pair" $
+    simulateCore twoOutputProgram abRows `shouldBe` Right twoOutputs
+  it "[sim-multi-output] simulateCore reads three outputs along the right-nested spine" $
+    simulateCore threeOutputProgram abRows `shouldBe` Right threeOutputs
+  it "[sim-multi-output] simulateCore rejects a flat triple for three outputs" $ do
+    let flat =
+          topProgram abPorts threeOutputPorts . overPorts abPorts $
+            liftE [bv 8, bv 8] (TProd [bv 8, bv 8, TBool]) f [var "a", var "b"]
+        f =
+          ELam [("x", bv 8), ("y", bv 8)] $
+            ETuple
+              [ bvBin BvAdd 8 (var "x") (var "y")
+              , bvBin BvSub 8 (var "x") (var "y")
+              , bvEq8 (var "x") (var "y")
+              ]
+    simulateCore flat abRows `shouldBeSimError` "cycle 0"
+  it "[sim-multi-output] simulateNormal lists two outputs in port order" $
+    simulateNormal twoOutputNormal abRows `shouldBe` Right twoOutputs
+  it "[sim-multi-output] simulateNormal lists three outputs in port order" $
+    simulateNormal threeOutputNormal abRows `shouldBe` Right threeOutputs
+  it "[sim-multi-output] simulateNormal outputs may read inputs and literals directly" $ do
+    let nm =
+          normalModule
+            [("a", bv 8), ("b", bv 8)]
+            [NOutput "echo" (bv 8) (AVar "b"), NOutput "one" TBool (ALit (VBool True))]
+            []
+    simulateNormal nm abRows `shouldBe` Right [[b, VBool True] | [_, b] <- abRows]
+
+----------------------------------------------------------------------
+-- Zero-input tops
+
+-- | A free-running counter of width @w@: @s = register 0 (s + 1)@.
+freeCounterProgram :: Natural -> Program
+freeCounterProgram w =
+  topProgram [] [Port "count" (bv w)] $
+    ELet
+      True
+      [Bind "s" (sig (bv w)) (registerE (VBV w 0) (liftE [bv w] (bv w) (incr w) [var "s"]))]
+      (var "s")
+
+freeCounterNormal :: Natural -> NModule
+freeCounterNormal w =
+  normalModule
+    []
+    [NOutput "count" (bv w) (AVar "s")]
+    [ NBind "s" (bv w) (NReg (VBV w 0) (AVar "s_next"))
+    , NBind "s_next" (bv w) (NPrim BvAdd [AVar "s", ALit (VBV w 1)])
+    ]
+
+counts :: Natural -> Int -> [[Value]]
+counts w n = [[VBV w (t `mod` 2 ^ w)] | t <- [0 .. toInteger n - 1]]
+
+zeroInputSpec :: Spec
+zeroInputSpec = do
+  it "[sim-zero-input] simulateCore runs one cycle per empty row" $
+    simulateCore (freeCounterProgram 4) (replicate 20 []) `shouldBe` Right (counts 4 20)
+  it "[sim-zero-input] simulateNormal runs one cycle per empty row" $
+    simulateNormal (freeCounterNormal 4) (replicate 20 []) `shouldBe` Right (counts 4 20)
+  it "[sim-zero-input] no rows simulate no cycles" $ do
+    simulateCore (freeCounterProgram 4) [] `shouldBe` Right []
+    simulateNormal (freeCounterNormal 4) [] `shouldBe` Right []
+  it "[sim-zero-input] both simulators run the maximum number of vector cycles" $ do
+    let rows = replicate maxCycles []
+        lastTwo = drop (maxCycles - 2) (counts 16 maxCycles)
+    core <- settled (drop (maxCycles - 2) <$> simulateCore (freeCounterProgram 16) rows)
+    core `shouldBe` Right lastTwo
+    normal <- settled (drop (maxCycles - 2) <$> simulateNormal (freeCounterNormal 16) rows)
+    normal `shouldBe` Right lastTwo
+
+----------------------------------------------------------------------
+-- Row validation
+
+-- | Malformed input rows: what is wrong, the circuit in both forms, the
+-- rows, and the cycle the error must name.
+badRows :: [(String, Program, NModule, [[Value]], Text)]
+badRows =
+  [ ("a row with too few values", macProgram, macNormal, [[b8 3]], "cycle 0")
+  ,
+    ( "a row with too many values"
+    , counterProgram
+    , counterNormal
+    , [[VBool True], [VBool True, VBool False]]
+    , "cycle 1"
+    )
+  , ("a Bool on a bit-vector port", macProgram, macNormal, [[VBool True, b8 1]], "cycle 0")
+  , ("a bit vector of the wrong width", macProgram, macNormal, [[VBV 4 3, b8 1]], "cycle 0")
+  , ("a bit vector on a Bool port", counterProgram, counterNormal, [[VBV 1 1]], "cycle 0")
+  , ("a payload that does not fit its width", macProgram, macNormal, [[b8 256, b8 1]], "cycle 0")
+  ,
+    ( "a tuple on a scalar port"
+    , counterProgram
+    , counterNormal
+    , [[VTuple [VBool True, VBool False]]]
+    , "cycle 0"
+    )
+  ,
+    ( "a bad row after good ones"
+    , macProgram
+    , macNormal
+    , replicate 3 [b8 1, b8 2] <> [[b8 1]]
+    , "cycle 3"
+    )
+  ,
+    ( "a value for a top with no inputs"
+    , freeCounterProgram 4
+    , freeCounterNormal 4
+    , [[], [VBool True]]
+    , "cycle 1"
+    )
+  ]
+
+rowsRejectSpec :: Spec
+rowsRejectSpec =
+  for_ badRows $ \(what, prog, nm, rows, cyc) -> do
+    it ("[sim-rows-reject] simulateCore rejects " <> what) $
+      simulateCore prog rows `shouldBeSimError` cyc
+    it ("[sim-rows-reject] simulateNormal rejects " <> what) $
+      simulateNormal nm rows `shouldBeSimError` cyc

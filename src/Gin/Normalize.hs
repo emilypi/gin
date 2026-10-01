@@ -25,16 +25,26 @@ import Gin.Core.Syntax
   , validValue
   , valueTy
   )
-import Gin.Error (GinError, Stage (..), ginError)
+import Gin.Error (GinError, Stage (..), ginError, withContext)
 import Gin.Limits (maxNormalBinds)
-import Gin.Normalize.Internal (primResultTy)
+import Gin.Normalize.Internal (buildModule, primResultTy)
 
 -- | Precondition: 'Gin.Core.Check.checkProgram' succeeded. Inlines
 -- globals, beta-reduces, erases signals, lowers @sig.mealy@ to registers,
 -- flattens tuples and A-normalizes. Errors use 'StNormalize' (e.g. a
 -- lambda that cannot be eliminated, or a combinational loop).
+--
+-- Also an 'StNormalize' error: inlining that emits more than
+-- 'Gin.Limits.maxNormalBinds' binds (counted as they are emitted, so the
+-- error comes before the term is built), evaluation that exceeds
+-- 'Gin.Normalize.Internal.maxEvalSteps' steps, a recursive @let@ that
+-- binds a function, and an @if@ whose branches carry functions. The
+-- result is validated with 'checkNormal' before it is returned.
 normalize :: Program -> Either GinError NModule
-normalize = error "not yet implemented: normalize"
+normalize prog = do
+  m <- buildModule prog
+  withContext "while validating the normal form" (checkNormal m)
+  pure m
 
 -- | Validate every invariant listed in "Gin.Core.Normal".
 checkNormal :: NModule -> Either GinError ()

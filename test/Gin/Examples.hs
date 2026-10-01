@@ -97,9 +97,9 @@ counterNormal =
     , nmInputs = [("en", TBool)]
     , nmOutputs = [NOutput "count" (bv 8) (AVar "s")]
     , nmBinds =
-        [ NBind "s" (bv 8) (NReg (VBV 8 0) (AVar "next"))
+        [ NBind "s" (bv 8) (NReg (VBV 8 0) (AVar "s_next"))
         , NBind "inc" (bv 8) (NPrim BvAdd [AVar "s", ALit (VBV 8 1)])
-        , NBind "next" (bv 8) (NMux (AVar "en") (AVar "inc") (AVar "s"))
+        , NBind "s_next" (bv 8) (NMux (AVar "en") (AVar "inc") (AVar "s"))
         ]
     , nmCertificate = testCertificate "Counter.counter_correct"
     }
@@ -114,9 +114,9 @@ counterNetlist =
     , modInputs = [Net (Ident "en") HBit]
     , modOutputs = [Output (Net (Ident "count") (HVec 8)) (ORef (Ident "s"))]
     , modDecls =
-        [ DReg (Net (Ident "s") (HVec 8)) (HLitVec 8 0) (ORef (Ident "next"))
+        [ DReg (Net (Ident "s") (HVec 8)) (HLitVec 8 0) (ORef (Ident "s_next"))
         , DAssign (Net (Ident "inc") (HVec 8)) (HBin BAdd (ORef (Ident "s")) (OConst (HLitVec 8 1)))
-        , DAssign (Net (Ident "next") (HVec 8)) (HMux (ORef (Ident "en")) (ORef (Ident "inc")) (ORef (Ident "s")))
+        , DAssign (Net (Ident "s_next") (HVec 8)) (HMux (ORef (Ident "en")) (ORef (Ident "inc")) (ORef (Ident "s")))
         ]
     }
 

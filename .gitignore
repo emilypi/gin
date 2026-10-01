@@ -6,3 +6,4 @@ lean/.lake/
 work/
 *.o
 *.hi
+logs/

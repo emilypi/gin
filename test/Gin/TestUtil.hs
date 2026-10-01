@@ -14,10 +14,11 @@ import Data.Text qualified as Text
 import Data.Text.IO qualified as Text
 import System.Directory (createDirectoryIfMissing, doesFileExist, findExecutable)
 import System.Environment (lookupEnv)
-import System.Exit (ExitCode)
+import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process (CreateProcess (..), proc, readCreateProcessWithExitCode)
+import System.Timeout (timeout)
 import Test.Hspec (Expectation, SpecWith, expectationFailure, it, pendingWith, shouldBe)
 
 -- | Compare against @test/golden/<rel>@. With @GIN_ACCEPT=1@ in the
@@ -56,12 +57,15 @@ itWithTools tools name body = it name $ do
   where
     filterMissing = fmap concat . traverse (\t -> (\ok -> [t | not ok]) <$> toolAvailable t)
 
--- | Run a tool (no shell) in a working directory; returns exit code,
--- stdout and stderr.
+-- | Run a tool (no shell) in a working directory with a 300 s limit;
+-- returns exit code, stdout and stderr. A timeout yields @ExitFailure
+-- 124@ and a message on stderr.
 runTool :: FilePath -> String -> [String] -> IO (ExitCode, Text, Text)
-runTool cwd' exe args = do
-  (code, out, err) <- readCreateProcessWithExitCode (proc exe args) {cwd = Just cwd'} ""
-  pure (code, Text.pack out, Text.pack err)
+runTool cwd' exe args =
+  timeout (300 * 1000000) (readCreateProcessWithExitCode (proc exe args) {cwd = Just cwd'} "")
+    >>= \case
+      Just (code, out, err) -> pure (code, Text.pack out, Text.pack err)
+      Nothing -> pure (ExitFailure 124, "", Text.pack ("timeout: " <> exe))
 
 withTempDir :: (FilePath -> IO a) -> IO a
 withTempDir = withSystemTempDirectory "gin-test"

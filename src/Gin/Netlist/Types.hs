@@ -118,7 +118,7 @@ reservedWords =
          \sra srl strong subtype then to transport type unaffected units until use \
          \variable vmode vprop vunit wait when while with xnor xor "
       -- VHDL predeclared names that generated designs and testbenches use
-      <> "std ieee std_logic std_logic_vector std_ulogic numeric_std unsigned signed \
+      <> "std ieee std_logic_1164 std_logic std_logic_vector std_ulogic numeric_std unsigned signed \
          \resize to_unsigned to_integer rising_edge natural integer boolean \
          \work line write writeline to_string to_hstring shift_left shift_right \
          \textio output env finish stop now time string character bit bit_vector \

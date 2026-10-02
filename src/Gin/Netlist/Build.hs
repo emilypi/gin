@@ -147,7 +147,7 @@ type Env = Map Name (Ident, Ty)
 -- | Inputs keep their (port) names; binds are named with 'sanitize', in
 -- order, against the reserved names and the binds named before them.
 nameBinds :: Set Text -> [(Name, Ty)] -> [NBind] -> Either GinError Env
-nameBinds reserved inputs binds = snd <$> foldM step (reserved, inputEnv) binds
+nameBinds reserved inputs binds = snd <$> foldM step (Taken reserved Map.empty, inputEnv) binds
   where
     inputEnv = Map.fromList [(n, (Ident (unName n), t)) | (n, t) <- inputs]
     step (taken, env) b
@@ -155,8 +155,8 @@ nameBinds reserved inputs binds = snd <$> foldM step (reserved, inputEnv) binds
           Left . netlistError $
             "bind name " <> quote (unName (nbName b)) <> " is already an input or a bind"
       | otherwise =
-          let i = freshName taken (unName (nbName b))
-           in Right (Set.insert i taken, Map.insert (nbName b) (Ident i, nbTy b) env)
+          let (i, taken') = claimName taken (unName (nbName b))
+           in taken' `seq` Right (taken', Map.insert (nbName b) (Ident i, nbTy b) env)
 
 -- | @sanitize taken name@ turns @name@ into a legal identifier
 -- ('isLegalIdent') that differs, case-insensitively, from every name in
@@ -176,20 +176,33 @@ nameBinds reserved inputs binds = snd <$> foldM step (reserved, inputEnv) binds
 -- suffix of step 5 fits within the 64-character limit while fewer than
 -- 9999999 names are taken.
 sanitize :: Set Text -> Text -> Text
-sanitize taken = freshName (Set.map Text.toLower taken)
+sanitize taken = fst . claimName (Taken (Set.map Text.toLower taken) Map.empty)
 
--- | 'sanitize' against a set of names that are already lowercase.
-freshName :: Set Text -> Text -> Text
-freshName taken name
-  | base `Set.notMember` taken = base
-  | otherwise = suffixed (1 :: Int)
+-- | The names taken so far, lowercased, and for each base name (steps 1–4
+-- of 'sanitize') whose suffix search has run, the suffix to resume it at.
+data Taken = Taken !(Set Text) !(Map Text Int)
+
+-- | 'sanitize' a name and take the result.
+--
+-- Names are only ever added, so every suffix a search for a base name
+-- has passed, or returned, stays unusable, and the next search for that
+-- base resumes after it with the same result as one starting at 1.
+-- Naming n binds that share a base therefore costs O(n) lookups, not
+-- O(n^2).
+claimName :: Taken -> Text -> (Text, Taken)
+claimName (Taken names resume) name
+  | base `Set.notMember` names = (base, Taken (Set.insert base names) resume)
+  | otherwise =
+      let k = search (Map.findWithDefault 1 base resume)
+          candidate = suffixed k
+       in (candidate, Taken (Set.insert candidate names) (Map.insert base (k + 1) resume))
   where
     base = baseName name
-    suffixed k
-      | candidate `Set.notMember` taken && isLegalIdent candidate = candidate
-      | otherwise = suffixed (k + 1)
-      where
-        candidate = base <> "_" <> tshow k
+    suffixed k = base <> "_" <> tshow k
+    search :: Int -> Int
+    search k
+      | suffixed k `Set.notMember` names && isLegalIdent (suffixed k) = k
+      | otherwise = search (k + 1)
 
 -- | Steps 1–4 of 'sanitize'.
 baseName :: Text -> Text

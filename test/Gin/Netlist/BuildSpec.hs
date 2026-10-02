@@ -3,11 +3,15 @@
 -- 'validate', a validator local to this module.
 module Gin.Netlist.BuildSpec (spec) where
 
-import Control.Monad (guard)
+import Control.Exception (evaluate)
+import Control.Monad (guard, unless)
 import Data.Bits (testBit)
-import Data.Char (GeneralCategory (..), generalCategory, isAsciiLower, toUpper)
+import Data.Char (GeneralCategory (..), chr, generalCategory, isAsciiLower, toUpper)
 import Data.Foldable (for_)
 import Data.Graph (SCC (..), flattenSCC, stronglyConnComp)
+import Data.List (mapAccumL)
+import Data.List.NonEmpty (NonEmpty (..))
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust)
@@ -20,10 +24,12 @@ import Gin.Core.Normal
 import Gin.Core.Syntax
 import Gin.Error (GinError (..), Stage (..))
 import Gin.Examples
+import Gin.Limits (maxNormalBinds)
 import Gin.Netlist.Build (buildNetlist, sanitize)
 import Gin.Netlist.Types
 import Gin.TestUtil (goldenText)
 import Numeric.Natural (Natural)
+import System.Timeout (timeout)
 import Test.Hspec
   ( Expectation
   , Spec
@@ -60,6 +66,7 @@ import Text.Read (readMaybe)
 spec :: Spec
 spec = do
   describe "sanitize" sanitizeSpec
+  describe "bind names" bindNamesSpec
   describe "lowering" loweringSpec
   describe "example circuits" examplesSpec
   describe "port names" portsSpec
@@ -231,6 +238,75 @@ asciiUpper = Text.map (\c -> if isAsciiLower c then toUpper c else c)
 
 tshow :: (Show a) => a -> Text
 tshow = Text.pack . show
+
+----------------------------------------------------------------------
+-- bind names
+
+bindNamesSpec :: Spec
+bindNamesSpec = do
+  it "[nl-sanitize] gives binds sharing a base name the least free suffix, in order" $
+    chainDeclNames (chainModule ["x", "x'", "x_3", "x''", "x'''", "x_1"])
+      `shouldBe` Right (Ident <$> ["x", "x_1", "x_3", "x_2", "x_4", "x_1_1"])
+  modifyMaxSuccess (const 500) $
+    prop "[nl-sanitize] names each bind as sanitize does against the names before it" $
+      checkCoverage . forAll genChainNames $ \names ->
+        let expected = chainNames names
+         in cover 30 (searchedTwice names expected) "a base name was suffixed twice"
+              . counterexample (show names)
+              $ chainDeclNames (chainModule names) === Right expected
+  -- Each search for a free suffix resumes where the previous one for the
+  -- same base name stopped; restarting at 1 makes this quadratic (about
+  -- five minutes at this size).
+  it "[nl-sanitize] names as many binds as normal form allows, all with one base name, quickly" $ do
+    let raw = [Name (Text.pack ['x', chr (0x10000 + i)]) | i <- [0 .. maxNormalBinds - 1]]
+        names = chainDeclNames (chainModule raw)
+        expected = Ident <$> "x" : ["x_" <> tshow k | k <- [1 .. maxNormalBinds - 1]]
+        forced = either (const 0) (sum . fmap (Text.length . unIdent)) names
+    finished <- timeout (30 * 1000000) (evaluate forced)
+    unless (isJust finished) $ expectationFailure "naming the binds took more than 30 s"
+    length <$> names `shouldBe` Right maxNormalBinds
+    filter (uncurry (/=)) . zip expected <$> names `shouldBe` Right []
+
+-- | Input @a : Bool@; one @bool.not@ bind per name, the first reading
+-- @a@ and every other one the bind before it; output @o@ reading the last
+-- bind (or @a@). Every bind is read, so none is dropped.
+chainModule :: [Name] -> NModule
+chainModule names =
+  NModule
+    { nmName = "top"
+    , nmDomain = sysDomain
+    , nmInputs = [("a", TBool)]
+    , nmOutputs = [NOutput "o" TBool (AVar (NE.last ("a" :| names)))]
+    , nmBinds = zipWith (\prev n -> NBind n TBool (NPrim BoolNot [AVar prev])) ("a" : names) names
+    , nmCertificate = testCertificate "Chain.chain_correct"
+    }
+
+chainDeclNames :: NModule -> Either GinError [Ident]
+chainDeclNames nm = fmap (netName . declNet) . modDecls <$> buildNetlist nm
+
+-- | The names 'buildNetlist' gives the binds of @'chainModule' names@:
+-- each one sanitized against the top name, the clock, the reset, the
+-- ports and the binds named before it.
+chainNames :: [Name] -> [Ident]
+chainNames = fmap Ident . snd . mapAccumL claim reserved . fmap unName
+  where
+    reserved = Set.fromList ["top", "clk", "rst", "a", "o"]
+    claim taken raw = let r = sanitize taken raw in (Set.insert r taken, r)
+
+-- | Did some base name need a suffix for two binds or more?
+searchedTwice :: [Name] -> [Ident] -> Bool
+searchedTwice names idents = any (> 1) (Map.fromListWith (+) suffixed)
+  where
+    suffixed =
+      [ (base, 1 :: Int)
+      | (n, i) <- zip names idents
+      , let base = sanitize Set.empty (unName n)
+      , unIdent i /= base
+      ]
+
+-- | Distinct bind names other than the input @a@, many sharing a base.
+genChainNames :: Gen [Name]
+genChainNames = uniquify (Set.singleton "a") <$> (chooseInt (0, 40) >>= (`vectorOf` genBindName))
 
 ----------------------------------------------------------------------
 -- lowering

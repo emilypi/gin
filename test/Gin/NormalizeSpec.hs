@@ -311,6 +311,35 @@ deepRegister d =
     reg = register v (lift [TBool] t nest [var "x"])
     body = ELet False [Bind "r" (sig t) reg] (lift [t] TBool deepest [var "r"])
 
+-- | @TBool@ paired with itself @k@ times. Each level is shared, so the type
+-- takes @k@ steps to build although it has @2^k@ components.
+doubledTy :: Int -> Ty
+doubledTy k = foldr (\_ t -> TProd [t, t]) TBool [1 .. k]
+
+-- | @name0 = base; name(i+1) = (namei, namei)@ for @i < k@: @k + 1@ binds
+-- whose last value is a tuple of @2^k@ Bools, shared at every level.
+doublings :: Text -> Expr -> Int -> [Bind]
+doublings name base k = [Bind (n i) (doubledTy i) (rhs i) | i <- [0 .. k]]
+  where
+    n i = Name (name <> Text.pack (show i))
+    rhs i = if i == 0 then base else ETuple [EVar (n (i - 1)), EVar (n (i - 1))]
+
+-- | Component 0, @k@ times over.
+firsts :: Int -> Expr -> Expr
+firsts k e = foldr (\_ -> EProj 0) e [1 .. k]
+
+-- > shared b = lift (\c -> let t0 = c; t(i+1) = (ti, ti) in tk.0 .. .0) b
+--
+-- The value of @tk@ written out as a tree has @2^(k+1) - 1@ nodes, but
+-- evaluating the program takes time linear in @k@.
+sharedTuple :: Int -> Program
+sharedTuple k =
+  program "shared" [Port "b" TBool] [Port "o" TBool] [mkTop [("b", TBool)] TBool body]
+  where
+    tk = var ("t" <> Text.pack (show k))
+    f = ELam [("c", TBool)] (ELet False (doublings "t" (var "c") k) (firsts k tk))
+    body = lift [TBool] TBool f [var "b"]
+
 -- > long x = let f1 = \v -> v; f(i+1) = \v -> fi (fi v) in lift fk x
 --
 -- Exponential work without binds, with every binder name @len@ characters
@@ -437,6 +466,15 @@ outcomeWithin seconds r =
   timeout
     (seconds * 1000000)
     (evaluate (either (\e -> Just (errStage e, errMessage e)) (const Nothing) r))
+
+-- | 'normalized', failing unless normalization finishes within the given
+-- number of seconds.
+normalizedWithin :: Int -> Program -> IO NModule
+normalizedWithin seconds p = do
+  r <- timeout (seconds * 1000000) (evaluate (normalize p))
+  case r of
+    Nothing -> fail ("normalize did not finish within " <> show seconds <> " s")
+    Just result -> either (fail . show) pure result
 
 shouldTripLimit :: Program -> Text -> Expectation
 shouldTripLimit p needle = do
@@ -697,6 +735,10 @@ spec = do
             m <- either (fail . show) pure result
             nmBinds m `shouldBe` []
             nmOutputs m `shouldBe` [NOutput "o" TBool (AVar "b")]
+      it "[norm-limit] names a tuple shared at every level in time linear in its depth" $ do
+        m <- normalizedWithin 10 (sharedTuple 40)
+        nmBinds m `shouldBe` []
+        nmOutputs m `shouldBe` [NOutput "o" TBool (AVar "b")]
 
     describe "multiple outputs" $ do
       it "[norm-multi-output] reads two outputs in port order" $ do

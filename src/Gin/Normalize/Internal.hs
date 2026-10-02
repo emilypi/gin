@@ -26,6 +26,10 @@
 -- emitting binds at all. Names are replaced by integer ids before
 -- evaluation, and wires are named after a bounded prefix of their source
 -- binder, so the cost of a step does not grow with the length of names.
+-- Every tuple the evaluator builds has an id, and naming visits each tuple
+-- once, so naming a value whose components share tuples (@t1 = (t0, t0)@,
+-- @t2 = (t1, t1)@, ..) costs time linear in the number of tuples, not in the
+-- size of the value written out as a tree.
 module Gin.Normalize.Internal
   ( buildModule
   , primResultTy
@@ -217,7 +221,10 @@ data RBind = RBind
 data SVal
   = -- | A scalar wire or literal with its (scalar) type.
     SAtom !W !Ty
-  | STuple ![SVal]
+  | -- | A tuple with an id unique to this node ('tuple'). Values are never
+    -- updated, so a tuple reached twice through sharing is one node, visited
+    -- once by passes that only need to see each tuple once.
+    STuple !Int ![SVal]
   | -- | A function, with the definition it was written in (for error context).
     SFun !(Maybe Int) (SVal -> M SVal)
 
@@ -234,6 +241,8 @@ data St = St
   , stInputs :: !(IntMap Text)
   -- ^ Input wire ids and their port names.
   , stNextId :: !Int
+  , stNextTuple :: !Int
+  -- ^ Id of the next tuple built.
   , stBinds :: !(IntMap RBind)
   , stEmitted :: !Int
   -- ^ Binds emitted so far, counting reuses of an existing bind.
@@ -242,6 +251,8 @@ data St = St
   -- ^ Combinational right-hand sides emitted so far, for reuse.
   , stAliases :: !(IntMap Text)
   -- ^ First source binder each wire was bound to.
+  , stNamed :: !IntSet
+  -- ^ Tuples whose components have been named after a source binder.
   , stGlobals :: !(IntMap SVal)
   -- ^ Values of the definitions evaluated so far.
   , stActive :: !IntSet
@@ -300,6 +311,13 @@ freshId = do
   modify' (\s -> s {stNextId = i + 1})
   pure i
 
+-- | A tuple node with a fresh id.
+tuple :: [SVal] -> M SVal
+tuple vs = do
+  t <- gets stNextTuple
+  modify' (\s -> s {stNextTuple = t + 1})
+  pure (STuple t vs)
+
 countBind :: M ()
 countBind = do
   n <- gets stEmitted
@@ -337,6 +355,12 @@ emitShared hint ty rhs = do
 -- long names and deeply nested tuples do not cost time and memory
 -- proportional to the product of name length and bind count, or quadratic
 -- in the nesting depth.
+--
+-- Each tuple is named once, by the first binder that reaches it with a
+-- name shorter than 'maxAliasLength': a tuple shared by several binders, or
+-- several times within one value, is not walked again. The cost of all
+-- calls together is linear in the number of tuples built, however large
+-- the values are when written out as trees.
 alias :: Int -> SVal -> M ()
 alias x v0 = do
   base <- aliasBase x
@@ -347,9 +371,12 @@ alias x v0 = do
       case v of
         SAtom (WVar i) _ ->
           modify' (\s -> s {stAliases = IntMap.insertWith (\_ old -> old) i name (stAliases s)})
-        STuple vs
-          | Text.compareLength name maxAliasLength == LT ->
-              zipWithM_ (\k -> go (name <> "_" <> showT k)) [0 :: Int ..] vs
+        STuple t vs
+          | Text.compareLength name maxAliasLength == LT -> do
+              named <- gets (IntSet.member t . stNamed)
+              unless named $ do
+                modify' (\s -> s {stNamed = IntSet.insert t (stNamed s)})
+                zipWithM_ (\k -> go (name <> "_" <> showT k)) [0 :: Int ..] vs
         _ -> pure ()
 
 -- | Longest prefix of a source binder name used to name wires, and length
@@ -369,7 +396,7 @@ leaves v0 = go v0 []
       tick
       case v of
         SAtom w t -> pure ((w, t) : acc)
-        STuple vs -> foldrM go acc vs
+        STuple _ vs -> foldrM go acc vs
         SFun _ _ -> failN "a function value cannot be lowered to wires"
 
 ----------------------------------------------------------------------
@@ -392,7 +419,7 @@ eval env expr = do
     ILam params body -> lambda env params body
     ILet False binds body -> foldM letBind env binds >>= (`eval` body)
     ILet True binds body -> recLet env binds body
-    ITuple es -> STuple <$> traverse (eval env) es
+    ITuple es -> traverse (eval env) es >>= tuple
     IProj i e -> eval env e >>= project i
     IIf c t e -> do
       cv <- eval env c
@@ -459,12 +486,12 @@ global g = do
 
 literal :: Value -> M SVal
 literal v
-  | validValue v = spend (size v) >> pure (go v)
+  | validValue v = spend (size v) >> go v
   | otherwise = failN ("invalid literal " <> showT v)
   where
     go = \case
-      VTuple vs -> STuple (fmap go vs)
-      scalar -> SAtom (WLit scalar) (valueTy scalar)
+      VTuple vs -> traverse go vs >>= tuple
+      scalar -> pure (SAtom (WLit scalar) (valueTy scalar))
     size = \case
       VTuple vs -> 1 + sum (fmap size vs)
       _ -> 1
@@ -500,7 +527,7 @@ recLet env binds body = do
 placeholder :: Text -> Ty -> M SVal
 placeholder x = \case
   TSignal _ t -> placeholder x t
-  TProd ts -> STuple <$> traverse (placeholder x) ts
+  TProd ts -> traverse (placeholder x) ts >>= tuple
   TFun _ _ -> failN ("a recursive let cannot bind the function " <> x)
   t
     | isScalar t -> (`SAtom` t) . WVar <$> freshId
@@ -510,14 +537,14 @@ placeholder x = \case
 tie :: Text -> SVal -> SVal -> M ()
 tie x hole v = case (hole, v) of
   (SAtom (WVar i) t, SAtom w t') | t == t' -> emitAt i (Text.take maxAliasLength x) t (RCopy w)
-  (STuple hs, STuple vs) | length hs == length vs -> zipWithM_ (tie x) hs vs
+  (STuple _ hs, STuple _ vs) | length hs == length vs -> zipWithM_ (tie x) hs vs
   _ -> failN ("the value of recursive binding " <> x <> " does not match its type")
 
 project :: Natural -> SVal -> M SVal
 project i v = do
   spend (fromIntegral (min i (fromIntegral maxEvalSteps)))
   case v of
-    STuple vs | x : _ <- genericDrop i vs -> pure x
+    STuple _ vs | x : _ <- genericDrop i vs -> pure x
     _ -> failN ("projection " <> showT i <> " out of a value without that component")
 
 mux :: W -> SVal -> SVal -> M SVal
@@ -527,7 +554,7 @@ mux c a b =
       | t /= t' -> failN "the branches of an if have different types"
       | x == y -> pure a
       | otherwise -> (`SAtom` t) <$> emitShared "mux" t (RMux c x y)
-    (STuple xs, STuple ys) | length xs == length ys -> STuple <$> zipWithM (mux c) xs ys
+    (STuple _ xs, STuple _ ys) | length xs == length ys -> zipWithM (mux c) xs ys >>= tuple
     (SFun _ _, _) -> failN "an if whose branches carry a function is not supported"
     (_, SFun _ _) -> failN "an if whose branches carry a function is not supported"
     _ -> failN "the branches of an if have different shapes"
@@ -571,7 +598,7 @@ primHint = Text.takeWhileEnd (/= '.') . primName
 -- component of the value.
 register :: Value -> SVal -> M SVal
 register v s = case (v, s) of
-  (VTuple vs, STuple ss) | length vs == length ss -> STuple <$> zipWithM register vs ss
+  (VTuple vs, STuple _ ss) | length vs == length ss -> zipWithM register vs ss >>= tuple
   (_, SAtom w t) | valueTy v == t -> do
     i <- freshId
     emitAt i "reg" t (RReg v w)
@@ -585,7 +612,7 @@ mealy v f i = do
   (st, regs) <- stateWires v
   r <- apply f st >>= (`apply` i)
   case r of
-    STuple [next, o] -> do
+    STuple _ [next, o] -> do
       ws <- leaves next
       unless (length ws == length regs) $
         failN "the next state of a mealy machine does not match its initial value"
@@ -605,7 +632,9 @@ stateWires v0 = do
   pure (st, reverse regs)
   where
     go acc = \case
-      VTuple vs -> fmap STuple <$> mapAccumM go acc vs
+      VTuple vs -> do
+        (acc', cs) <- mapAccumM go acc vs
+        (acc',) <$> tuple cs
       v -> do
         i <- freshId
         pure ((i, v) : acc, SAtom (WVar i) (valueTy v))
@@ -627,11 +656,13 @@ buildModule prog = do
           , stNames = names
           , stInputs = inputs
           , stNextId = IntMap.size inputs
+          , stNextTuple = 0
           , stBinds = IntMap.empty
           , stEmitted = 0
           , stSteps = 0
           , stShared = Map.empty
           , stAliases = IntMap.empty
+          , stNamed = IntSet.empty
           , stGlobals = IntMap.empty
           , stActive = IntSet.empty
           , stCurDef = Nothing
@@ -662,7 +693,7 @@ elaborate top topId = inContext ("in top entity " <> topName top) $ do
 spine :: Int -> SVal -> M [SVal]
 spine n v
   | n <= 1 = pure [v]
-  | STuple [o, rest] <- v = (o :) <$> spine (n - 1) rest
+  | STuple _ [o, rest] <- v = (o :) <$> spine (n - 1) rest
   | otherwise = failN ("the top entity's result does not have " <> showT n <> " outputs")
 
 operands :: RRhs -> [W]

@@ -278,6 +278,26 @@ wideChain n = chainProgramOf TBool n base twice
 twice :: Expr -> Expr -> Expr
 twice g x = EApp g [EApp g [x]]
 
+-- | The right-nested tuple value @(false, (false, .. false))@ with @d@
+-- levels of nesting.
+deepState :: Int -> Value
+deepState d = foldr (\_ v -> VTuple [VBool False, v]) (VBool False) [1 .. d]
+
+-- > deepReg x = let r = register (deepState d) (lift nest x) in lift deepest r
+--
+-- @nest b@ is @(b, (b, .. b))@ with @d@ levels of nesting and @deepest@
+-- projects out its innermost component, so one register is live.
+deepRegister :: Int -> Program
+deepRegister d =
+  program "deepreg" [Port "x" TBool] [Port "y" TBool] [mkTop [("x", TBool)] TBool body]
+  where
+    v = deepState d
+    t = valueTy v
+    nest = ELam [("b", TBool)] (foldr (\_ e -> ETuple [var "b", e]) (var "b") [1 .. d])
+    deepest = ELam [("t", t)] (foldr (\_ e -> EProj 1 e) (var "t") [1 .. d])
+    reg = register v (lift [TBool] t nest [var "x"])
+    body = ELet False [Bind "r" (sig t) reg] (lift [t] TBool deepest [var "r"])
+
 -- | A module of @k@ chained @bool.not@ binds, valid for @k <= maxNormalBinds@.
 notChain :: Int -> NModule
 notChain k =
@@ -565,6 +585,13 @@ spec = do
         nmInputs m `shouldBe` [("x", bv 8)]
         fmap nbName (nmBinds m) `shouldNotContain` ["x"]
         drivers m `shouldBe` [Right (NPrim BvAdd [AVar "x", ALit (VBV 8 1)])]
+      it "names tuple components after their binder, with bounded names for deep nesting" $ do
+        shallow <- normalized (deepRegister 2)
+        nmBinds shallow `shouldBe` [NBind "r_1_1" TBool (NReg (VBool False) (AVar "x"))]
+        deep <- normalized (deepRegister 200)
+        checkNormal deep `shouldBe` Right ()
+        fmap nbRhs (nmBinds deep) `shouldBe` [NReg (VBool False) (AVar "x")]
+        fmap (Text.length . unName . nbName) (nmBinds deep) `shouldSatisfy` all (<= 80)
 
     describe "unsupported programs" $ do
       it "rejects an if whose branches carry functions" $ do

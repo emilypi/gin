@@ -253,7 +253,10 @@ emitShared hint ty rhs = do
       pure (WVar i)
 
 -- | Remember that a source binder names this value; component @k@ of a
--- tuple-valued binder @x@ is named @x_k@.
+-- tuple-valued binder @x@ is named @x_k@. Components whose name would grow
+-- past 'maxAliasLength' keep the name of the operation that produced them,
+-- so deeply nested tuples do not cost time and memory quadratic in their
+-- depth.
 alias :: Name -> SVal -> M ()
 alias x = go (unName x)
   where
@@ -262,8 +265,15 @@ alias x = go (unName x)
       case v of
         SAtom (WVar i) _ ->
           modify' (\s -> s {stAliases = IntMap.insertWith (\_ old -> old) i name (stAliases s)})
-        STuple vs -> zipWithM_ (\k -> go (name <> "_" <> showT k)) [0 :: Int ..] vs
+        STuple vs
+          | Text.compareLength name maxAliasLength == LT ->
+              zipWithM_ (\k -> go (name <> "_" <> showT k)) [0 :: Int ..] vs
         _ -> pure ()
+
+-- | Length beyond which tuple components are no longer named after their
+-- source binder.
+maxAliasLength :: Int
+maxAliasLength = 64
 
 bindVar :: Name -> SVal -> Env -> Env
 bindVar x v env = env {envVars = Map.insert x v (envVars env)}

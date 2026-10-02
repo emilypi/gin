@@ -1,0 +1,98 @@
+import Gin.Export.Ir
+import Gin.Export.JsonDoc
+
+/-!
+# JSON encoding of the core IR
+
+Encodes `Program` and `Vectors` exactly as `docs/file-formats.md`
+specifies, with keys in the order the document lists them and `params`
+always present on primitives.
+-/
+
+namespace Gin.Export
+
+open JsonDoc
+
+/-- Format tag of program files. -/
+def irFormat : String := "gin-ir/1"
+
+/-- Format tag of test-vector files. -/
+def vectorsFormat : String := "gin-vectors/1"
+
+/-- Encode a type. -/
+partial def Ty.toDoc : Ty → JsonDoc
+  | .bool => obj [("t", str "bool")]
+  | .bv w => obj [("t", str "bv"), ("width", nat w)]
+  | .prod es => obj [("t", str "prod"), ("elems", arr (es.map Ty.toDoc))]
+  | .fn a r => obj [("t", str "fun"), ("arg", a.toDoc), ("res", r.toDoc)]
+  | .signal d e => obj [("t", str "signal"), ("domain", str d), ("elem", e.toDoc)]
+
+/-- Encode a value; bit-vector payloads are decimal strings. -/
+partial def Value.toDoc : Value → JsonDoc
+  | .bool b => JsonDoc.bool b
+  | .bv w v => obj [("bv", nat w), ("val", str (toString v))]
+  | .tuple vs => obj [("tuple", arr (vs.map Value.toDoc))]
+
+/-- The `params` object of a primitive. -/
+def PrimOp.params : PrimOp → List (String × JsonDoc)
+  | .bvShl k | .bvLshr k => [("amount", nat k)]
+  | .bvExtract hi lo => [("hi", nat hi), ("lo", nat lo)]
+  | .bvZext w => [("width", nat w)]
+  | .sigLift k => [("arity", nat k)]
+  | .sigRegister v | .sigMealy v => [("init", v.toDoc)]
+  | _ => []
+
+/-- Encode an expression. -/
+partial def Expr.toDoc : Expr → JsonDoc
+  | .var n => obj [("e", str "var"), ("name", str n)]
+  | .global n => obj [("e", str "global"), ("name", str n)]
+  | .lit v => obj [("e", str "lit"), ("value", v.toDoc)]
+  | .prim op ty =>
+    obj [("e", str "prim"), ("op", str op.name), ("type", ty.toDoc), ("params", obj op.params)]
+  | .app f args => obj [("e", str "app"), ("fun", f.toDoc), ("args", arr (args.map Expr.toDoc))]
+  | .lam bs body =>
+    obj [("e", str "lam"),
+      ("binders", arr (bs.map fun (n, t) => obj [("name", str n), ("type", t.toDoc)])),
+      ("body", body.toDoc)]
+  | .letE r bs body =>
+    obj [("e", str "let"), ("rec", bool r),
+      ("binds", arr (bs.map fun (n, t, v) =>
+        obj [("name", str n), ("type", t.toDoc), ("value", v.toDoc)])),
+      ("body", body.toDoc)]
+  | .tuple es => obj [("e", str "tuple"), ("elems", arr (es.map Expr.toDoc))]
+  | .proj i e => obj [("e", str "proj"), ("index", nat i), ("of", e.toDoc)]
+  | .ite c t e => obj [("e", str "if"), ("cond", c.toDoc), ("then", t.toDoc), ("else", e.toDoc)]
+
+/-- Encode a port. -/
+def Port.toDoc (p : Port) : JsonDoc := obj [("name", str p.name), ("type", p.type.toDoc)]
+
+/-- Encode a program file. -/
+def Program.toDoc (p : Program) : JsonDoc :=
+  obj [
+    ("format", str irFormat),
+    ("producer", obj [("tool", str p.producer.tool), ("leanVersion", str p.producer.leanVersion)]),
+    ("top", obj [
+      ("name", str p.top.name),
+      ("domain", obj [("name", str p.top.domain.name), ("periodPs", nat p.top.domain.periodPs)]),
+      ("inputs", arr (p.top.inputs.map Port.toDoc)),
+      ("outputs", arr (p.top.outputs.map Port.toDoc)),
+      ("def", str p.top.def_)]),
+    ("defs", arr (p.defs.map fun d =>
+      obj [("name", str d.name), ("type", d.type.toDoc), ("body", d.body.toDoc)])),
+    ("certificate", obj [
+      ("theorem", str p.certificate.theorem_),
+      ("statement", str p.certificate.statement),
+      ("axioms", arr (p.certificate.axioms.map str)),
+      ("implAxioms", arr (p.certificate.implAxioms.map str))])]
+
+/-- Encode a test-vector file. -/
+def Vectors.toDoc (v : Vectors) : JsonDoc :=
+  obj [
+    ("format", str vectorsFormat),
+    ("top", str v.top),
+    ("inputs", arr (v.inputs.map Port.toDoc)),
+    ("outputs", arr (v.outputs.map Port.toDoc)),
+    ("cycles", arr (v.cycles.toList.map fun c =>
+      obj [("in", arr (c.inputs.map Value.toDoc)), ("out", arr (c.outputs.map Value.toDoc))]))]
+
+end Gin.Export

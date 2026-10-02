@@ -283,6 +283,19 @@ twice g x = EApp g [EApp g [x]]
 deepState :: Int -> Value
 deepState d = foldr (\_ v -> VTuple [VBool False, v]) (VBool False) [1 .. d]
 
+-- > deep b = mealy (\st i -> (st, i)) (deepState d) b
+--
+-- The state never changes and the output is the input, so every state
+-- register is dead.
+deepMealy :: Int -> Program
+deepMealy d = program "deep" [Port "b" TBool] [Port "o" TBool] [mkTop [("b", TBool)] TBool body]
+  where
+    v = deepState d
+    st = valueTy v
+    stepTy = tFuns [st, TBool] (TProd [st, TBool])
+    step = ELam [("st", st), ("i", TBool)] (ETuple [var "st", var "i"])
+    body = EApp (prim (SigMealy v) [stepTy, sig TBool] (sig TBool)) [step, var "b"]
+
 -- > deepReg x = let r = register (deepState d) (lift nest x) in lift deepest r
 --
 -- @nest b@ is @(b, (b, .. b))@ with @d@ levels of nesting and @deepest@
@@ -644,6 +657,14 @@ spec = do
         checkNormal m `shouldBe` Right ()
       it "[norm-limit] rejects a program with one level more" $
         shouldTripLimit (nestedChain 17) (Text.pack (show maxNormalBinds))
+      it "[norm-limit] lowers a deeply nested mealy state in time linear in its depth" $ do
+        r <- timeout (10 * 1000000) (evaluate (normalize (deepMealy 50000)))
+        case r of
+          Nothing -> expectationFailure "normalize did not finish within 10 s"
+          Just result -> do
+            m <- either (fail . show) pure result
+            nmBinds m `shouldBe` []
+            nmOutputs m `shouldBe` [NOutput "o" TBool (AVar "b")]
 
     describe "multiple outputs" $ do
       it "[norm-multi-output] reads two outputs in port order" $ do

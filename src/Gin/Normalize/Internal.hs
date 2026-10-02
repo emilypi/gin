@@ -33,6 +33,7 @@ module Gin.Normalize.Internal
 import Control.Applicative ((<|>))
 import Control.Monad (foldM, unless, when, zipWithM, zipWithM_)
 import Control.Monad.State.Strict (StateT (..), gets, modify')
+import Data.Foldable (foldrM)
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
 import Data.IntSet (IntSet)
@@ -45,6 +46,7 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Traversable (mapAccumM)
 import Gin.Core.Normal (Atom (..), NBind (..), NModule (..), NOutput (..), NRhs (..))
 import Gin.Core.Syntax
   ( Bind (..)
@@ -278,14 +280,17 @@ maxAliasLength = 64
 bindVar :: Name -> SVal -> Env -> Env
 bindVar x v env = env {envVars = Map.insert x v (envVars env)}
 
--- | The scalar components of a value, in order.
+-- | The scalar components of a value, in order. Accumulates from the right,
+-- so the cost is linear in the size of the value however its tuples nest.
 leaves :: SVal -> M [(W, Ty)]
-leaves v = do
-  tick
-  case v of
-    SAtom w t -> pure [(w, t)]
-    STuple vs -> concat <$> traverse leaves vs
-    SFun _ _ -> failN "a function value cannot be lowered to wires"
+leaves v0 = go v0 []
+  where
+    go v acc = do
+      tick
+      case v of
+        SAtom w t -> pure ((w, t) : acc)
+        STuple vs -> foldrM go acc vs
+        SFun _ _ -> failN "a function value cannot be lowered to wires"
 
 ----------------------------------------------------------------------
 -- Evaluation
@@ -496,14 +501,18 @@ mealy v f i = do
       | valueTy initial == t = emitAt rid "state" t (RReg initial w)
       | otherwise = failN "the next state of a mealy machine does not match its initial value"
 
+-- | A fresh wire for every scalar component of a mealy machine's initial
+-- state, with the component it starts from, in order.
 stateWires :: Value -> M (SVal, [(Int, Value)])
-stateWires = \case
-  VTuple vs -> do
-    parts <- traverse stateWires vs
-    pure (STuple (fmap fst parts), concatMap snd parts)
-  v -> do
-    i <- freshId
-    pure (SAtom (WVar i) (valueTy v), [(i, v)])
+stateWires v0 = do
+  (regs, st) <- go [] v0
+  pure (st, reverse regs)
+  where
+    go acc = \case
+      VTuple vs -> fmap STuple <$> mapAccumM go acc vs
+      v -> do
+        i <- freshId
+        pure ((i, v) : acc, SAtom (WVar i) (valueTy v))
 
 ----------------------------------------------------------------------
 -- Top level

@@ -13,15 +13,16 @@ import Control.Monad (unless)
 import Data.Bits (shiftR, xor, (.&.), (.|.))
 import Data.ByteString qualified as ByteString
 import Data.Char (GeneralCategory (..), generalCategory, isAlpha, isAlphaNum, toLower)
-import Data.List (mapAccumL, nub, unfoldr)
+import Data.List (mapAccumL, unfoldr)
 import Data.Map (Map)
 import Data.Map qualified as Map
-import Data.Maybe (isNothing)
+import Data.Maybe (isNothing, mapMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
+import Data.Text.Read qualified as TextRead
 import Gin.Backend.Types (Backend (..), Target (..), failMarker, mismatchMarker, passMarker)
 import Gin.Backend.VHDL (vhdl)
 import Gin.Core.Syntax (Port (..), Ty (..), Value (..))
@@ -121,7 +122,7 @@ spec = do
       for_ fixtures $ \(_, m, vs) ->
         vectorsFor m (fmap cycInputs (vecCycles vs)) `shouldBe` vs
     it "the test netlists satisfy the netlist identifier and reference invariants" $
-      for_ allDesigns $ \m -> invariantViolations m `shouldBe` []
+      for_ (allDesigns <> largeDesigns) $ \m -> invariantViolations m `shouldBe` []
     itWithTools ["nvc"] "[vhd-coverage] every operator with constants in every position analyzes" $
       analyze coverageNetlist >>= shouldAnalyze
     itWithTools ["nvc"] "[vhd-coverage] every operator with constants in every position simulates" $
@@ -140,21 +141,54 @@ spec = do
       analyze narrowNetlist >>= shouldAnalyze
       checkRun narrowNetlist (vectorsFor narrowNetlist (inputRows 17 32 narrowNetlist))
 
-  describe "combinational depth" $ do
+  describe "combinational depth and variable storage" $ do
     it "computes every combinational net once and reads no variable before assigning it" $
-      for_ (chainNetlist 40 : allDesigns) $ \m -> do
+      for_ (allDesigns <> [shallowDag, windowNetlist]) $ \m -> do
         let src = backendRender vhdl m
         readsBeforeAssigned src `shouldBe` []
         sum (processSizes src) `shouldBe` length [() | DAssign {} <- modDecls m]
     it "splits deep logic into processes of at most 1000 nets each" $ do
-      let sizes = processSizes (backendRender vhdl (chainNetlist 12000))
-      sum sizes `shouldBe` 12000
-      length sizes `shouldBe` 12
-      sizes `shouldSatisfy` all (<= 1000)
-    itWithTools ["nvc"] "a chain 12000 nets deep (past nvc's 10000 delta cycles) passes" $ do
-      let deep = chainNetlist 12000
-      length (modDecls deep) `shouldSatisfy` (<= maxNormalBinds)
-      checkRun deep (vectorsFor deep (inputRows 37 4 deep))
+      let sizes = processSizes (backendRender vhdl (chainNetlist 8 12000))
+      sizes `shouldBe` replicate 12 1000
+    it "reads a net from a variable up to 127 nets later in a 4096-bit process, one of 16" $ do
+      let stmts = concatMap snd (combinationalProcesses (backendRender vhdl windowNetlist))
+      stmts `shouldContain` ["gin_v127 := gin_v126 + gin_v0;"]
+      stmts `shouldContain` ["gin_v0 := gin_v127 - x;"]
+      stmts `shouldContain` ["gin_v1 := gin_v0 xor x;", "w <= gin_v1;"]
+    it "keeps narrower nets and bits in the low elements of wider variables" $ do
+      let stmts = concatMap snd (combinationalProcesses (backendRender vhdl windowNetlist))
+      stmts `shouldContain` ["gin_v2(7 downto 0) := gin_v1(7 downto 0);"]
+      let less = "gin_v3(0) := std_logic'('1') when gin_v2(7 downto 0) < b"
+      stmts `shouldContain` [less <> " else std_logic'('0');", "g <= gin_v3(0);"]
+      stmts `shouldContain` ["gin_v6(3 downto 0) := gin_v4(5 downto 2);"]
+    itWithTools ["nvc"] "nets sharing a variable keep their values until their last read from it" $
+      checkRunRows 24 windowNetlist
+    it "keeps the variables of every design within 8 MiB, 16 MiB being nvc's heap" $
+      for_ (allDesigns <> largeDesigns) $ \m -> do
+        let perProcess = processVariables (backendRender vhdl m)
+        sum (fmap sum perProcess) `shouldSatisfy` (<= 2 ^ (23 :: Int))
+        perProcess `shouldSatisfy` all (all (<= 4096))
+    it "gives each process of the largest 4096-bit design 31 variables" $ do
+      let perProcess = processVariables (backendRender vhdl (chainNetlist 4096 65535))
+      fmap length perProcess `shouldBe` replicate 66 31
+    itWithTools ["nvc"] "a chain of 5000 nets of 4096 bits passes (nvc's heap is 16 MiB)" $
+      checkRunRows 4 (chainNetlist 4096 5000)
+    itWithTools ["nvc"] "a layered DAG of 20000 nets of 4096 bits passes" $
+      checkRunRows 4 shallowDag
+    itWithTools ["nvc"] "a chain keeps its variables while values read much later are pending" $
+      checkRunRows 4 crowdedNetlist
+    itWithTools ["nvc"] "a chain of 12000 nets of 2048 bits (past 10000 delta cycles) passes" $
+      checkRunRows 4 (chainNetlist 2048 12000)
+    itWithTools ["nvc"] "a chain of 65535 nets of 4096 bits, the deepest and widest, passes" $ do
+      let deepest = chainNetlist 4096 65535
+      length (modDecls deepest) `shouldBe` maxNormalBinds
+      checkRunRows 4 deepest
+    it "reads every net of a narrow design from a variable within its process" $
+      for_ [interleavedNetlist, chainNetlist 8 12000] $ \m ->
+        signalReads m (backendRender vhdl m) `shouldBe` []
+    itWithTools ["nvc"] "16 interleaved chains of 8-bit nets in 66 processes pass" $ do
+      length (modDecls interleavedNetlist) `shouldBe` maxNormalBinds
+      checkRunRows 4 interleavedNetlist
 
   describe "long vector sets" $ do
     itWithTools ["nvc"] "[vhd-long] a 25000-cycle counter run passes" $ do
@@ -218,6 +252,13 @@ simulate m vs = withTempDir $ \dir -> do
 
 checkRun :: Module -> Vectors -> Expectation
 checkRun m vs = simulate m vs >>= shouldPassCycles (length (vecCycles vs))
+
+-- | 'checkRun' with @n@ generated input rows, within the vector payload limit.
+checkRunRows :: Int -> Module -> Expectation
+checkRunRows n m = do
+  let vs = vectorsFor m (inputRows 37 n m)
+  payloadBits vs `shouldSatisfy` (<= maxVectorBits)
+  checkRun m vs
 
 -- | Lines carrying a testbench protocol marker.
 markerLines :: Text -> [Text]
@@ -331,6 +372,37 @@ processSizes src = [length stmts - copies stmts | (_, stmts) <- combinationalPro
       ((lhs, rhs), (_, copied)) ->
         not (Text.null rhs) && Text.drop 4 copied == lhs <> ";"
 
+-- | The elements (bits) of each variable each process declares.
+processVariables :: Text -> [[Int]]
+processVariables src = [mapMaybe elements decls | (decls, _) <- combinationalProcesses src]
+  where
+    elements l
+      | "variable " `Text.isPrefixOf` l && " : std_logic;" `Text.isSuffixOf` l = Just 1
+      | "variable " `Text.isPrefixOf` l =
+          case Text.breakOn "unsigned(" l of
+            (_, rest) -> case TextRead.decimal (Text.drop 9 rest) of
+              Right (hi, _) -> Just (hi + 1)
+              Left _ -> Nothing
+      | otherwise = Nothing
+
+-- | Statements of a combinational process that read a combinational net
+-- the same process computes through its signal.
+signalReads :: Module -> Text -> [Text]
+signalReads m src = concatMap check (combinationalProcesses src)
+  where
+    combinationalNets = Set.fromList [unIdent (netName n) | DAssign n _ <- modDecls m]
+    check (_, stmts) =
+      let computed = Set.fromList (mapMaybe target stmts) `Set.intersection` combinationalNets
+       in [l | l <- stmts, any (`Set.member` computed) (readNames l)]
+    target l = case Text.breakOn " <= " l of
+      (lhs, rhs) | not (Text.null rhs) -> Just lhs
+      _ -> Nothing
+    readNames l = case Text.breakOn " <= " l of
+      (_, rhs) | not (Text.null rhs) -> names (Text.drop 4 rhs)
+      _ -> names (snd (Text.breakOn " := " l))
+    names = Text.split (not . isWordChar)
+    isWordChar c = isAlphaNum c || c == '_'
+
 -- | Identifiers outside comments and string literals that are neither nets,
 -- ports, the module or testbench name, @gin_@ names, nor in 'reservedWords'.
 unexpectedIdentifiers :: Module -> Text -> Set Text
@@ -359,11 +431,11 @@ unexpectedIdentifiers m src =
 invariantViolations :: Module -> [String]
 invariantViolations m =
   [ "illegal identifier " <> show i | i <- idents, not (isLegalIdent (unIdent i))]
-    <> ["duplicate identifiers" | length (nub lowered) /= length lowered]
+    <> ["duplicate identifiers" | Set.size (Set.fromList lowered) /= length lowered]
     <> ["dangling reference " <> show i | ORef i <- operands, isNothing (operandType m (ORef i))]
     <> [ "unread net " <> show n
        | n <- fmap (netName . declNet) (modDecls m)
-       , ORef n `notElem` operands
+       , n `Set.notMember` read'
        ]
   where
     idents =
@@ -373,6 +445,7 @@ invariantViolations m =
         : fmap netName (modInputs m <> fmap outNet (modOutputs m) <> fmap declNet (modDecls m))
     lowered = fmap (Text.map toLower . unIdent) idents
     operands = fmap outDriver (modOutputs m) <> concatMap declOperands (modDecls m)
+    read' = Set.fromList [i | ORef i <- operands]
     declOperands = \case
       DReg _ _ o -> [o]
       DAssign _ e -> exprOperands e
@@ -571,7 +644,20 @@ allDesigns :: [Module]
 allDesigns =
   [counterNetlist, macNetlist, detectorNetlist]
     <> [coverageNetlist, wideNetlist, literalNetlist, narrowNetlist]
-    <> [combNetlist, idleInputNetlist, freeRunNetlist, tbNamedPort, chainNetlist 40]
+    <> [combNetlist, idleInputNetlist, freeRunNetlist, tbNamedPort, chainNetlist 8 40]
+    <> [layeredNetlist 8 6 4]
+
+-- | The netlists of the depth and variable storage tests.
+largeDesigns :: [Module]
+largeDesigns =
+  [ chainNetlist 4096 5000
+  , shallowDag
+  , crowdedNetlist
+  , chainNetlist 2048 12000
+  , chainNetlist 4096 65535
+  , interleavedNetlist
+  , windowNetlist
+  ]
 
 ref :: Text -> Operand
 ref = ORef . Ident
@@ -844,36 +930,220 @@ hostileHeader =
         ]
     }
 
--- | @depth@ combinational nets @n1@ … @n<depth>@ in a chain: @n1 = a + r@,
--- each later net combines the one before it with a constant (add, xor and
--- sub in turn), and the last drives the output @o@ and the register @r@.
--- Declared deepest net first, so the declarations arrive in reverse
--- dependency order.
-chainNetlist :: Int -> Module
-chainNetlist depth =
+-- | @depth@ combinational nets @n1@ … @n<depth>@ of @width@ bits in a
+-- chain: @n1 = a + r@, each later net combines the one before it with the
+-- input @a@ (add, xor and sub in turn), and the last drives the output @o@
+-- and the register @r@. Declared deepest net first, so the declarations
+-- arrive in reverse dependency order.
+chainNetlist :: Natural -> Int -> Module
+chainNetlist width depth =
   Module
     { modName = Ident "chain"
     , modHeader = ["generated by the gin test suite"]
     , modClock = Ident "clk"
     , modReset = Ident "rst"
-    , modInputs = [net "a" v8]
-    , modOutputs = [Output (net "o" v8) (ref (link depth))]
+    , modInputs = [net "a" v]
+    , modOutputs = [Output (net "o" v) (ref (link depth))]
     , modDecls =
         reverse $
-          register "r" v8 (HLitVec 8 0x5A) (ref (link depth))
-            : assign (link 1) v8 (HBin BAdd (ref "a") (ref "r"))
+          register "r" v (HLitVec width 0x5A) (ref (link depth))
+            : assign (link 1) v (HBin BAdd (ref "a") (ref "r"))
             : fmap step [2 .. depth]
     }
   where
-    v8 = HVec 8
+    v = HVec width
     link :: Int -> Text
     link k = "n" <> tshow k
-    step k = assign (link k) v8 (HBin (stepOp k) (ref (link (k - 1))) (kvec 8 (stepConst k)))
-    stepConst k = toInteger k `mod` 256
-    stepOp k = case k `mod` 3 of
-      0 -> BAdd
-      1 -> BXor
-      _ -> BSub
+    step k = assign (link k) v (HBin (cycleOp k) (ref (link (k - 1))) (ref "a"))
+
+-- | Add, xor and sub in turn.
+cycleOp :: Int -> BinOp
+cycleOp k = case k `mod` 3 of
+  0 -> BAdd
+  1 -> BXor
+  _ -> BSub
+
+-- | @layers@ layers of @lanes@ nets of @width@ bits, then a tree of xors
+-- reducing the last layer to one net, which drives the output @o@ and the
+-- register @r@. Layer 0 combines the input @a@ with @r@; net @i@ of a later
+-- layer combines nets @i@ and @lanes - 1 - i@ of the layer before (add, xor
+-- and sub in turn). Declared in dependency order, layer by layer.
+--
+-- With 500 lanes every process of 1000 nets holds two whole layers, and the
+-- 500 values computed in the first are all still to be read by the second:
+-- one variable per value would need 2 MB per process.
+layeredNetlist :: Natural -> Int -> Int -> Module
+layeredNetlist width lanes layers =
+  Module
+    { modName = Ident "layered"
+    , modHeader = ["generated by the gin test suite"]
+    , modClock = Ident "clk"
+    , modReset = Ident "rst"
+    , modInputs = [net "a" v]
+    , modOutputs = [Output (net "o" v) (ref root)]
+    , modDecls = register "r" v (HLitVec width 1) (ref root) : layerDecls <> treeDecls
+    }
+  where
+    v = HVec width
+    x :: Int -> Int -> Text
+    x l i = "x" <> tshow l <> "_" <> tshow i
+    layerDecls =
+      [ assign (x 0 i) v (HBin (cycleOp i) (ref "a") (ref "r")) | i <- [0 .. lanes - 1]]
+        <> [ assign (x l i) v (HBin (cycleOp (i + l)) (ref (x (l - 1) i)) (ref (x (l - 1) mirror)))
+           | l <- [1 .. layers - 1]
+           , i <- [0 .. lanes - 1]
+           , let mirror = lanes - 1 - i
+           ]
+    (root, treeDecls) = reduce (0 :: Int) [x (layers - 1) i | i <- [0 .. lanes - 1]]
+    reduce k = \case
+      [n] -> (n, [])
+      ns ->
+        let (pairs, rest) = pairUp ns
+            names = ["t" <> tshow (k + j) | j <- [0 .. length pairs - 1]]
+            decls = [assign t v (HBin BXor (ref p) (ref q)) | (t, (p, q)) <- zip names pairs]
+            (r, more) = reduce (k + length pairs) (names <> rest)
+         in (r, decls <> more)
+    pairUp = \case
+      p : q : ns -> let (ps, rest) = pairUp ns in ((p, q) : ps, rest)
+      ns -> ([], ns)
+
+-- | 40 layers of 500 nets of 4096 bits and a 499-net reduction tree: 20499
+-- nets, 21 processes, about 49 nets deep.
+shallowDag :: Module
+shallowDag = layeredNetlist 4096 500 40
+
+-- | 15 blocks of 1000 nets of 4096 bits, one process each. Block @b@
+-- computes 140 values @v<b>_<j>@ from the previous block's result, then a
+-- chain @c<b>_1@ … @c<b>_720@, then folds the values into the chain end one
+-- by one (@s<b>_1@ … @s<b>_140@, the block's result). All 140 values are
+-- still to be read while the chain is computed; reading the chain's nets
+-- through signals as well would put 15 * 720 signal reads on one path, past
+-- nvc's 10000 delta cycles.
+crowdedNetlist :: Module
+crowdedNetlist =
+  Module
+    { modName = Ident "crowded"
+    , modHeader = ["generated by the gin test suite"]
+    , modClock = Ident "clk"
+    , modReset = Ident "rst"
+    , modInputs = [net "a" v]
+    , modOutputs = [Output (net "o" v) (ref (result (blocks - 1)))]
+    , modDecls =
+        register "r" v (HLitVec 4096 3) (ref (result (blocks - 1)))
+          : concatMap block [0 .. blocks - 1]
+    }
+  where
+    v = HVec 4096
+    blocks = 15 :: Int
+    values = 140 :: Int
+    chain = 720 :: Int
+    name :: Text -> Int -> Int -> Text
+    name p b j = p <> tshow b <> "_" <> tshow j
+    result b = name "s" b values
+    block b =
+      [ assign (name "v" b j) v (HBin (cycleOp j) (ref (input b)) (ref "a"))
+      | j <- [0 .. values - 1]
+      ]
+        <> [assign (name "c" b 1) v (HBin BAdd (ref (input b)) (ref "a"))]
+        <> [ assign (name "c" b k) v (HBin (cycleOp k) (ref (name "c" b (k - 1))) (ref "a"))
+           | k <- [2 .. chain]
+           ]
+        <> [assign (name "s" b 1) v (HBin BXor (ref (name "c" b chain)) (ref (name "v" b 0)))]
+        <> [ assign (name "s" b j) v (HBin BXor (ref (name "s" b (j - 1))) (ref (name "v" b i)))
+           | j <- [2 .. values]
+           , let i = j - 1
+           ]
+    input b = if b == 0 then "r" else result (b - 1)
+
+-- | 16000 nets, so 16 processes, each holding at most 2^23 / 16 = 524288
+-- elements in variables. The first process has 130 nets of 4096 bits, so
+-- its window is 128 nets: net @k@ goes to @gin_v<k mod 128>@ and is read
+-- from there for 127 positions. @x@ (position 0) is read 127, 128 and 129
+-- nets later, by which time @z@ (position 128) has taken its variable.
+-- Positions 130 to 139 put narrower vectors and bits into the variables of
+-- 4096-bit nets and read them through every kind of operator; a chain of
+-- 8-bit nets fills the remaining processes. Declared in dependency order,
+-- so positions are as listed.
+windowNetlist :: Module
+windowNetlist =
+  Module
+    { modName = Ident "window"
+    , modHeader = ["generated by the gin test suite"]
+    , modClock = Ident "clk"
+    , modReset = Ident "rst"
+    , modInputs = [net "a" wide, net "b" v8]
+    , modOutputs =
+        [ Output (net ("o_" <> o) ty) (ref o)
+        | (o, ty) <- [("w", wide), ("c12", HVec 12), ("h", HBit), ("g", HBit), (u chain, v8)]
+        ]
+    , modDecls =
+        register "r" wide (HLitVec 4096 0x5A) (ref "w")
+          : [ assign "x" wide (HBin BXor (ref "a") (ref "r")) -- 0
+            , assign (f 1) wide (HBin BAdd (ref "a") (ref "r")) -- 1
+            ]
+          <> [assign (f k) wide (HBin (cycleOp k) (ref (f (k - 1))) (ref "a")) | k <- [2 .. 126]]
+          <> [ assign "y" wide (HBin BAdd (ref (f 126)) (ref "x")) -- 127
+             , assign "z" wide (HBin BSub (ref "y") (ref "x")) -- 128
+             , assign "w" wide (HBin BXor (ref "z") (ref "x")) -- 129
+             , assign "s8" v8 (HSlice 7 0 (ref "w")) -- 130
+             , assign "g" HBit (HBin BUlt (ref "s8") (ref "b")) -- 131
+             , assign "m8" v8 (HMux (ref "g") (ref "s8") (ref "b")) -- 132
+             , assign "q" (HVec 1) (HBitToVec (ref "g")) -- 133
+             , assign "s4" (HVec 4) (HSlice 5 2 (ref "m8")) -- 134
+             , assign "e16" v16 (HZext 16 (ref "s4")) -- 135
+             , assign "c12" (HVec 12) (HConcat (ref "s8") (ref "s4")) -- 136
+             , assign "h" HBit (HBin BEq (ref "q") (kvec 1 1)) -- 137
+             , assign "sh" v16 (HShl 3 (ref "e16")) -- 138
+             , assign "p16" v16 (HBin BMul (ref "e16") (ref "sh")) -- 139
+             , assign (u 1) v8 (HSlice 11 4 (ref "p16")) -- 140
+             ]
+          <> [assign (u k) v8 (HBin (cycleOp k) (ref (u (k - 1))) (ref "b")) | k <- [2 .. chain]]
+    }
+  where
+    wide = HVec 4096
+    v8 = HVec 8
+    v16 = HVec 16
+    chain = 15860 :: Int
+    f, u :: Int -> Text
+    f k = "f" <> tshow k
+    u k = "u" <> tshow k
+
+-- | 16 chains of 4095 nets of 8 bits, interleaved so that net @k@ reads net
+-- @k - 16@, then a tree of xors joining their ends: 65535 nets in 66
+-- processes, declared in dependency order. Narrow nets fit their process's
+-- variables whole, so every step, 16 positions long, reads a variable and
+-- a path makes a signal read only between processes.
+interleavedNetlist :: Module
+interleavedNetlist =
+  Module
+    { modName = Ident "interleaved"
+    , modHeader = ["generated by the gin test suite"]
+    , modClock = Ident "clk"
+    , modReset = Ident "rst"
+    , modInputs = [net "a" v8]
+    , modOutputs = [Output (net "o" v8) (ref root)]
+    , modDecls = register "r" v8 (HLitVec 8 0x3C) (ref root) : chains <> tree
+    }
+  where
+    v8 = HVec 8
+    lanes = 16 :: Int
+    depth = 4095 :: Int
+    x :: Int -> Text
+    x k = "x" <> tshow k
+    chains =
+      [assign (x k) v8 (HBin (cycleOp k) (ref "a") (ref "r")) | k <- [0 .. lanes - 1]]
+        <> [ assign (x k) v8 (HBin (cycleOp k) (ref (x (k - lanes))) (ref "a"))
+           | k <- [lanes .. lanes * depth - 1]
+           ]
+    ends = [x k | k <- [lanes * (depth - 1) .. lanes * depth - 1]]
+    (root, tree) = joinAll (0 :: Int) ends
+    joinAll k = \case
+      [n] -> (n, [])
+      n1 : n2 : ns ->
+        let t = "t" <> tshow k
+            (r, more) = joinAll (k + 1) (ns <> [t])
+         in (r, assign t v8 (HBin BXor (ref n1) (ref n2)) : more)
+      [] -> ("a", [])
 
 -- | Invariant 6 forbids slicing a constant; the backend folds it anyway.
 constantSlice :: Module

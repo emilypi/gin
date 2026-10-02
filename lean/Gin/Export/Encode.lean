@@ -95,4 +95,23 @@ def Vectors.toDoc (v : Vectors) : JsonDoc :=
     ("cycles", arr (v.cycles.toList.map fun c =>
       obj [("in", arr (c.inputs.map Value.toDoc)), ("out", arr (c.outputs.map Value.toDoc))]))]
 
+/-- Check a file of `bytes` bytes holding `doc` against the limits gin
+enforces on every file it reads (`docs/file-formats.md`, "Resource limits"),
+so that the exporter refuses a design instead of writing a file gin rejects.
+Widths, value ranges and the vector payload are checked where they arise. -/
+def checkLimits (doc : JsonDoc) (bytes : Nat) : Except String Unit := do
+  if let some (path, n) := doc.numberAbove? maxJsonNumber then
+    throw s!"the number {n} at {path} is larger than {maxJsonNumber}, the largest number gin reads"
+  let depth := doc.depth
+  unless depth ≤ maxJsonDepth do
+    throw s!"arrays and objects are nested {depth} deep, more than the {maxJsonDepth} gin reads"
+  unless bytes ≤ maxFileBytes do
+    throw s!"the file has {bytes} bytes, more than the {maxFileBytes} gin reads"
+
+/-- The text of a file, or why gin could not read it (`checkLimits`). -/
+def renderFile (doc : JsonDoc) : Except String String := do
+  let text := doc.render
+  checkLimits doc text.utf8ByteSize
+  return text
+
 end Gin.Export

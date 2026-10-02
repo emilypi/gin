@@ -82,6 +82,26 @@ partial def prettyAt (width indent col : Nat) (d : JsonDoc) : String :=
 newline. -/
 def render (d : JsonDoc) : String := prettyAt 100 0 0 d ++ "\n"
 
+/-- Nesting depth of arrays and objects: 0 for a scalar, and one more than
+the deepest element for an array or object, so `[]` and `[[1]]` have depths
+1 and 2. -/
+partial def depth : JsonDoc → Nat
+  | .arr xs => 1 + xs.foldl (fun m x => max m x.depth) 0
+  | .obj kvs => 1 + kvs.foldl (fun m kv => max m kv.2.depth) 0
+  | _ => 0
+
+/-- The first number above `bound` in document order, with its path from the
+root `$` (such as `$.top.domain.periodPs` or `$.defs[0].type`). -/
+partial def numberAbove? (bound : Nat) (d : JsonDoc) : Option (String × Nat) :=
+  go "$" d
+where
+  /-- Search `d`, which sits at `path`. -/
+  go (path : String) : JsonDoc → Option (String × Nat)
+    | .nat n => if n > bound then some (path, n) else none
+    | .arr xs => xs.zipIdx.findSome? fun (x, i) => go s!"{path}[{i}]" x
+    | .obj kvs => kvs.findSome? fun (k, v) => go s!"{path}.{k}" v
+    | _ => none
+
 end JsonDoc
 
 end Gin.Export

@@ -7,7 +7,8 @@ import Gin.Export.Program
 
 Imports the compiled Lean environment, exports each requested circuit in
 memory, and writes the files only once every circuit has passed every
-check, so a refusal never leaves partial output behind.
+check, including the limits gin enforces on the files it reads, so a
+refusal never leaves partial output behind.
 -/
 
 open Lean Meta System
@@ -84,15 +85,20 @@ unsafe def main (table : List Entry) (defaults : List String) (args : List Strin
       try
         let prog ← runMeta env (exportProgram e)
         let vecs ← IO.ofExcept (exportVectors e prog.top)
-        outputs := outputs.push (e, prog, vecs)
+        let docs := [(s!"{e.name}.gin.json", prog.toDoc), (s!"{e.name}.vectors.json", vecs.toDoc)]
+        let files ← docs.mapM fun (file, doc) =>
+          match renderFile doc with
+          | .ok text => pure (file, text)
+          | .error msg => throw <| IO.userError s!"{file}: {msg}"
+        outputs := outputs.push (e, files)
       catch err =>
         throw <| IO.userError s!"{e.name}: {err}"
     writing := true
-    for (e, prog, vecs) in outputs do
+    for (e, files) in outputs do
       let dir := opts.out / e.name
       IO.FS.createDirAll dir
-      for (file, doc) in [(s!"{e.name}.gin.json", prog.toDoc), (s!"{e.name}.vectors.json", vecs.toDoc)] do
-        writeAtomically (dir / file) doc.render
+      for (file, text) in files do
+        writeAtomically (dir / file) text
         IO.println s!"gin-export: wrote {dir / file}"
     return 0
   catch err =>

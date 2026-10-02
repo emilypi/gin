@@ -15,6 +15,12 @@ def maxWidth : Nat := 4096
 shift amount (`docs/file-formats.md`, "Resource limits"). -/
 def maxJsonNumber : Nat := 2 ^ 31 - 1
 
+/-- Deepest nesting of arrays and objects gin reads in a file. -/
+def maxJsonDepth : Nat := 4096
+
+/-- Largest file gin reads, in bytes (16 MiB). -/
+def maxFileBytes : Nat := 16 * 1024 * 1024
+
 /-- Types of the core IR. -/
 inductive Ty where
   /-- A single bit. -/

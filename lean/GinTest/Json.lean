@@ -96,4 +96,53 @@ def wide : JsonDoc :=
   "{\"e\": \"if\", \"cond\": {\"e\": \"var\", \"name\": \"c\"}, \"then\": {\"e\": \"proj\", \"index\": 1, " ++
   "\"of\": {\"e\": \"var\", \"name\": \"p\"}}, \"else\": {\"e\": \"global\", \"name\": \"M.f\"}}"
 
+-- Nesting depth counts arrays and objects; scalars add nothing.
+#guard (JsonDoc.nat 7).depth == 0
+#guard (JsonDoc.arr []).depth == 1
+#guard (JsonDoc.obj [("a", .arr [.nat 1]), ("b", .null), ("c", .obj [])]).depth == 2
+
+-- The first number above the bound, with its path; the bound itself passes.
+#guard (JsonDoc.obj [("a", .nat 1), ("b", .arr [.nat 2, .nat (2 ^ 31), .nat (2 ^ 40)])]).numberAbove?
+  (2 ^ 31 - 1) == some ("$.b[1]", 2 ^ 31)
+#guard (JsonDoc.arr [.nat (2 ^ 31 - 1), .obj [("k", .nat 0)]]).numberAbove? (2 ^ 31 - 1) == none
+#guard (JsonDoc.nat 5).numberAbove? 4 == some ("$", 5)
+
+/-- The error of a limit check, or `"ok"`. -/
+def limitError (doc : JsonDoc) (bytes : Nat := 0) : String :=
+  match checkLimits doc bytes with
+  | .ok () => "ok"
+  | .error e => e
+
+/-- A small program in a domain with the given clock period. -/
+def programWithPeriod (period : Nat) : Program :=
+  { producer := { tool := "test", leanVersion := "n/a" },
+    top := { name := "m", domain := { name := "Slow", periodPs := period }, inputs := [],
+             outputs := [{ name := "o", type := .bool }], def_ := "M.m" },
+    defs := [{ name := "M.m", type := .signal "Slow" .bool,
+               body := .app (.prim .sigPure (.fn .bool (.signal "Slow" .bool))) [.lit (.bool true)] }],
+    certificate := { theorem_ := "M.m_correct", statement := "M.m = M.m", axioms := [],
+                     implAxioms := [] } }
+
+/-- `[[…[null]…]]`, `n` arrays deep. -/
+def nested (n : Nat) : JsonDoc := n.repeat (fun d => .arr [d]) .null
+
+-- Files gin would refuse are refused before they are written: numbers above
+-- 2^31 - 1, nesting deeper than 4096, files larger than 16 MiB.
+#guard limitError (programWithPeriod (2 ^ 31)).toDoc ==
+  "the number 2147483648 at $.top.domain.periodPs is larger than 2147483647, the largest number gin reads"
+#guard limitError (programWithPeriod (2 ^ 31 - 1)).toDoc == "ok"
+#guard limitError (Expr.prim (.bvShl (2 ^ 31)) (.fn (.bv 8) (.bv 8))).toDoc ==
+  "the number 2147483648 at $.params.amount is larger than 2147483647, the largest number gin reads"
+#guard limitError (nested 4096) == "ok"
+#guard limitError (nested 4097) == "arrays and objects are nested 4097 deep, more than the 4096 gin reads"
+#guard limitError (.arr []) (16 * 1024 * 1024) == "ok"
+#guard limitError (.arr []) (16 * 1024 * 1024 + 1) ==
+  "the file has 16777217 bytes, more than the 16777216 gin reads"
+#guard match renderFile (programWithPeriod 10000).toDoc with
+  | .ok text => text == (programWithPeriod 10000).toDoc.render
+  | .error _ => false
+#guard match renderFile (programWithPeriod (2 ^ 31)).toDoc with
+  | .ok _ => false
+  | .error e => e == limitError (programWithPeriod (2 ^ 31)).toDoc
+
 end GinTest.Json

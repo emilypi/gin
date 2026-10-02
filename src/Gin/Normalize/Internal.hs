@@ -255,12 +255,14 @@ emitShared hint ty rhs = do
       pure (WVar i)
 
 -- | Remember that a source binder names this value; component @k@ of a
--- tuple-valued binder @x@ is named @x_k@. Components whose name would grow
--- past 'maxAliasLength' keep the name of the operation that produced them,
--- so deeply nested tuples do not cost time and memory quadratic in their
--- depth.
+-- tuple-valued binder @x@ is named @x_k@. Only a prefix of a long binder
+-- name is used ('aliasBase'), and components whose name would grow past
+-- 'maxAliasLength' keep the name of the operation that produced them, so
+-- long names and deeply nested tuples do not cost time and memory
+-- proportional to the product of name length and bind count, or quadratic
+-- in the nesting depth.
 alias :: Name -> SVal -> M ()
-alias x = go (unName x)
+alias x = go (aliasBase x)
   where
     go name v = do
       tick
@@ -272,10 +274,15 @@ alias x = go (unName x)
               zipWithM_ (\k -> go (name <> "_" <> showT k)) [0 :: Int ..] vs
         _ -> pure ()
 
--- | Length beyond which tuple components are no longer named after their
--- source binder.
+-- | Longest prefix of a source binder name used to name wires, and length
+-- beyond which tuple components are no longer named after their binder.
 maxAliasLength :: Int
 maxAliasLength = 64
+
+-- | The prefix of a source name that names wires, at most 'maxAliasLength'
+-- characters long.
+aliasBase :: Name -> Text
+aliasBase = Text.take maxAliasLength . unName
 
 bindVar :: Name -> SVal -> Env -> Env
 bindVar x v env = env {envVars = Map.insert x v (envVars env)}
@@ -413,7 +420,7 @@ placeholder x = \case
 
 tie :: Name -> SVal -> SVal -> M ()
 tie x hole v = case (hole, v) of
-  (SAtom (WVar i) t, SAtom w t') | t == t' -> emitAt i (unName x) t (RCopy w)
+  (SAtom (WVar i) t, SAtom w t') | t == t' -> emitAt i (aliasBase x) t (RCopy w)
   (STuple hs, STuple vs) | length hs == length vs -> zipWithM_ (tie x) hs vs
   _ -> failN ("the value of recursive binding " <> unName x <> " does not match its type")
 

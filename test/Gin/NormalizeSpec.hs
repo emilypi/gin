@@ -311,6 +311,14 @@ deepRegister d =
     reg = register v (lift [TBool] t nest [var "x"])
     body = ELet False [Bind "r" (sig t) reg] (lift [t] TBool deepest [var "r"])
 
+-- | @g(i+1) x = g i (g i x)@ from @g0 x = let v = not x in v@, with @v@
+-- named by @len@ repetitions of the letter: @2^k@ binds bound to @v@.
+longBinder :: Int -> Int -> Program
+longBinder len k = chainProgram k base twice
+  where
+    v = Name (Text.replicate len "v")
+    base = ELam [("x", bv 8)] (ELet False [Bind v (bv 8) (not8 (var "x"))] (EVar v))
+
 -- | A module of @k@ chained @bool.not@ binds, valid for @k <= maxNormalBinds@.
 notChain :: Int -> NModule
 notChain k =
@@ -605,6 +613,12 @@ spec = do
         checkNormal deep `shouldBe` Right ()
         fmap nbRhs (nmBinds deep) `shouldBe` [NReg (VBool False) (AVar "x")]
         fmap (Text.length . unName . nbName) (nmBinds deep) `shouldSatisfy` all (<= 80)
+      it "names binds after long source binders with a bounded prefix of the binder" $ do
+        m <- normalized (longBinder 1000 4)
+        checkNormal m `shouldBe` Right ()
+        length (nmBinds m) `shouldBe` 16
+        fmap (Text.take 8 . unName . nbName) (nmBinds m) `shouldSatisfy` all (== "vvvvvvvv")
+        fmap (Text.length . unName . nbName) (nmBinds m) `shouldSatisfy` all (<= 80)
 
     describe "unsupported programs" $ do
       it "rejects an if whose branches carry functions" $ do

@@ -8,15 +8,28 @@
 -- be well formed: bit-vector widths within @1..'maxWidth'@, products of
 -- two or more components, and signals only over data (Bool, bit vectors
 -- and products of data) in the top entity's domain.
+--
+-- Checking takes time and memory close to linear in the size of the
+-- program as written (its JSON encoding), even for hostile input. An
+-- inferred type can be far larger than the expression it comes from: a
+-- tuple of @k@ copies of a variable whose type has @m@ components has a
+-- type of @k * m@ components. The checker therefore never walks an
+-- inferred type. It hash-conses types ('TyRef'), so that comparing two
+-- types, or asking whether one is data, takes constant time; and an error
+-- message shows at most 'renderBudget' characters of any type or value.
 module Gin.Core.Check
   ( checkProgram
   ) where
 
-import Control.Monad (foldM, foldM_, unless, when)
+import Control.Monad (foldM, foldM_, unless, when, zipWithM_)
+import Control.Monad.State.Strict (StateT (..), evalStateT, get, lift, put)
 import Data.Bifunctor (first)
-import Data.Foldable (for_, traverse_)
+import Data.Foldable (foldrM, for_, toList, traverse_)
+import Data.List (intercalate)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Sequence (Seq)
+import Data.Sequence qualified as Seq
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -40,15 +53,23 @@ import Numeric.Natural (Natural)
 checkProgram :: Program -> Either GinError ()
 checkProgram p = do
   let top = progTop p
+      defs = progDefs p
   checkPorts top
-  globals <- defTypes (progDefs p)
-  for_ (progDefs p) $ \d ->
+  declared <- defTypes defs
+  for_ defs $ \d ->
     inDef d $ for_ (globalRefs (defBody d)) $ \g ->
-      unless (Map.member g globals) (failCheck ("unknown global " <> unName g))
-  checkAcyclic (progDefs p)
-  let env = Env{envDomain = domainName (topDomain top), envGlobals = globals, envLocals = Map.empty}
-  traverse_ (checkDef env) (progDefs p)
-  checkTopDef globals top
+      unless (Map.member g declared) (failCheck ("unknown global " <> unName g))
+  checkAcyclic defs
+  flip evalStateT emptyTable $ do
+    refs <- traverse (intern . defTy) defs
+    let env =
+          Env
+            { envDomain = domainName (topDomain top)
+            , envGlobals = Map.fromList (zip (fmap defName defs) refs)
+            , envLocals = Map.empty
+            }
+    zipWithM_ (checkDef env) defs refs
+  checkTopDef declared top
 
 failCheck :: Text -> Either GinError a
 failCheck = Left . ginError StCheck
@@ -155,21 +176,22 @@ checkAcyclic defs = case foldM (visit [] Set.empty) Set.empty (fmap defName defs
 
 data Env = Env
   { envDomain :: !Text
-  , envGlobals :: !(Map Name Ty)
-  , envLocals :: !(Map Name Ty)
+  , envGlobals :: !(Map Name TyRef)
+  , envLocals :: !(Map Name TyRef)
   }
 
-bindLocals :: [(Name, Ty)] -> Env -> Env
+bindLocals :: [(Name, TyRef)] -> Env -> Env
 bindLocals xs env = env{envLocals = Map.union (Map.fromList xs) (envLocals env)}
 
-checkDef :: Env -> Def -> Either GinError ()
-checkDef env d = inDef d $ do
-  checkTy env (defTy d)
+-- | Check a definition against its declared type, already interned.
+checkDef :: Env -> Def -> TyRef -> Check ()
+checkDef env d declared = inContext ("in def " <> unName (defName d)) $ do
+  lift (checkTy env (defTy d))
   actual <- infer env (defBody d)
-  unless (actual == defTy d) $
-    failCheck
+  unless (sameTy actual declared) $
+    refuse
       ( "the body has type "
-          <> renderTy actual
+          <> renderRef actual
           <> ", but the definition is declared "
           <> renderTy (defTy d)
       )
@@ -214,85 +236,173 @@ checkTy env = go
         go e
 
 ----------------------------------------------------------------------
+-- Hash-consed types
+
+-- | One layer of a type, with its components left abstract.
+data TyF a
+  = FBool
+  | FBitVec !Natural
+  | FProd !(Seq a)
+  | FFun !a !a
+  | FSignal !Text !a
+  deriving stock (Eq, Ord, Functor, Foldable, Traversable)
+
+-- | The outermost layer of a type.
+layerOf :: Ty -> TyF Ty
+layerOf = \case
+  TBool -> FBool
+  TBitVec w -> FBitVec w
+  TProd ts -> FProd (Seq.fromList ts)
+  TFun a r -> FFun a r
+  TSignal d e -> FSignal d e
+
+-- | A hash-consed type. Every type the checker infers is made of these,
+-- and the nodes are shared: within one run of the checker, two 'TyRef's
+-- denote the same type exactly when their 'refId's are equal.
+data TyRef = TyRef
+  { refId :: !Int
+  , refIsData :: !Bool
+  -- ^ 'isData' of the type, computed once when the node is made.
+  , refLayer :: !(TyF TyRef)
+  }
+
+-- | Type equality, in constant time.
+sameTy :: TyRef -> TyRef -> Bool
+sameTy a b = refId a == refId b
+
+-- | Every node made so far, keyed by its layer over the components' ids.
+newtype Table = Table (Map (TyF Int) TyRef)
+
+emptyTable :: Table
+emptyTable = Table Map.empty
+
+-- | Checking state is the hash-consing table.
+type Check = StateT Table (Either GinError)
+
+refuse :: Text -> Check a
+refuse = lift . failCheck
+
+inContext :: Text -> Check a -> Check a
+inContext ctx m = StateT (withContext ctx . runStateT m)
+
+-- | The node for a layer whose components are already nodes. Costs time
+-- proportional to the number of components (times the logarithm of the
+-- table size), never to the sizes of the components.
+mkTy :: TyF TyRef -> Check TyRef
+mkTy layer = do
+  Table nodes <- get
+  let key = fmap refId layer
+  case Map.lookup key nodes of
+    Just ref -> pure ref
+    Nothing -> do
+      let ref = TyRef{refId = Map.size nodes, refIsData = dataLayer, refLayer = layer}
+      put $! Table (Map.insert key ref nodes)
+      pure ref
+  where
+    dataLayer = case layer of
+      FBool -> True
+      FBitVec _ -> True
+      FProd cs -> all refIsData cs
+      FFun _ _ -> False
+      FSignal _ _ -> False
+
+-- | The node for a type annotation. Walks the annotation once, so the cost
+-- is linear in its size as written.
+intern :: Ty -> Check TyRef
+intern t = mkTy =<< traverse intern (layerOf t)
+
+----------------------------------------------------------------------
 -- Expressions
 
-infer :: Env -> Expr -> Either GinError Ty
+infer :: Env -> Expr -> Check TyRef
 infer env = \case
   EVar n -> lookupIn "unbound variable " n (envLocals env)
   EGlobal n -> lookupIn "unknown global " n (envGlobals env)
   ELit v -> do
-    unless (validValue v) $ failCheck ("invalid value " <> renderValue v)
-    pure (valueTy v)
+    unless (validValue v) $ refuse ("invalid value " <> renderValue v)
+    intern (valueTy v)
   EPrim op t -> do
-    checkTy env t
-    checkPrim op t
-    pure t
+    lift (checkTy env t >> checkPrim op t)
+    intern t
   EApp f args -> do
-    when (null args) $ failCheck "application with no arguments"
+    when (null args) $ refuse "application with no arguments"
     ft <- infer env f
     foldM apply ft (zip [1 :: Int ..] args)
   ELam binders body -> do
-    when (null binders) $ failCheck "lambda with no binders"
-    distinct (fmap fst binders)
-    traverse_ (checkTy env . snd) binders
-    res <- infer (bindLocals binders env) body
-    pure (tFuns (fmap snd binders) res)
+    when (null binders) $ refuse "lambda with no binders"
+    lift (distinct (fmap fst binders))
+    lift (traverse_ (checkTy env . snd) binders)
+    refs <- traverse (intern . snd) binders
+    res <- infer (bindLocals (zip (fmap fst binders) refs) env) body
+    foldrM (\a r -> mkTy (FFun a r)) res refs
   ELet isRec binds body -> do
-    distinct (fmap bindName binds)
-    traverse_ (checkTy env . bindTy) binds
-    let local b = (bindName b, bindTy b)
+    lift (distinct (fmap bindName binds))
+    lift (traverse_ (checkTy env . bindTy) binds)
+    refs <- traverse (intern . bindTy) binds
+    let locals = zip (fmap bindName binds) refs
     env' <-
       if isRec
         then do
-          let recEnv = bindLocals (fmap local binds) env
-          traverse_ (checkBind recEnv) binds
+          let recEnv = bindLocals locals env
+          zipWithM_ (checkBind recEnv) binds refs
           pure recEnv
-        else foldM (\e b -> bindLocals [local b] e <$ checkBind e b) env binds
+        else
+          foldM
+            (\e (b, local) -> bindLocals [local] e <$ checkBind e b (snd local))
+            env
+            (zip binds locals)
     infer env' body
   ETuple es -> case es of
-    _ : _ : _ -> TProd <$> traverse (infer env) es
-    _ -> failCheck "tuple with fewer than two components"
-  EProj i e ->
-    infer env e >>= \case
-      t@(TProd ts) -> case lookup i (zip [0 :: Natural ..] ts) of
+    _ : _ : _ -> mkTy . FProd . Seq.fromList =<< traverse (infer env) es
+    _ -> refuse "tuple with fewer than two components"
+  EProj i e -> do
+    t <- infer env e
+    case refLayer t of
+      FProd cs -> case component i cs of
         Just c -> pure c
-        Nothing -> failCheck ("projection index " <> showT i <> " out of range for " <> renderTy t)
-      t -> failCheck ("projection from non-product type " <> renderTy t)
+        Nothing -> refuse ("projection index " <> showT i <> " out of range for " <> renderRef t)
+      _ -> refuse ("projection from non-product type " <> renderRef t)
   EIf c t e -> do
     ct <- infer env c
-    unless (ct == TBool) $ failCheck ("if condition must be Bool, got " <> renderTy ct)
+    case refLayer ct of
+      FBool -> pure ()
+      _ -> refuse ("if condition must be Bool, got " <> renderRef ct)
     tt <- infer env t
     et <- infer env e
-    unless (tt == et) $
-      failCheck ("if branches have different types: " <> renderTy tt <> " and " <> renderTy et)
-    unless (isData tt) $
-      failCheck ("if branches must be data (no signals or functions), got " <> renderTy tt)
+    unless (sameTy tt et) $
+      refuse ("if branches have different types: " <> renderRef tt <> " and " <> renderRef et)
+    unless (refIsData tt) $
+      refuse ("if branches must be data (no signals or functions), got " <> renderRef tt)
     pure tt
   where
-    lookupIn what n scope = maybe (failCheck (what <> unName n)) Right (Map.lookup n scope)
-    apply ft (i, arg) = case ft of
-      TFun expected res -> do
+    lookupIn what n scope = maybe (refuse (what <> unName n)) pure (Map.lookup n scope)
+    apply ft (i, arg) = case refLayer ft of
+      FFun expected res -> do
         actual <- infer env arg
-        unless (actual == expected) $
-          failCheck
+        unless (sameTy actual expected) $
+          refuse
             ( "argument "
                 <> showT i
                 <> ": expected "
-                <> renderTy expected
+                <> renderRef expected
                 <> ", got "
-                <> renderTy actual
+                <> renderRef actual
             )
         pure res
-      other ->
-        failCheck ("cannot apply a term of type " <> renderTy other <> " to argument " <> showT i)
+      _ -> refuse ("cannot apply a term of type " <> renderRef ft <> " to argument " <> showT i)
+    -- In time logarithmic in the index, however wide the product.
+    component i cs
+      | i < fromIntegral (Seq.length cs) = Seq.lookup (fromIntegral i) cs
+      | otherwise = Nothing
 
-checkBind :: Env -> Bind -> Either GinError ()
-checkBind env b = withContext ("in bind " <> unName (bindName b)) $ do
+-- | Check a bind's value against its declared type, already interned.
+checkBind :: Env -> Bind -> TyRef -> Check ()
+checkBind env b declared = inContext ("in bind " <> unName (bindName b)) $ do
   actual <- infer env (bindExpr b)
-  unless (actual == bindTy b) $
-    failCheck
+  unless (sameTy actual declared) $
+    refuse
       ( "the value has type "
-          <> renderTy actual
+          <> renderRef actual
           <> ", but the bind is declared "
           <> renderTy (bindTy b)
       )
@@ -309,7 +419,7 @@ distinct = go Set.empty
 -- Primitives
 
 -- | The typing rules documented in "Gin.Core.Prim", for an annotation
--- that is already well formed.
+-- that is already well formed. Linear in the annotation.
 checkPrim :: PrimOp -> Ty -> Either GinError ()
 checkPrim op t = case op of
   BoolAnd -> boolBinary
@@ -407,19 +517,60 @@ peel _ _ = Nothing
 ----------------------------------------------------------------------
 -- Rendering
 
-renderTy :: Ty -> Text
-renderTy = go (0 :: Int)
+-- | Most characters of a type or value an error message shows; the rest
+-- is elided as @...@. An inferred type can be far larger than the input
+-- that produces it, so it is never rendered whole.
+renderBudget :: Int
+renderBudget = 240
+
+-- | Most components of a product or tuple an error message lists; the
+-- others are counted (@... 31992 more@), so a clipped type keeps its shape.
+shownComponents :: Int
+shownComponents = 8
+
+-- | The chunks of a product or tuple with @total@ components, given the
+-- lazily produced chunks of its components, of which only the first
+-- 'shownComponents' are used.
+componentChunks :: Int -> [[Text]] -> [Text]
+componentChunks total shown =
+  "(" : intercalate [", "] (take shownComponents shown <> more) <> [")"]
   where
-    go prec = \case
-      TBool -> "Bool"
-      TBitVec w -> parensIf (prec >= 2) ("BitVec " <> showT w)
-      TProd ts -> "(" <> Text.intercalate ", " (fmap (go 0) ts) <> ")"
-      TFun a r -> parensIf (prec >= 1) (go 1 a <> " -> " <> go 0 r)
-      TSignal d e -> parensIf (prec >= 2) ("Signal " <> d <> " " <> go 2 e)
-    parensIf b s = if b then "(" <> s <> ")" else s
+    more = [["... ", showT (total - shownComponents), " more"] | total > shownComponents]
+
+-- | Join lazily produced chunks, keeping at most 'renderBudget'
+-- characters, so that only the part that is shown is ever built.
+clip :: [Text] -> Text
+clip = go [] renderBudget
+  where
+    finish = Text.concat . reverse
+    go acc room = \case
+      [] -> finish acc
+      c : cs
+        | Text.compareLength c room /= GT -> go (c : acc) (room - Text.length c) cs
+        | otherwise -> finish ("..." : Text.take room c : acc)
+
+-- | The chunks of a type, given a view of its outermost layer.
+tyChunks :: (a -> TyF a) -> a -> [Text]
+tyChunks view = go (0 :: Int)
+  where
+    go prec t = case view t of
+      FBool -> ["Bool"]
+      FBitVec w -> parensIf (prec >= 2) ["BitVec ", showT w]
+      FProd ts -> componentChunks (Seq.length ts) (fmap (go 0) (toList ts))
+      FFun a r -> parensIf (prec >= 1) (go 1 a <> [" -> "] <> go 0 r)
+      FSignal d e -> parensIf (prec >= 2) (["Signal ", d, " "] <> go 2 e)
+    parensIf b cs = if b then "(" : cs <> [")"] else cs
+
+renderTy :: Ty -> Text
+renderTy = clip . tyChunks layerOf
+
+renderRef :: TyRef -> Text
+renderRef = clip . tyChunks refLayer
 
 renderValue :: Value -> Text
-renderValue = \case
-  VBool b -> if b then "true" else "false"
-  VBV w n -> showT n <> " : BitVec " <> showT w
-  VTuple vs -> "(" <> Text.intercalate ", " (fmap renderValue vs) <> ")"
+renderValue = clip . go
+  where
+    go = \case
+      VBool b -> [if b then "true" else "false"]
+      VBV w n -> [showT n, " : BitVec ", showT w]
+      VTuple vs -> componentChunks (length vs) (fmap go vs)

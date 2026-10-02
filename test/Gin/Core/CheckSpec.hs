@@ -5,11 +5,12 @@ import Data.Foldable (for_)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Gin.Core.Check (checkProgram)
-import Gin.Core.Json (decodeProgram)
+import Gin.Core.Json (decodeProgram, encodeProgram)
 import Gin.Core.Syntax
 import Gin.Error
 import Gin.Examples
 import Numeric.Natural (Natural)
+import System.Timeout (timeout)
 import Test.Hspec
 
 ----------------------------------------------------------------------
@@ -239,6 +240,68 @@ illFormedTypes =
 checkHidden :: Expr -> Either GinError ()
 checkHidden e = checkAs (bv 8) (EProj 1 (ETuple [e, lit8 1]))
 
+-- | Fail if the expectation takes longer than 5 s.
+promptly :: Expectation -> Expectation
+promptly act =
+  timeout 5000000 act >>= \case
+    Just () -> pure ()
+    Nothing -> expectationFailure "checking took longer than 5 s"
+
+-- | A product of @n@ Bools, about 15 bytes of JSON per component.
+bools :: Int -> Ty
+bools n = TProd (replicate n TBool)
+
+-- | Components in each hostile program below. Their JSON encodings are
+-- 1.5 to 4.5 MB, well under the input limit, yet a checker that walks a
+-- type at each use takes about a billion steps on each of them, which is
+-- far longer than 'promptly' allows (or more memory than a test has).
+hostileSize :: Int
+hostileSize = 32000
+
+-- | Programs that use a wide type many times without spelling it out at
+-- each use, so that walking the type at every use costs time quadratic in
+-- the size of the input. Each comes with whether it type-checks.
+hostilePrograms :: [(String, Program, Bool)]
+hostilePrograms =
+  [
+    ( "a body whose type repeats a wide binder type"
+    , single (TFun wide TBool) (ELam [("x", wide)] (ETuple (replicate n (v "x"))))
+    , False
+    )
+  ,
+    ( "a conditional whose branches repeat a wide binder type"
+    , single
+        (TFun wide wide)
+        ( ELam
+            [("x", wide)]
+            (EProj 0 (EIf (ELit (VBool True)) (ETuple copies) (ETuple copies)))
+        )
+    , True
+    )
+  ,
+    ( "many applications to an argument of a wide type"
+    , single
+        (tFuns [wide, TFun wide TBool] (bools n))
+        ( ELam
+            [("x", wide), ("f", TFun wide TBool)]
+            (ETuple (replicate n (EApp (v "f") [v "x"])))
+        )
+    , True
+    )
+  ,
+    ( "many projections of the last component of a wide tuple"
+    , single
+        (TFun wide (bools n))
+        (ELam [("x", wide)] (ETuple (replicate n (EProj (fromIntegral n - 1) (v "x")))))
+    , True
+    )
+  ]
+  where
+    n = hostileSize
+    wide = bools n
+    copies = replicate n (v "x")
+    single t body = withDefs [Def "Test.subject" t body]
+
 ----------------------------------------------------------------------
 
 spec :: Spec
@@ -450,6 +513,23 @@ spec = do
         rejectedWith fragment (checkHidden (ELam [("x", t)] (v "x")))
       it ("[check-rules] rejects a let bind annotated with " <> name) $
         rejectedWith fragment (checkHidden (ELet True [Bind "x" t (v "x")] (lit8 1)))
+
+  describe "input size" $ do
+    it "[check-rules] shortens a wide type in a message, keeping its shape" $ do
+      let result = checkAs (TFun (bools 20) (bools 3)) (ELam [("x", bools 20)] (v "x"))
+          eight = Text.intercalate ", " (replicate 8 "Bool")
+      rejectedWith ("has type (" <> eight <> ", ... 12 more) -> (" <> eight <> ", ...") result
+      rejectedWith ("declared (" <> eight <> ", ... 12 more) -> (Bool, Bool, Bool)") result
+    for_ hostilePrograms $ \(name, program, accepted) ->
+      it ("[check-rules] checks " <> name <> " promptly") $ promptly $ do
+        let bytes = encodeProgram program
+        LBS.length bytes `shouldSatisfy` (> 1000000)
+        case decodeProgram bytes >>= checkProgram of
+          Right () -> accepted `shouldBe` True
+          Left e -> do
+            accepted `shouldBe` False
+            errStage e `shouldBe` StCheck
+            Text.length (errMessage e) `shouldSatisfy` (< 1000)
 
   describe "top entity" $ do
     for_ ["Counter", "", "module", "gin_counter", "a__b", "counter_", "9lives", "wire"] $ \name ->

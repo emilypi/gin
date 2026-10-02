@@ -18,12 +18,10 @@ architecture gin_rtl of counter is
   signal s_next : unsigned(7 downto 0);
 begin
   process (all)
-    variable gin_v_inc : unsigned(7 downto 0);
-    variable gin_v_s_next : unsigned(7 downto 0);
+    variable gin_v0 : unsigned(7 downto 0);
   begin
-    gin_v_inc := s + unsigned'("00000001");
-    gin_v_s_next := gin_v_inc when en = std_logic'('1') else s;
-    s_next <= gin_v_s_next;
+    gin_v0 := s + unsigned'("00000001");
+    s_next <= gin_v0 when en = std_logic'('1') else s;
   end process;
 
   process (clk)

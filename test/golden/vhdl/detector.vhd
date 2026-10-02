@@ -19,25 +19,21 @@ architecture gin_rtl of detector is
   signal o_hit : std_logic;
 begin
   process (all)
-    variable gin_v_is0 : std_logic;
-    variable gin_v_is1 : std_logic;
-    variable gin_v_pick10 : unsigned(1 downto 0);
-    variable gin_v_pick12 : unsigned(1 downto 0);
-    variable gin_v_s_inner : unsigned(1 downto 0);
-    variable gin_v_s_next : unsigned(1 downto 0);
-    variable gin_v_hit_inner : std_logic;
-    variable gin_v_o_hit : std_logic;
+    variable gin_v0 : std_logic;
+    variable gin_v1 : std_logic;
+    variable gin_v2 : unsigned(1 downto 0);
+    variable gin_v3 : unsigned(1 downto 0);
+    variable gin_v4 : unsigned(1 downto 0);
+    variable gin_v6 : std_logic;
   begin
-    gin_v_is0 := std_logic'('1') when s = unsigned'("00") else std_logic'('0');
-    gin_v_is1 := std_logic'('1') when s = unsigned'("01") else std_logic'('0');
-    gin_v_pick10 := unsigned'("01") when b = std_logic'('1') else unsigned'("00");
-    gin_v_pick12 := unsigned'("01") when b = std_logic'('1') else unsigned'("10");
-    gin_v_s_inner := gin_v_pick12 when gin_v_is1 = std_logic'('1') else gin_v_pick10;
-    gin_v_s_next := gin_v_pick10 when gin_v_is0 = std_logic'('1') else gin_v_s_inner;
-    gin_v_hit_inner := std_logic'('0') when gin_v_is1 = std_logic'('1') else b;
-    gin_v_o_hit := std_logic'('0') when gin_v_is0 = std_logic'('1') else gin_v_hit_inner;
-    s_next <= gin_v_s_next;
-    o_hit <= gin_v_o_hit;
+    gin_v0 := std_logic'('1') when s = unsigned'("00") else std_logic'('0');
+    gin_v1 := std_logic'('1') when s = unsigned'("01") else std_logic'('0');
+    gin_v2 := unsigned'("01") when b = std_logic'('1') else unsigned'("00");
+    gin_v3 := unsigned'("01") when b = std_logic'('1') else unsigned'("10");
+    gin_v4 := gin_v3 when gin_v1 = std_logic'('1') else gin_v2;
+    s_next <= gin_v2 when gin_v0 = std_logic'('1') else gin_v4;
+    gin_v6 := std_logic'('0') when gin_v1 = std_logic'('1') else b;
+    o_hit <= std_logic'('0') when gin_v0 = std_logic'('1') else gin_v6;
   end process;
 
   process (clk)

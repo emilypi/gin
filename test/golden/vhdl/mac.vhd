@@ -19,16 +19,14 @@ architecture gin_rtl of mac is
   signal sum : unsigned(15 downto 0);
 begin
   process (all)
-    variable gin_v_xz : unsigned(15 downto 0);
-    variable gin_v_yz : unsigned(15 downto 0);
-    variable gin_v_prod : unsigned(15 downto 0);
-    variable gin_v_sum : unsigned(15 downto 0);
+    variable gin_v0 : unsigned(15 downto 0);
+    variable gin_v1 : unsigned(15 downto 0);
+    variable gin_v2 : unsigned(15 downto 0);
   begin
-    gin_v_xz := resize(x, 16);
-    gin_v_yz := resize(y, 16);
-    gin_v_prod := resize(gin_v_xz * gin_v_yz, 16);
-    gin_v_sum := acc_q + gin_v_prod;
-    sum <= gin_v_sum;
+    gin_v0 := resize(x, 16);
+    gin_v1 := resize(y, 16);
+    gin_v2 := resize(gin_v0 * gin_v1, 16);
+    sum <= acc_q + gin_v2;
   end process;
 
   process (clk)

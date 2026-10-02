@@ -6,44 +6,46 @@
 -- for @'HVec' n@), and one architecture, @gin_rtl@, containing
 --
 --   * the combinational nets in dependency order, split into unlabeled
---     @process (all)@ blocks of at most 1000 nets; each process computes
---     its nets into variables @gin_v_\<net\>@ and copies those that a
---     register, an output or a later process reads into signals named
---     after the nets,
+--     @process (all)@ blocks of at most 'processSize' nets. A net that its
+--     own process reads soon after computing it (within the process's
+--     'window') is computed into a process variable @gin_v\<k\>@ chosen by
+--     its position, and those reads take it from there. A net read by a
+--     register, an output, another process or a net of its own process
+--     beyond the window, and a net not read at all, is assigned to a signal
+--     named after it (a net can be in both),
 --   * a signal and an unlabeled clocked process per register: rising edge
 --     of the clock, synchronous active-high reset loading the initial value,
 --   * one concurrent assignment per output port.
 --
--- Combinational logic is computed in variables because its settling time
--- must not depend on the logic depth. With one signal and one concurrent
--- assignment per net, a chain of @d@ nets needs @d@ delta cycles to settle,
--- and nvc stops a run after 10000 delta cycles (@--stop-delta@, which the
--- run command does not raise), so a valid netlist only 10000 nets deep
--- would fail. Variables update immediately, so each process settles its
--- nets in one pass, and since a process reads only inputs, registers and
--- signals of earlier processes, the outputs are stable at most one delta
--- cycle per process, plus a constant, after an input or a register
--- changes. The logic is not put in a single process because nvc 1.23 needs
--- time quadratic in the length of a process to compile it (measured with
--- the run command on a chain of nets: one process of 32000 assignments
--- takes about 40 s and one of 65535 three minutes or more, against a 300 s
--- tool limit; processes of 1000 bring 65535 nets down to about 5 s).
+-- Two limits of nvc that the run command does not raise shape the
+-- combinational processes (see 'processSize' and 'window' for the bounds
+-- and measurements):
+--
+--   * nvc stops a run after 10000 delta cycles at one simulation time
+--     (@--stop-delta@). Each read of a net through its signal can cost a
+--     delta cycle, so with one signal per net a chain of 10000 nets fails;
+--     reading a variable costs none.
+--   * nvc keeps the variables of every process for the whole run on its
+--     16 MiB simulation heap (@-H@), so one variable per net does not fit
+--     wide designs (4100 nets of 4096 bits fill it). Signals live outside
+--     that heap.
 --
 -- Operators map onto @numeric_std@ at the operand width: @+@ and @-@ wrap
 -- modulo @2^n@; @*@ doubles the width, so products are @resize@d back to
 -- @n@; negation is @0 - a@; shifts use @shift_left@ / @shift_right@ (the
 -- amount is below the width, so it fits @natural@); comparisons and muxes
--- are conditional variable assignments; zero extension is @resize@; a bit
--- becomes a vector through a one-element aggregate. Every constant operand
--- is qualified (see 'Gin.Backend.VHDL.Testbench.literal').
+-- are conditional assignments; zero extension is @resize@; a bit becomes a
+-- vector through a one-element aggregate. Every constant operand is
+-- qualified (see 'Gin.Backend.VHDL.Testbench.literal').
 --
 -- The design references no predeclared name outside
 -- 'Gin.Netlist.Types.reservedWords', so no net can shadow one, and the only
--- identifiers it introduces are @gin_rtl@ and the @gin_v_@ variables, whose
--- prefix no net may use. Register signals deliberately have no initial
--- value: the testbench must see the reset load it. (Until the first rising
--- edge they are @'U'@, so nvc may print @numeric_std@ metavalue warnings at
--- time 0 on standard error; the protocol never reads standard error.)
+-- identifiers it introduces are @gin_rtl@ and the @gin_v\<k\>@ variables,
+-- whose prefix no net may use. Register signals deliberately have no
+-- initial value: the testbench must see the reset load it. (Until the first
+-- rising edge they are @'U'@, so nvc may print @numeric_std@ metavalue
+-- warnings at time 0 on standard error; the protocol never reads standard
+-- error.)
 --
 -- Unread inputs, an unread clock and reset in a register-free module, and
 -- partly read vectors need no lint suppressions: nvc's analysis
@@ -54,9 +56,10 @@ module Gin.Backend.VHDL
 
 import Data.Bits (shiftR)
 import Data.IntSet qualified as IntSet
-import Data.List (intercalate)
+import Data.List (intercalate, sortOn)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (mapMaybe)
+import Data.Ord (Down (..))
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -124,7 +127,7 @@ entity m =
 architecture :: Module -> [Text]
 architecture m =
   ["architecture gin_rtl of " <> unIdent (modName m) <> " is"]
-    <> ["  " <> declare "signal" signalName n | n <- signals]
+    <> ["  " <> declare "signal" (signalName (netName n)) (netType n) | n <- signals]
     <> ["begin"]
     <> fmap indent (intercalate [""] (filter (not . null) sections))
     <> ["end architecture gin_rtl;"]
@@ -132,8 +135,8 @@ architecture m =
     groups = zip [0 :: Int ..] (chunksOf processSize (dependencyOrder assigns))
     assigns = [(n, e) | DAssign n e <- modDecls m]
     groupOf = Map.fromList [(netName n, g) | (g, as) <- groups, (n, _) <- as]
-    -- names read through a signal: by a register, an output or another process
-    shared =
+    -- names read through a signal by a register, an output or another process
+    external =
       Set.fromList $
         [i | ORef i <- [o | DReg _ _ o <- modDecls m] <> fmap outDriver (modOutputs m)]
           <> [ i
@@ -142,25 +145,96 @@ architecture m =
              , ORef i <- exprOperands e
              , Map.lookup i groupOf /= Just g
              ]
-    -- registers, and the combinational nets read through a signal
-    signals = [declNet d | d <- modDecls m, isRegister d || netName (declNet d) `Set.member` shared]
+    budget = variableBudget `div` max 1 (length groups)
+    processes = [combinational external budget as | (_, as) <- groups]
+    -- registers, and the combinational nets a process assigns to a signal
+    assigned = Set.unions (fmap snd processes)
+    signals =
+      [declNet d | d <- modDecls m, isRegister d || netName (declNet d) `Set.member` assigned]
     isRegister = \case
       DReg {} -> True
       DAssign {} -> False
     -- the combinational processes, then one block per register, then the outputs
     sections =
-      [combinational shared as | (_, as) <- groups]
+      fmap fst processes
         <> [process m n r o | DReg n r o <- modDecls m]
-        <> [[assign (outNet o) (operand signalName (outDriver o)) | o <- modOutputs m]]
+        <> [[assign (netName (outNet o)) (operand signalName (outDriver o)) | o <- modOutputs m]]
     indent l = if Text.null l then l else "  " <> l
 
--- | Most combinational nets computed by one process. Bounds both the nvc
--- compile time of a process, which grows quadratically with its length,
--- and the number of processes a change can ripple through: 65536 nets (the
--- 'Gin.Limits.maxNormalBinds' bound on normal forms) make at most 66
--- processes, far below nvc's limit of 10000 delta cycles.
+-- | Most combinational nets computed by one process. nvc 1.23 needs time
+-- quadratic in the length of a process to compile it (measured with the run
+-- command on a chain of nets: one process of 32000 assignments takes about
+-- 40 s and one of 65535 three minutes or more, against a 300 s tool limit;
+-- processes of 1000 bring 65535 nets down to about 5 s).
+--
+-- Settling bound. Call a read of a combinational net through its signal by
+-- another combinational net a signal read, and let @h@ be the largest
+-- number of signal reads along any path of combinational nets. After an
+-- input or a register changes, every output is stable within @h + 4@ delta
+-- cycles, and nvc stops at 10000, so a design simulates whenever
+-- @h <= 9996@. (Measured with the run command: a chain of 9997 nets with
+-- one signal each, @h = 9996@, passes, and one of 9998 fails. Measured
+-- with @--stop-delta@: a design of 4096-bit nets in 17 processes whose
+-- longest path makes 140 signal reads, inside and between processes, needs
+-- exactly 144.)
+--
+-- Along a path the positions of the nets in the dependency order increase,
+-- so a path enters each process at most once, and within a process of
+-- window @d@ it makes a signal read only for a step of at least @d@
+-- positions, at most @999 \`div\` d@ times. A netlist of @c@ combinational
+-- nets has @P = ceiling (c / 1000)@ processes, and as no net is wider than
+-- 4096 bits ('Gin.Core.Type.maxWidth'), a process's window is its whole
+-- length or at least @variableBudget \`div\` P \`div\` 4096@. The largest
+-- normal form ('Gin.Limits.maxNormalBinds') has 65536 nets, so @P <= 66@,
+-- every window is at least 31, and
+--
+-- > h <= (P - 1) + (999 `div` 31) * P <= 65 + 32 * 66 = 2177
+--
+-- whatever the depth, width and shape of the logic.
+--
+-- Simulation time is not bounded this way: each signal read inside a
+-- process runs the whole process again one delta cycle later. A process
+-- whose nets have at most its share of 'variableBudget' bits in all (with
+-- 66 processes, 1000 nets of up to 127 bits) reads only variables, but
+-- wide logic read beyond the window along long paths can exceed the 300 s
+-- tool limit. Measured with the run command: 31 interleaved chains of 2113
+-- nets of 4096 bits (65534 nets in 66 processes of window 31, so every
+-- chain step is a signal read and the longest path makes 2113) settle within
+-- the delta limit but take 400 s for 4 cycles; the same shape with 16
+-- chains of 8-bit nets reads only variables and takes 4 s.
 processSize :: Int
 processSize = 1000
+
+-- | Most elements (bits; nvc stores one @std_logic@ per byte) that the
+-- variables of all combinational processes hold together: 8 MiB, half of
+-- nvc's 16 MiB simulation heap, which keeps every process's variables for
+-- the whole run (signals live outside it). The rest is left for the
+-- testbench's vector table and the temporaries of operators. Each of the
+-- @P@ processes gets an equal share, @variableBudget \`div\` P@, which
+-- bounds its 'window'. (Measured with the run command, one 4096-bit
+-- variable per net: 4001 nets, 16.4 MB of variables, still start; 4100
+-- fail at initialisation with out of memory. A chain of 65535 nets of 4096
+-- bits fills the budget, 66 processes of 31 variables, and passes.)
+variableBudget :: Int
+variableBudget = 2 ^ (23 :: Int)
+
+-- | The window @d@ of a process given its share @budget@ of
+-- 'variableBudget': the largest @d@ such that its @d@ widest nets together
+-- have at most @budget@ bits (at least 1, at most the number of nets).
+--
+-- The net at position @k@ of the process (counting from 0) that the
+-- process reads less than @d@ positions after computing it is held in
+-- variable @gin_v\<k mod d\>@, which no other net takes before position
+-- @k + d@; those readers read the variable, later readers the net's signal.
+-- A variable is as wide as the widest net it holds (a narrower vector
+-- occupies its low bits, a bit its element 0), and the @d@ variables hold
+-- distinct nets, so together they have at most @budget@ elements. A window
+-- covering the whole process reads every net it computes from a variable.
+window :: Int -> [(Net, HExpr)] -> Int
+window budget assigns =
+  max 1 (length (takeWhile (<= budget) (scanl1 (+) (sortOn Down widths))))
+  where
+    widths = [fromIntegral (hwWidth (netType n)) | (n, _) <- assigns] :: [Int]
 
 -- | Consecutive groups of @k@ elements (the last may be shorter), for
 -- @k >= 1@.
@@ -176,44 +250,98 @@ punctuate sep = \case
   [x] -> [x]
   x : xs -> (x <> sep) : punctuate sep xs
 
-assign :: Net -> Text -> Text
-assign n rhs = signalName (netName n) <> " <= " <> rhs <> ";"
+-- | An assignment to a net's signal.
+assign :: Ident -> Text -> Text
+assign i rhs = signalName i <> " <= " <> rhs <> ";"
 
--- | A signal or variable declaration for a net.
-declare :: Text -> (Ident -> Text) -> Net -> Text
-declare kind nameOf n = kind <> " " <> nameOf (netName n) <> " : " <> vhdlType (netType n) <> ";"
+-- | A signal or variable declaration.
+declare :: Text -> Text -> HwType -> Text
+declare kind name ty = kind <> " " <> name <> " : " <> vhdlType ty <> ";"
 
 -- | The signal of an input, a register or a combinational net read through
 -- a signal: the net's own name.
 signalName :: Ident -> Text
 signalName = unIdent
 
--- | The variable holding a combinational net inside the process computing
--- it.
-variableName :: Ident -> Text
-variableName i = "gin_v_" <> unIdent i
+-- | Where a statement finds a net: the signal or variable holding it, and
+-- the net's value within that object (the whole object, its low bits or
+-- its element 0). Nets are held from element 0, so a slice of a net is the
+-- same slice of the object.
+data Place = Place
+  { placeObject :: !Text
+  , placeValue :: !Text
+  }
+
+signalPlace :: Ident -> Place
+signalPlace i = Place (signalName i) (signalName i)
 
 -- | A process computing the given combinational nets, which are in
--- dependency order. It reads the nets it computes from its own variables,
--- and every other name from a signal: inputs, registers and nets of earlier
--- processes. @process (all)@ makes it sensitive to exactly those signals,
--- and one pass settles every net it computes however deep the logic is.
--- The nets in @shared@ are then copied into their signals.
-combinational :: Set Ident -> [(Net, HExpr)] -> [Text]
-combinational shared assigns
-  | null assigns = []
+-- dependency order, in variables of at most @budget@ elements, and the nets
+-- it assigns to their signals: those in @external@, those it reads at
+-- least its 'window' after computing them, and those it does not read.
+-- Every other net lives only in a variable. @process (all)@ makes the
+-- process sensitive to every signal it reads, and every variable read
+-- takes the value assigned earlier in the same pass, so no value carries
+-- over from an earlier activation.
+combinational :: Set Ident -> Int -> [(Net, HExpr)] -> ([Text], Set Ident)
+combinational external budget assigns
+  | null assigns = ([], Set.empty)
   | otherwise =
-      ["process (all)"]
-        <> ["  " <> declare "variable" variableName n | n <- nets]
-        <> ["begin"]
-        <> ["  " <> variable n <> " := " <> expr ref (netType n) e <> ";" | (n, e) <- assigns]
-        <> ["  " <> assign n (variable n) | n <- nets, netName n `Set.member` shared]
-        <> ["end process;"]
+      ( ["process (all)"]
+          <> ["  " <> declare "variable" (slotName j) ty | (j, ty) <- Map.toList slotTypes]
+          <> ["begin"]
+          <> ["  " <> l | (k, (n, e)) <- indexed, l <- statements k n e]
+          <> ["end process;"]
+      , inSignal
+      )
   where
-    nets = fmap fst assigns
-    variable = variableName . netName
-    local = Set.fromList (fmap netName nets)
-    ref i = if i `Set.member` local then variableName i else signalName i
+    indexed = zip [0 :: Int ..] assigns
+    d = window budget assigns
+    position = Map.fromList [(netName n, k) | (k, (n, _)) <- indexed]
+    types = Map.fromList [(netName n, netType n) | (n, _) <- assigns]
+    -- does the net at position k read net i from its variable?
+    near k i = case Map.lookup i position of
+      Just p -> k > p && k - p < d
+      Nothing -> False
+    localReads =
+      [(k, i) | (k, (_, e)) <- indexed, ORef i <- exprOperands e, i `Map.member` position]
+    inSlot = Set.fromList [i | (k, i) <- localReads, near k i]
+    inSignal =
+      Set.fromList $
+        [i | (k, i) <- localReads, not (near k i)]
+          <> [ i
+             | (n, _) <- assigns
+             , let i = netName n
+             , i `Set.member` external || i `Set.notMember` inSlot
+             ]
+    slotTypes =
+      Map.fromListWith
+        widen
+        [(k `mod` d, netType n) | (k, (n, _)) <- indexed, netName n `Set.member` inSlot]
+    widen a b
+      | a == HBit && b == HBit = HBit
+      | otherwise = HVec (max (hwWidth a) (hwWidth b))
+    slotName j = "gin_v" <> Text.pack (show j)
+    slotPlace i = case (Map.lookup i position, Map.lookup i types) of
+      (Just k, Just ty) ->
+        let j = k `mod` d
+            v = slotName j
+         in Place v (within v (Map.findWithDefault ty j slotTypes) ty)
+      _ -> signalPlace i
+    -- a net of type ty held in variable v of type held
+    within v held ty
+      | held == ty = v
+      | otherwise = case ty of
+          HBit -> v <> "(0)"
+          HVec w -> v <> "(" <> nat (w - 1) <> " downto 0)"
+    statements k n e
+      | i `Set.member` inSlot =
+          [held <> " := " <> rhs <> ";"] <> [assign i held | i `Set.member` inSignal]
+      | otherwise = [assign i rhs]
+      where
+        i = netName n
+        held = placeValue (slotPlace i)
+        rhs = expr (\r -> if near k r then slotPlace r else signalPlace r) (netType n) e
 
 -- | Combinational assignments reordered so that each follows every
 -- combinational net it reads, keeping the declaration order wherever the
@@ -256,9 +384,9 @@ process m n reset next =
   , "begin"
   , "  if rising_edge(" <> unIdent (modClock m) <> ") then"
   , "    if " <> unIdent (modReset m) <> " = " <> literal (HLitBit True) <> " then"
-  , "      " <> assign n (literal reset)
+  , "      " <> assign (netName n) (literal reset)
   , "    else"
-  , "      " <> assign n (operand signalName next)
+  , "      " <> assign (netName n) (operand signalName next)
   , "    end if;"
   , "  end if;"
   , "end process;"
@@ -276,10 +404,10 @@ nat = Text.pack . show
 call :: Text -> [Text] -> Text
 call f args = f <> "(" <> Text.intercalate ", " args <> ")"
 
--- | The right-hand side for a net of the given type, naming references with
--- the given function.
-expr :: (Ident -> Text) -> HwType -> HExpr -> Text
-expr ref ty = \case
+-- | The right-hand side for a net of the given type, finding references
+-- with the given function.
+expr :: (Ident -> Place) -> HwType -> HExpr -> Text
+expr place ty = \case
   HOperand o -> arg o
   HUn UNot o -> "not " <> arg o
   HUn UNeg o -> literal (HLitVec (hwWidth ty) 0) <> " - " <> arg o
@@ -287,12 +415,12 @@ expr ref ty = \case
   HMux c t e -> arg t <> " when " <> isHigh c <> " else " <> arg e
   HShl k o -> call "shift_left" [arg o, nat k]
   HLshr k o -> call "shift_right" [arg o, nat k]
-  HSlice hi lo o -> slice ref hi lo o
+  HSlice hi lo o -> slice (placeObject . place) hi lo o
   HConcat a b -> arg a <> " & " <> arg b
   HZext w o -> call "resize" [arg o, nat w]
   HBitToVec o -> "unsigned'(0 => " <> arg o <> ")"
   where
-    arg = operand ref
+    arg = operand (placeValue . place)
     isHigh c = arg c <> " = " <> literal (HLitBit True)
 
 binary :: HwType -> BinOp -> Text -> Text -> Text
@@ -310,11 +438,12 @@ binary ty op a b = case op of
     infixOp sym = a <> " " <> sym <> " " <> b
     flag cond = literal (HLitBit True) <> " when " <> cond <> " else " <> literal (HLitBit False)
 
--- | Slices take a net. A slice of a constant (which the netlist builder
--- folds away) is folded here too rather than slicing a qualified literal.
+-- | Slices take a net, slicing the object holding it (see 'Place'). A
+-- slice of a constant (which the netlist builder folds away) is folded here
+-- too rather than slicing a qualified literal.
 slice :: (Ident -> Text) -> Natural -> Natural -> Operand -> Text
-slice ref hi lo = \case
-  ORef i -> ref i <> "(" <> nat hi <> " downto " <> nat lo <> ")"
+slice object hi lo = \case
+  ORef i -> object i <> "(" <> nat hi <> " downto " <> nat lo <> ")"
   OConst l -> literal (HLitVec width (value l `shiftR` fromIntegral lo))
   where
     width = fromInteger (max 0 (toInteger hi - toInteger lo + 1))

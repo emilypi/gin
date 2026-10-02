@@ -84,7 +84,7 @@ spec = do
           `shouldBe` Set.empty
     it "folds a slice of a constant instead of slicing a literal" $
       backendRender vhdl constantSlice
-        `shouldSatisfy` Text.isInfixOf "gin_v_s := unsigned'(\"1101\");"
+        `shouldSatisfy` Text.isInfixOf "s <= unsigned'(\"1101\");"
 
   describe "testbenches" $ do
     for_ fixtures $ \(name, m, vs) ->
@@ -141,12 +141,11 @@ spec = do
       checkRun narrowNetlist (vectorsFor narrowNetlist (inputRows 17 32 narrowNetlist))
 
   describe "combinational depth" $ do
-    it "assigns every combinational net once, after the nets it reads" $
+    it "computes every combinational net once and reads no variable before assigning it" $
       for_ (chainNetlist 40 : allDesigns) $ \m -> do
         let src = backendRender vhdl m
         readsBeforeAssigned src `shouldBe` []
-        Set.fromList (assignedVariables src) `shouldBe` combinationalVariables m
-        length (assignedVariables src) `shouldBe` Set.size (combinationalVariables m)
+        sum (processSizes src) `shouldBe` length [() | DAssign {} <- modDecls m]
     it "splits deep logic into processes of at most 1000 nets each" $ do
       let sizes = processSizes (backendRender vhdl (chainNetlist 12000))
       sum sizes `shouldBe` 12000
@@ -292,49 +291,45 @@ unqualifiedLiterals src = concatMap check (codeLines src)
       outside : _ : rest@(_ : _) -> outside : everyOther rest
       _ -> []
 
--- | Variables of the combinational processes in assignment order: the
--- targets of @:=@ on lines that start with a @gin_v_@ name.
-assignedVariables :: Text -> [Text]
-assignedVariables src =
-  [ lhs
-  | l <- codeLines src
-  , let (lhs, rest) = Text.breakOn " := " (Text.strip l)
-  , "gin_v_" `Text.isPrefixOf` lhs
-  , not (Text.null rest)
-  ]
-
--- | Assignments to a @gin_v_@ variable that read a @gin_v_@ variable not
--- assigned on an earlier line of the same process.
-readsBeforeAssigned :: Text -> [Text]
-readsBeforeAssigned = go Set.empty . codeLines
+-- | The combinational processes, each as its declarations and its
+-- statements (stripped lines).
+combinationalProcesses :: Text -> [([Text], [Text])]
+combinationalProcesses = go . fmap Text.strip . codeLines
   where
-    go _ [] = []
-    go assigned (l : ls) = case Text.breakOn " := " (Text.strip l) of
-      (lhs, rhs)
-        | "gin_v_" `Text.isPrefixOf` lhs && not (Text.null rhs) ->
-            [l | any (`Set.notMember` assigned) (variables rhs)]
-              <> go (Set.insert lhs assigned) ls
-      _
-        | Text.strip l == "end process;" -> go Set.empty ls
-        | otherwise -> go assigned ls
-    variables = filter ("gin_v_" `Text.isPrefixOf`) . Text.split (not . isWordChar)
-    isWordChar c = isAlphaNum c || c == '_'
-
--- | The number of variable assignments in each process, in order.
-processSizes :: Text -> [Int]
-processSizes = go . codeLines
-  where
-    go ls = case break (== "process (all)") (fmap Text.strip ls) of
+    go ls = case break (== "process (all)") ls of
       (_, _ : rest) ->
-        let (body, remaining) = break (== "end process;") rest
-         in length [l | l <- body, " := " `Text.isInfixOf` l] : go remaining
+        let (decls, body) = break (== "begin") rest
+            (stmts, remaining) = break (== "end process;") (drop 1 body)
+         in (decls, stmts) : go remaining
       (_, []) -> []
 
--- | The variable names the combinational processes should assign: one per
--- combinational net.
-combinationalVariables :: Module -> Set Text
-combinationalVariables m =
-  Set.fromList ["gin_v_" <> unIdent (netName n) | DAssign n _ <- modDecls m]
+-- | Statements that read a variable not assigned on an earlier line of the
+-- same process. Variables keep their values between activations of a
+-- process, so such a read would see a stale value.
+readsBeforeAssigned :: Text -> [Text]
+readsBeforeAssigned src = concatMap (check Set.empty . snd) (combinationalProcesses src)
+  where
+    check _ [] = []
+    check assigned (l : ls) = case Text.breakOn " := " l of
+      (lhs, rhs)
+        | not (Text.null rhs) ->
+            [l | any (`Set.notMember` assigned) (variables rhs)]
+              <> check (Set.insert (Text.takeWhile isWordChar lhs) assigned) ls
+        | otherwise -> [l | any (`Set.notMember` assigned) (variables l)] <> check assigned ls
+    variables = filter ("gin_v" `Text.isPrefixOf`) . Text.split (not . isWordChar)
+    isWordChar c = isAlphaNum c || c == '_'
+
+-- | The number of nets each process computes: its statements other than
+-- copies into a signal of the variable assigned on the line before. No test
+-- netlist has a net that merely forwards the net computed just before it,
+-- which would look like such a copy.
+processSizes :: Text -> [Int]
+processSizes src = [length stmts - copies stmts | (_, stmts) <- combinationalProcesses src]
+  where
+    copies stmts = length (filter isCopy (zip stmts (drop 1 stmts)))
+    isCopy (prev, l) = case (Text.breakOn " := " prev, Text.breakOn " <= " l) of
+      ((lhs, rhs), (_, copied)) ->
+        not (Text.null rhs) && Text.drop 4 copied == lhs <> ";"
 
 -- | Identifiers outside comments and string literals that are neither nets,
 -- ports, the module or testbench name, @gin_@ names, nor in 'reservedWords'.

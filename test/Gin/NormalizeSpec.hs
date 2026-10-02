@@ -340,6 +340,22 @@ sharedTuple k =
     f = ELam [("c", TBool)] (ELet False (doublings "t" (var "c") k) (firsts k tk))
     body = lift [TBool] TBool f [var "b"]
 
+-- > sharedIf b = lift (\c -> let t0 = c; u0 = base; t(i+1) = (ti, ti);
+-- >                              u(i+1) = (ui, ui)
+-- >                          in (if c then tk else uk).0 .. .0) b
+--
+-- The branches are built separately but each shares its components at every
+-- level; with @base = c@ they are equal.
+sharedIf :: Expr -> Int -> Program
+sharedIf base k =
+  program "sharedif" [Port "b" TBool] [Port "o" TBool] [mkTop [("b", TBool)] TBool body]
+  where
+    final name = var (name <> Text.pack (show k))
+    binds = doublings "t" (var "c") k <> doublings "u" base k
+    chosen = EIf (var "c") (final "t") (final "u")
+    f = ELam [("c", TBool)] (ELet False binds (firsts k chosen))
+    body = lift [TBool] TBool f [var "b"]
+
 -- > long x = let f1 = \v -> v; f(i+1) = \v -> fi (fi v) in lift fk x
 --
 -- Exponential work without binds, with every binder name @len@ characters
@@ -739,6 +755,15 @@ spec = do
         m <- normalizedWithin 10 (sharedTuple 40)
         nmBinds m `shouldBe` []
         nmOutputs m `shouldBe` [NOutput "o" TBool (AVar "b")]
+      it "[norm-limit] lowers an if over equal shared tuples in time linear in their depth" $ do
+        m <- normalizedWithin 10 (sharedIf (var "c") 40)
+        nmBinds m `shouldBe` []
+        nmOutputs m `shouldBe` [NOutput "o" TBool (AVar "b")]
+      it "[norm-limit] muxes tuples shared at every level once per distinct pair" $ do
+        m <- normalizedWithin 10 (sharedIf (EApp (prim BoolNot [TBool] TBool) [var "c"]) 40)
+        checkNormal m `shouldBe` Right ()
+        fmap nbRhs (nmBinds m)
+          `shouldBe` [NPrim BoolNot [AVar "b"], NMux (AVar "b") (AVar "b") (AVar "u0")]
 
     describe "multiple outputs" $ do
       it "[norm-multi-output] reads two outputs in port order" $ do

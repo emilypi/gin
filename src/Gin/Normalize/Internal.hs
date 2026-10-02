@@ -26,10 +26,10 @@
 -- emitting binds at all. Names are replaced by integer ids before
 -- evaluation, and wires are named after a bounded prefix of their source
 -- binder, so the cost of a step does not grow with the length of names.
--- Every tuple the evaluator builds has an id, and naming visits each tuple
--- once, so naming a value whose components share tuples (@t1 = (t0, t0)@,
--- @t2 = (t1, t1)@, ..) costs time linear in the number of tuples, not in the
--- size of the value written out as a tree.
+-- Every tuple the evaluator builds has an id. Naming visits each tuple once
+-- and an @if@ muxes each pair of tuples once, so a value whose components
+-- share tuples (@t1 = (t0, t0)@, @t2 = (t1, t1)@, ..) costs time linear in
+-- the number of tuples, not in the size of the value written out as a tree.
 module Gin.Normalize.Internal
   ( buildModule
   , primResultTy
@@ -547,17 +547,28 @@ project i v = do
     STuple _ vs | x : _ <- genericDrop i vs -> pure x
     _ -> failN ("projection " <> showT i <> " out of a value without that component")
 
+-- | One mux per scalar component where the branches differ. Each pair of
+-- tuples is muxed once and the result reused wherever the pair recurs, so
+-- branches whose components share tuples cost time linear in the number of
+-- distinct pairs, not in the size of the branches written out as trees.
 mux :: W -> SVal -> SVal -> M SVal
-mux c a b =
-  tick >> case (a, b) of
-    (SAtom x t, SAtom y t')
-      | t /= t' -> failN "the branches of an if have different types"
-      | x == y -> pure a
-      | otherwise -> (`SAtom` t) <$> emitShared "mux" t (RMux c x y)
-    (STuple _ xs, STuple _ ys) | length xs == length ys -> zipWithM (mux c) xs ys >>= tuple
-    (SFun _ _, _) -> failN "an if whose branches carry a function is not supported"
-    (_, SFun _ _) -> failN "an if whose branches carry a function is not supported"
-    _ -> failN "the branches of an if have different shapes"
+mux c a0 b0 = snd <$> go Map.empty a0 b0
+  where
+    go memo a b =
+      tick >> case (a, b) of
+        (SAtom x t, SAtom y t')
+          | t /= t' -> failN "the branches of an if have different types"
+          | x == y -> pure (memo, a)
+          | otherwise -> (\w -> (memo, SAtom w t)) <$> emitShared "mux" t (RMux c x y)
+        (STuple i xs, STuple j ys)
+          | Just r <- Map.lookup (i, j) memo -> pure (memo, r)
+          | length xs == length ys -> do
+              (memo', rs) <- mapAccumM (\m (x, y) -> go m x y) memo (zip xs ys)
+              r <- tuple rs
+              pure (Map.insert (i, j) r memo', r)
+        (SFun _ _, _) -> failN "an if whose branches carry a function is not supported"
+        (_, SFun _ _) -> failN "an if whose branches carry a function is not supported"
+        _ -> failN "the branches of an if have different shapes"
 
 ----------------------------------------------------------------------
 -- Prims

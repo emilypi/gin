@@ -131,10 +131,13 @@ def domainName (d : Lean.Expr) : TrM String := do
   | .lit (.strVal s) => return s
   | n => trFail m!"the name of clock domain {d} does not reduce to a string literal (got {n})"
 
-/-- The name and period of a clock domain. -/
+/-- The name and period of a clock domain. The period must be at most
+`maxJsonNumber` picoseconds (about 2.1 µs), the largest number gin reads. -/
 def domainInfo (d : Lean.Expr) : TrM DomainInfo := do
   let name ← domainName d
   let period ← natValue (← whnf (mkApp (mkConst ``Gin.Domain.periodPs) d)) "clock period"
+  unless period ≤ maxJsonNumber do
+    trFail m!"clock domain {d} ({repr name}) has a period of {period} ps; gin reads periods of at most {maxJsonNumber} ps"
   return { name, periodPs := period }
 
 /-- Unfold one reducible head (an `abbrev`), if any. Never unfolds

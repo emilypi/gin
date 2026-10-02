@@ -11,6 +11,10 @@ namespace Gin.Export
 /-- Largest bit-vector width the IR admits. -/
 def maxWidth : Nat := 4096
 
+/-- Largest number gin reads anywhere in a file, such as a clock period or a
+shift amount (`docs/file-formats.md`, "Resource limits"). -/
+def maxJsonNumber : Nat := 2 ^ 31 - 1
+
 /-- Types of the core IR. -/
 inductive Ty where
   /-- A single bit. -/

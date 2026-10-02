@@ -102,6 +102,19 @@ def Fast : Domain := ⟨"System", 5000⟩
 /-- Mixes two clock domains. -/
 def mixedDomains (x : Signal System Bool) (_y : Signal Fast Bool) : Signal System Bool := x
 
+/-- A 100 Hz clock: its period in picoseconds is larger than any number gin
+reads. -/
+def Slow : Domain := ⟨"Slow", 10000000000⟩
+
+/-- A circuit in the slow domain. -/
+def slowClock (x : Signal Slow Bool) : Signal Slow Bool := x
+
+/-- The slowest clock gin reads, 2^31 - 1 ps. -/
+def Slowest : Domain := ⟨"Slowest", 2147483647⟩
+
+/-- A circuit in the slowest domain. -/
+def slowestClock (x : Signal Slowest Bool) : Signal Slowest Bool := x
+
 end GinTest.Unsupported
 
 open GinTest.Unsupported in
@@ -128,3 +141,9 @@ run_meta do
   expectError (tr ``ofFin) ["BitVec.ofFin"]
   expectError (translateTop (testEntry ``mixedDomains ["x", "y"] ["o"] (.of2 mixedDomains)))
     ["mixes clock domains"]
+  expectError (translateTop (testEntry ``slowClock ["x"] ["o"] (.of1 slowClock)))
+    ["GinTest.Unsupported.Slow", "\"Slow\"", "period of 10000000000 ps", "at most 2147483647 ps"]
+  -- the bound itself is accepted
+  let (top, _) ← translateTop (testEntry ``slowestClock ["x"] ["o"] (.of1 slowestClock))
+  unless top.domain == { name := "Slowest", periodPs := 2147483647 } do
+    throwError "the slowest domain was exported as {repr top.domain}"

@@ -24,9 +24,9 @@ Terms:
   (the value is `k % 2^n`);
 * `&&`, `||`, `!`, `^^`, `==` and `!=` on `Bool` or `BitVec n`;
 * on `BitVec n`: `+ - * &&& ||| ^^^`, unary `-` and `~~~`, `<<< k` and
-  `>>> k` for a numeral `k`, `++`, `setWidth`, `extractLsb`,
-  `extractLsb'`, `ult`, `ule`, `ofBool`, and the `BitVec.*` functions
-  behind these operators;
+  `>>> k` for a numeral `k` (emitted as `min k n`, which means the same),
+  `++`, `setWidth`, `extractLsb`, `extractLsb'`, `ult`, `ule`, `ofBool`,
+  and the `BitVec.*` functions behind these operators;
 * `if c then t else e` and `decide c`, where `c` is built from `= ≠ < ≤ > ≥`
   on `BitVec n`, `b = true`/`b = false`/`=` on `Bool`, `¬ ∧ ∨`, `True` and
   `False`; `bif b then t else e`;
@@ -383,7 +383,10 @@ partial def trPrim (e : Lean.Expr) (c : Name) (args : Array Lean.Expr) : TrM Exp
       | trFail m!"{c} at type {ty} is not supported; only BitVec shifts are hardware"
     unless ← isCanonical e (mkApp3 (mkConst canonical) w a k) do
       trFail m!"{c} at type {ty} does not use the standard instance (shift amounts must be Nat numerals)"
-    let amount ← natValue k "shift amount"
+    -- Shifting by the width or more gives 0 (docs/semantics.md), so an amount
+    -- past the width means the same as the width itself. Clamping keeps the
+    -- number within what gin reads, which an amount such as 2^40 is not.
+    let amount := min (← natValue k "shift amount") n
     let op := if left then PrimOp.bvShl amount else PrimOp.bvLshr amount
     return primApp op (.fn (.bv n) (.bv n)) [← trExpr a]
   | ``HAppend.hAppend | ``BitVec.append =>

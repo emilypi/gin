@@ -43,6 +43,15 @@ def bitwise (x y : Signal System Byte) :
     Signal System (Byte × Byte × Byte × Byte × Byte × Byte × Byte) :=
   lift2 (fun x y => (x &&& y, x ||| y, x ^^^ y, x <<< 3, x >>> 3, x <<< 9, x >>> 8)) x y
 
+/-- Shifts far past the width, which give 0. -/
+def farShifts (x : Signal System Byte) : Signal System (Byte × Byte) :=
+  lift (fun (x : Byte) => (x <<< 1000, x >>> 1000)) x
+
+/-- Shifts by amounts larger than any number gin reads. Only translated:
+running it in Lean would build a 2^31-bit intermediate number. -/
+def hugeShifts (x : Signal System Byte) : Signal System (Byte × Byte) :=
+  lift (fun (x : Byte) => (x <<< 2147483648, x >>> 18446744073709551616)) x
+
 /-- Unsigned comparisons in every spelling. -/
 def comparisons (x y : Signal System Byte) :
     Signal System (Bool × Bool × Bool × Bool × Bool × Bool × Bool × Bool × Bool × Bool) :=
@@ -127,6 +136,7 @@ run_meta do
   checkAgrees (testEntry ``falseEqs ["a", "b"] ["o1", "o2", "o3", "o4", "o5"] (.of2 falseEqs))
   checkAgrees (testEntry ``arith ["x", "y"] ["o1", "o2", "o3", "o4", "o5"] (.of2 arith))
   checkAgrees (testEntry ``bitwise ["x", "y"] ["o1", "o2", "o3", "o4", "o5", "o6", "o7"] (.of2 bitwise))
+  checkAgrees (testEntry ``farShifts ["x"] ["o1", "o2"] (.of1 farShifts))
   checkAgrees (testEntry ``comparisons ["x", "y"]
     ["o1", "o2", "o3", "o4", "o5", "o6", "o7", "o8", "o9", "o10"] (.of2 comparisons))
   checkAgrees (testEntry ``compareSmall ["x", "y"] ["o1", "o2", "o3", "o4"] (.of2 compareSmall))
@@ -158,3 +168,11 @@ info: {"e": "lam", "binders": [{"name": "x", "type": {"t": "signal", "domain": "
 -/
 #guard_msgs in
 run_meta logInfo (← irOf ``GinTest.Ops.usesGlobal [``GinTest.Ops.double])
+
+-- Shift amounts past the width are emitted as the width, which means the same
+-- (the result is 0) and stays within the numbers gin reads.
+/--
+info: {"e": "lam", "binders": [{"name": "x", "type": {"t": "signal", "domain": "System", "elem": {"t": "bv", "width": 8}}}], "body": {"e": "app", "fun": {"e": "prim", "op": "sig.lift", "type": {"t": "fun", "arg": {"t": "fun", "arg": {"t": "bv", "width": 8}, "res": {"t": "prod", "elems": [{"t": "bv", "width": 8}, {"t": "bv", "width": 8}]}}, "res": {"t": "fun", "arg": {"t": "signal", "domain": "System", "elem": {"t": "bv", "width": 8}}, "res": {"t": "signal", "domain": "System", "elem": {"t": "prod", "elems": [{"t": "bv", "width": 8}, {"t": "bv", "width": 8}]}}}}, "params": {"arity": 1}}, "args": [{"e": "lam", "binders": [{"name": "x_1", "type": {"t": "bv", "width": 8}}], "body": {"e": "tuple", "elems": [{"e": "app", "fun": {"e": "prim", "op": "bv.shl", "type": {"t": "fun", "arg": {"t": "bv", "width": 8}, "res": {"t": "bv", "width": 8}}, "params": {"amount": 8}}, "args": [{"e": "var", "name": "x_1"}]}, {"e": "app", "fun": {"e": "prim", "op": "bv.lshr", "type": {"t": "fun", "arg": {"t": "bv", "width": 8}, "res": {"t": "bv", "width": 8}}, "params": {"amount": 8}}, "args": [{"e": "var", "name": "x_1"}]}]}}, {"e": "var", "name": "x"}]}}
+-/
+#guard_msgs in
+run_meta logInfo (← irOf ``GinTest.Ops.hugeShifts)

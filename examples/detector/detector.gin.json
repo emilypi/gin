@@ -1,0 +1,148 @@
+{
+  "format": "gin-ir/1",
+  "producer": {"tool": "gin-export", "leanVersion": "4.34.1"},
+  "top": {
+    "name": "detector",
+    "domain": {"name": "System", "periodPs": 10000},
+    "inputs": [{"name": "b", "type": {"t": "bool"}}],
+    "outputs": [{"name": "hit", "type": {"t": "bool"}}],
+    "def": "Detector.detector"
+  },
+  "defs": [
+    {
+      "name": "Detector.step",
+      "type": {
+        "t": "fun",
+        "arg": {"t": "bv", "width": 2},
+        "res": {
+          "t": "fun",
+          "arg": {"t": "bool"},
+          "res": {"t": "prod", "elems": [{"t": "bv", "width": 2}, {"t": "bool"}]}
+        }
+      },
+      "body": {
+        "e": "lam",
+        "binders": [
+          {"name": "s", "type": {"t": "bv", "width": 2}},
+          {"name": "i", "type": {"t": "bool"}}
+        ],
+        "body": {
+          "e": "if",
+          "cond": {
+            "e": "app",
+            "fun": {
+              "e": "prim",
+              "op": "bv.eq",
+              "type": {
+                "t": "fun",
+                "arg": {"t": "bv", "width": 2},
+                "res": {"t": "fun", "arg": {"t": "bv", "width": 2}, "res": {"t": "bool"}}
+              },
+              "params": {}
+            },
+            "args": [{"e": "var", "name": "s"}, {"e": "lit", "value": {"bv": 2, "val": "0"}}]
+          },
+          "then": {
+            "e": "tuple",
+            "elems": [
+              {
+                "e": "if",
+                "cond": {"e": "var", "name": "i"},
+                "then": {"e": "lit", "value": {"bv": 2, "val": "1"}},
+                "else": {"e": "lit", "value": {"bv": 2, "val": "0"}}
+              },
+              {"e": "lit", "value": false}
+            ]
+          },
+          "else": {
+            "e": "if",
+            "cond": {
+              "e": "app",
+              "fun": {
+                "e": "prim",
+                "op": "bv.eq",
+                "type": {
+                  "t": "fun",
+                  "arg": {"t": "bv", "width": 2},
+                  "res": {"t": "fun", "arg": {"t": "bv", "width": 2}, "res": {"t": "bool"}}
+                },
+                "params": {}
+              },
+              "args": [{"e": "var", "name": "s"}, {"e": "lit", "value": {"bv": 2, "val": "1"}}]
+            },
+            "then": {
+              "e": "tuple",
+              "elems": [
+                {
+                  "e": "if",
+                  "cond": {"e": "var", "name": "i"},
+                  "then": {"e": "lit", "value": {"bv": 2, "val": "1"}},
+                  "else": {"e": "lit", "value": {"bv": 2, "val": "2"}}
+                },
+                {"e": "lit", "value": false}
+              ]
+            },
+            "else": {
+              "e": "tuple",
+              "elems": [
+                {
+                  "e": "if",
+                  "cond": {"e": "var", "name": "i"},
+                  "then": {"e": "lit", "value": {"bv": 2, "val": "1"}},
+                  "else": {"e": "lit", "value": {"bv": 2, "val": "0"}}
+                },
+                {"e": "var", "name": "i"}
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Detector.detector",
+      "type": {
+        "t": "fun",
+        "arg": {"t": "signal", "domain": "System", "elem": {"t": "bool"}},
+        "res": {"t": "signal", "domain": "System", "elem": {"t": "bool"}}
+      },
+      "body": {
+        "e": "lam",
+        "binders": [
+          {"name": "b", "type": {"t": "signal", "domain": "System", "elem": {"t": "bool"}}}
+        ],
+        "body": {
+          "e": "app",
+          "fun": {
+            "e": "prim",
+            "op": "sig.mealy",
+            "type": {
+              "t": "fun",
+              "arg": {
+                "t": "fun",
+                "arg": {"t": "bv", "width": 2},
+                "res": {
+                  "t": "fun",
+                  "arg": {"t": "bool"},
+                  "res": {"t": "prod", "elems": [{"t": "bv", "width": 2}, {"t": "bool"}]}
+                }
+              },
+              "res": {
+                "t": "fun",
+                "arg": {"t": "signal", "domain": "System", "elem": {"t": "bool"}},
+                "res": {"t": "signal", "domain": "System", "elem": {"t": "bool"}}
+              }
+            },
+            "params": {"init": {"bv": 2, "val": "0"}}
+          },
+          "args": [{"e": "global", "name": "Detector.step"}, {"e": "var", "name": "b"}]
+        }
+      }
+    }
+  ],
+  "certificate": {
+    "theorem": "Detector.detector_correct",
+    "statement": "∀ (b : Gin.Signal Gin.System Bool) (t : Nat), Detector.detector b t = Detector.spec b t",
+    "axioms": ["Quot.sound", "propext"],
+    "implAxioms": []
+  }
+}

@@ -1,0 +1,226 @@
+{
+  "format": "gin-ir/1",
+  "producer": {"tool": "gin-export", "leanVersion": "4.34.1"},
+  "top": {
+    "name": "mac",
+    "domain": {"name": "System", "periodPs": 10000},
+    "inputs": [
+      {"name": "x", "type": {"t": "bv", "width": 8}},
+      {"name": "y", "type": {"t": "bv", "width": 8}}
+    ],
+    "outputs": [{"name": "acc", "type": {"t": "bv", "width": 16}}],
+    "def": "Mac.mac"
+  },
+  "defs": [
+    {
+      "name": "Mac.mac",
+      "type": {
+        "t": "fun",
+        "arg": {"t": "signal", "domain": "System", "elem": {"t": "bv", "width": 8}},
+        "res": {
+          "t": "fun",
+          "arg": {"t": "signal", "domain": "System", "elem": {"t": "bv", "width": 8}},
+          "res": {"t": "signal", "domain": "System", "elem": {"t": "bv", "width": 16}}
+        }
+      },
+      "body": {
+        "e": "lam",
+        "binders": [
+          {
+            "name": "x",
+            "type": {"t": "signal", "domain": "System", "elem": {"t": "bv", "width": 8}}
+          },
+          {
+            "name": "y",
+            "type": {"t": "signal", "domain": "System", "elem": {"t": "bv", "width": 8}}
+          }
+        ],
+        "body": {
+          "e": "app",
+          "fun": {
+            "e": "prim",
+            "op": "sig.mealy",
+            "type": {
+              "t": "fun",
+              "arg": {
+                "t": "fun",
+                "arg": {"t": "bv", "width": 16},
+                "res": {
+                  "t": "fun",
+                  "arg": {"t": "prod", "elems": [{"t": "bv", "width": 8}, {"t": "bv", "width": 8}]},
+                  "res": {
+                    "t": "prod",
+                    "elems": [{"t": "bv", "width": 16}, {"t": "bv", "width": 16}]
+                  }
+                }
+              },
+              "res": {
+                "t": "fun",
+                "arg": {
+                  "t": "signal",
+                  "domain": "System",
+                  "elem": {"t": "prod", "elems": [{"t": "bv", "width": 8}, {"t": "bv", "width": 8}]}
+                },
+                "res": {"t": "signal", "domain": "System", "elem": {"t": "bv", "width": 16}}
+              }
+            },
+            "params": {"init": {"bv": 16, "val": "0"}}
+          },
+          "args": [
+            {
+              "e": "lam",
+              "binders": [
+                {"name": "acc", "type": {"t": "bv", "width": 16}},
+                {
+                  "name": "p",
+                  "type": {"t": "prod", "elems": [{"t": "bv", "width": 8}, {"t": "bv", "width": 8}]}
+                }
+              ],
+              "body": {
+                "e": "let",
+                "rec": false,
+                "binds": [
+                  {
+                    "name": "acc_",
+                    "type": {"t": "bv", "width": 16},
+                    "value": {
+                      "e": "app",
+                      "fun": {
+                        "e": "prim",
+                        "op": "bv.add",
+                        "type": {
+                          "t": "fun",
+                          "arg": {"t": "bv", "width": 16},
+                          "res": {
+                            "t": "fun",
+                            "arg": {"t": "bv", "width": 16},
+                            "res": {"t": "bv", "width": 16}
+                          }
+                        },
+                        "params": {}
+                      },
+                      "args": [
+                        {"e": "var", "name": "acc"},
+                        {
+                          "e": "app",
+                          "fun": {
+                            "e": "prim",
+                            "op": "bv.mul",
+                            "type": {
+                              "t": "fun",
+                              "arg": {"t": "bv", "width": 16},
+                              "res": {
+                                "t": "fun",
+                                "arg": {"t": "bv", "width": 16},
+                                "res": {"t": "bv", "width": 16}
+                              }
+                            },
+                            "params": {}
+                          },
+                          "args": [
+                            {
+                              "e": "app",
+                              "fun": {
+                                "e": "prim",
+                                "op": "bv.zext",
+                                "type": {
+                                  "t": "fun",
+                                  "arg": {"t": "bv", "width": 8},
+                                  "res": {"t": "bv", "width": 16}
+                                },
+                                "params": {"width": 16}
+                              },
+                              "args": [{"e": "proj", "index": 0, "of": {"e": "var", "name": "p"}}]
+                            },
+                            {
+                              "e": "app",
+                              "fun": {
+                                "e": "prim",
+                                "op": "bv.zext",
+                                "type": {
+                                  "t": "fun",
+                                  "arg": {"t": "bv", "width": 8},
+                                  "res": {"t": "bv", "width": 16}
+                                },
+                                "params": {"width": 16}
+                              },
+                              "args": [{"e": "proj", "index": 1, "of": {"e": "var", "name": "p"}}]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "body": {
+                  "e": "tuple",
+                  "elems": [{"e": "var", "name": "acc_"}, {"e": "var", "name": "acc"}]
+                }
+              }
+            },
+            {
+              "e": "app",
+              "fun": {
+                "e": "prim",
+                "op": "sig.lift",
+                "type": {
+                  "t": "fun",
+                  "arg": {
+                    "t": "fun",
+                    "arg": {"t": "bv", "width": 8},
+                    "res": {
+                      "t": "fun",
+                      "arg": {"t": "bv", "width": 8},
+                      "res": {
+                        "t": "prod",
+                        "elems": [{"t": "bv", "width": 8}, {"t": "bv", "width": 8}]
+                      }
+                    }
+                  },
+                  "res": {
+                    "t": "fun",
+                    "arg": {"t": "signal", "domain": "System", "elem": {"t": "bv", "width": 8}},
+                    "res": {
+                      "t": "fun",
+                      "arg": {"t": "signal", "domain": "System", "elem": {"t": "bv", "width": 8}},
+                      "res": {
+                        "t": "signal",
+                        "domain": "System",
+                        "elem": {
+                          "t": "prod",
+                          "elems": [{"t": "bv", "width": 8}, {"t": "bv", "width": 8}]
+                        }
+                      }
+                    }
+                  }
+                },
+                "params": {"arity": 2}
+              },
+              "args": [
+                {
+                  "e": "lam",
+                  "binders": [
+                    {"name": "x1", "type": {"t": "bv", "width": 8}},
+                    {"name": "x2", "type": {"t": "bv", "width": 8}}
+                  ],
+                  "body": {
+                    "e": "tuple",
+                    "elems": [{"e": "var", "name": "x1"}, {"e": "var", "name": "x2"}]
+                  }
+                },
+                {"e": "var", "name": "x"},
+                {"e": "var", "name": "y"}
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "certificate": {
+    "theorem": "Mac.mac_correct",
+    "statement": "∀ (x y : Gin.Signal Gin.System (BitVec 8)) (t : Nat), Mac.mac x y t = Mac.spec x y t",
+    "axioms": ["Quot.sound", "propext"],
+    "implAxioms": []
+  }
+}

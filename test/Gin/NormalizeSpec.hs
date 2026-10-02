@@ -311,6 +311,22 @@ deepRegister d =
     reg = register v (lift [TBool] t nest [var "x"])
     body = ELet False [Bind "r" (sig t) reg] (lift [t] TBool deepest [var "r"])
 
+-- > long x = let f1 = \v -> v; f(i+1) = \v -> fi (fi v) in lift fk x
+--
+-- Exponential work without binds, with every binder name @len@ characters
+-- long and sharing a prefix, so that comparing two names costs @len@.
+longNames :: Int -> Int -> Program
+longNames len k = withBody "long" (ELet False (bind1 : fmap bindI [2 .. k]) applied)
+  where
+    prefix = Text.replicate len "p"
+    f i = Name (prefix <> "f" <> Text.pack (show i))
+    x = Name (prefix <> "x")
+    fTy = TFun (bv 8) (bv 8)
+    bind1 = Bind (f (1 :: Int)) fTy (ELam [(x, bv 8)] (EVar x))
+    call i e = EApp (EVar (f (i - 1))) [e]
+    bindI i = Bind (f i) fTy (ELam [(x, bv 8)] (call i (call i (EVar x))))
+    applied = lift [bv 8] (bv 8) (EVar (f k)) [var "x"]
+
 -- | @g(i+1) x = g i (g i x)@ from @g0 x = let v = not x in v@, with @v@
 -- named by @len@ repetitions of the letter: @2^k@ binds bound to @v@.
 longBinder :: Int -> Int -> Program
@@ -671,6 +687,8 @@ spec = do
         checkNormal m `shouldBe` Right ()
       it "[norm-limit] rejects a program with one level more" $
         shouldTripLimit (nestedChain 17) (Text.pack (show maxNormalBinds))
+      it "[norm-limit] charges evaluation steps at a cost independent of name length" $
+        shouldTripLimit (longNames 100000 24) "steps"
       it "[norm-limit] lowers a deeply nested mealy state in time linear in its depth" $ do
         r <- timeout (10 * 1000000) (evaluate (normalize (deepMealy 50000)))
         case r of

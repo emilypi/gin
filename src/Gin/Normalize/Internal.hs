@@ -23,7 +23,9 @@
 -- including binds that duplicate an earlier one, so exponential inlining is
 -- stopped before the term is built. Every evaluation step counts against
 -- 'maxEvalSteps', which bounds programs that do exponential work without
--- emitting binds at all.
+-- emitting binds at all. Names are replaced by integer ids before
+-- evaluation, and wires are named after a bounded prefix of their source
+-- binder, so the cost of a step does not grow with the length of names.
 module Gin.Normalize.Internal
   ( buildModule
   , primResultTy
@@ -32,7 +34,7 @@ module Gin.Normalize.Internal
 
 import Control.Applicative ((<|>))
 import Control.Monad (foldM, unless, when, zipWithM, zipWithM_)
-import Control.Monad.State.Strict (StateT (..), gets, modify')
+import Control.Monad.State.Strict (State, StateT (..), gets, modify', runState, state)
 import Data.Foldable (foldrM)
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
@@ -42,7 +44,6 @@ import Data.List (genericDrop)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
-import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -124,6 +125,68 @@ primResultTy op args
       _ -> Nothing
 
 ----------------------------------------------------------------------
+-- Interned syntax
+
+-- | A core expression with every name replaced by an integer id, so that
+-- the cost of an evaluation step does not depend on how long the source
+-- names are. Equal names get equal ids, which keeps shadowing as in the
+-- source.
+data IExpr
+  = IVar !Int
+  | IGlobal !Int
+  | ILit !Value
+  | IPrim !PrimOp
+  | IApp IExpr [IExpr]
+  | ILam [Int] IExpr
+  | ILet !Bool [IBind] IExpr
+  | ITuple [IExpr]
+  | IProj !Natural IExpr
+  | IIf IExpr IExpr IExpr
+
+data IBind = IBind
+  { ibName :: !Int
+  , ibTy :: !Ty
+  , ibExpr :: IExpr
+  }
+
+-- | The ids given to names so far, and the name of each id.
+data Interner = Interner !(Map Name Int) !(IntMap Name)
+
+intern :: Name -> State Interner Int
+intern x = state $ \s@(Interner ids names) -> case Map.lookup x ids of
+  Just i -> (i, s)
+  Nothing ->
+    let i = Map.size ids
+     in (i, Interner (Map.insert x i ids) (IntMap.insert i x names))
+
+internExpr :: Expr -> State Interner IExpr
+internExpr = \case
+  EVar x -> IVar <$> intern x
+  EGlobal g -> IGlobal <$> intern g
+  ELit v -> pure (ILit v)
+  EPrim op _ -> pure (IPrim op)
+  EApp f args -> IApp <$> internExpr f <*> traverse internExpr args
+  ELam params body -> ILam <$> traverse (intern . fst) params <*> internExpr body
+  ELet isRec binds body -> ILet isRec <$> traverse internBind binds <*> internExpr body
+  ETuple es -> ITuple <$> traverse internExpr es
+  EProj i e -> IProj i <$> internExpr e
+  EIf c t e -> IIf <$> internExpr c <*> internExpr t <*> internExpr e
+  where
+    internBind (Bind x t e) = IBind <$> intern x <*> pure t <*> internExpr e
+
+-- | The bodies of all definitions and the id of the top entity's
+-- definition, with the name of every id. A later definition with the same
+-- name replaces an earlier one.
+internProgram :: Program -> (IntMap IExpr, Int, IntMap Name)
+internProgram prog = (IntMap.fromList defs, top, names)
+  where
+    ((defs, top), Interner _ names) = runState build (Interner Map.empty IntMap.empty)
+    build =
+      (,)
+        <$> traverse (\d -> (,) <$> intern (defName d) <*> internExpr (defBody d)) (progDefs prog)
+        <*> intern (topDef (progTop prog))
+
+----------------------------------------------------------------------
 -- The semantic domain
 
 -- | A wire (an input or a bind, by internal id) or a scalar literal.
@@ -156,15 +219,18 @@ data SVal
     SAtom !W !Ty
   | STuple ![SVal]
   | -- | A function, with the definition it was written in (for error context).
-    SFun !(Maybe Name) (SVal -> M SVal)
+    SFun !(Maybe Int) (SVal -> M SVal)
 
 data Env = Env
-  { envVars :: !(Map Name SVal)
-  , envDef :: !(Maybe Name)
+  { envVars :: !(IntMap SVal)
+  , envDef :: !(Maybe Int)
   }
 
 data St = St
-  { stDefs :: !(Map Name Def)
+  { stDefs :: !(IntMap IExpr)
+  -- ^ Definition bodies by the id of their name.
+  , stNames :: !(IntMap Name)
+  -- ^ Source name of every interned id.
   , stInputs :: !(IntMap Text)
   -- ^ Input wire ids and their port names.
   , stNextId :: !Int
@@ -176,11 +242,11 @@ data St = St
   -- ^ Combinational right-hand sides emitted so far, for reuse.
   , stAliases :: !(IntMap Text)
   -- ^ First source binder each wire was bound to.
-  , stGlobals :: !(Map Name SVal)
+  , stGlobals :: !(IntMap SVal)
   -- ^ Values of the definitions evaluated so far.
-  , stActive :: !(Set Name)
+  , stActive :: !IntSet
   -- ^ Definitions whose bodies are being evaluated.
-  , stCurDef :: !(Maybe Name)
+  , stCurDef :: !(Maybe Int)
   -- ^ Definition whose code is being evaluated, for error contexts.
   , stDepth :: !Int
   -- ^ Number of error contexts currently pushed.
@@ -206,6 +272,16 @@ inContext ctx m = do
 
 showT :: (Show a) => a -> Text
 showT = Text.pack . show
+
+-- | The source name of an interned id. Lazy in the lookup, so an error
+-- message or context that is never shown costs nothing.
+sourceName :: Int -> M Text
+sourceName i = gets (maybe ("#" <> showT i) unName . IntMap.lookup i . stNames)
+
+-- | The prefix of a source name that names wires, at most 'maxAliasLength'
+-- characters long.
+aliasBase :: Int -> M Text
+aliasBase i = Text.take maxAliasLength <$> sourceName i
 
 -- | Charge evaluation steps against 'maxEvalSteps'.
 spend :: Int -> M ()
@@ -261,8 +337,10 @@ emitShared hint ty rhs = do
 -- long names and deeply nested tuples do not cost time and memory
 -- proportional to the product of name length and bind count, or quadratic
 -- in the nesting depth.
-alias :: Name -> SVal -> M ()
-alias x = go (aliasBase x)
+alias :: Int -> SVal -> M ()
+alias x v0 = do
+  base <- aliasBase x
+  go base v0
   where
     go name v = do
       tick
@@ -279,13 +357,8 @@ alias x = go (aliasBase x)
 maxAliasLength :: Int
 maxAliasLength = 64
 
--- | The prefix of a source name that names wires, at most 'maxAliasLength'
--- characters long.
-aliasBase :: Name -> Text
-aliasBase = Text.take maxAliasLength . unName
-
-bindVar :: Name -> SVal -> Env -> Env
-bindVar x v env = env {envVars = Map.insert x v (envVars env)}
+bindVar :: Int -> SVal -> Env -> Env
+bindVar x v env = env {envVars = IntMap.insert x v (envVars env)}
 
 -- | The scalar components of a value, in order. Accumulates from the right,
 -- so the cost is linear in the size of the value however its tuples nest.
@@ -302,24 +375,26 @@ leaves v0 = go v0 []
 ----------------------------------------------------------------------
 -- Evaluation
 
-eval :: Env -> Expr -> M SVal
+eval :: Env -> IExpr -> M SVal
 eval env expr = do
   tick
   case expr of
-    EVar x -> maybe (failN ("unbound variable " <> unName x)) pure (Map.lookup x (envVars env))
-    EGlobal g -> global g
-    ELit v -> literal v
-    EPrim op _ -> pure (primFun op)
-    EApp f args -> do
+    IVar x -> case IntMap.lookup x (envVars env) of
+      Just v -> pure v
+      Nothing -> sourceName x >>= \n -> failN ("unbound variable " <> n)
+    IGlobal g -> global g
+    ILit v -> literal v
+    IPrim op -> pure (primFun op)
+    IApp f args -> do
       fv <- eval env f
       avs <- traverse (eval env) args
       foldM apply fv avs
-    ELam params body -> lambda env params body
-    ELet False binds body -> foldM letBind env binds >>= (`eval` body)
-    ELet True binds body -> recLet env binds body
-    ETuple es -> STuple <$> traverse (eval env) es
-    EProj i e -> eval env e >>= project i
-    EIf c t e -> do
+    ILam params body -> lambda env params body
+    ILet False binds body -> foldM letBind env binds >>= (`eval` body)
+    ILet True binds body -> recLet env binds body
+    ITuple es -> STuple <$> traverse (eval env) es
+    IProj i e -> eval env e >>= project i
+    IIf c t e -> do
       cv <- eval env c
       case cv of
         SAtom (WLit (VBool b)) _ -> eval env (if b then t else e)
@@ -338,43 +413,48 @@ apply f a = do
 
 -- | Run a function body, adding the definition it was written in to error
 -- contexts when that differs from the definition being evaluated.
-withDef :: Maybe Name -> M a -> M a
+withDef :: Maybe Int -> M a -> M a
 withDef d m = do
   cur <- gets stCurDef
   depth <- gets stDepth
   case d of
-    Just name
+    Just g
       | d /= cur
       , depth < maxContextDepth -> do
+          name <- sourceName g
           modify' (\s -> s {stCurDef = d})
-          r <- inContext ("in def " <> unName name) m
+          r <- inContext ("in def " <> name) m
           modify' (\s -> s {stCurDef = cur})
           pure r
     _ -> m
 
-lambda :: Env -> [(Name, Ty)] -> Expr -> M SVal
+lambda :: Env -> [Int] -> IExpr -> M SVal
 lambda env params body = case params of
   [] -> eval env body
-  (x, _) : rest -> pure $ SFun (envDef env) $ \a -> do
+  x : rest -> pure $ SFun (envDef env) $ \a -> do
     alias x a
     lambda (bindVar x a env) rest body
 
-global :: Name -> M SVal
+global :: Int -> M SVal
 global g = do
-  cached <- gets (Map.lookup g . stGlobals)
+  cached <- gets (IntMap.lookup g . stGlobals)
   case cached of
     Just v -> pure v
     Nothing -> do
-      def <- gets (Map.lookup g . stDefs)
-      active <- gets (Set.member g . stActive)
+      def <- gets (IntMap.lookup g . stDefs)
+      active <- gets (IntSet.member g . stActive)
+      name <- sourceName g
       case def of
-        Nothing -> failN ("unknown global " <> unName g)
-        Just _ | active -> failN ("recursive definition " <> unName g)
-        Just d -> do
-          modify' (\s -> s {stActive = Set.insert g (stActive s)})
-          v <- withDef (Just g) (eval (Env Map.empty (Just g)) (defBody d))
+        Nothing -> failN ("unknown global " <> name)
+        Just _ | active -> failN ("recursive definition " <> name)
+        Just body -> do
+          modify' (\s -> s {stActive = IntSet.insert g (stActive s)})
+          v <- withDef (Just g) (eval (Env IntMap.empty (Just g)) body)
           modify' $ \s ->
-            s {stActive = Set.delete g (stActive s), stGlobals = Map.insert g v (stGlobals s)}
+            s
+              { stActive = IntSet.delete g (stActive s)
+              , stGlobals = IntMap.insert g v (stGlobals s)
+              }
           pure v
 
 literal :: Value -> M SVal
@@ -389,40 +469,49 @@ literal v
       VTuple vs -> 1 + sum (fmap size vs)
       _ -> 1
 
-letBind :: Env -> Bind -> M Env
-letBind env (Bind x _ e) = do
-  v <- inContext ("in bind " <> unName x) (eval env e)
+letBind :: Env -> IBind -> M Env
+letBind env (IBind x _ e) = do
+  ctx <- bindContext x
+  v <- inContext ctx (eval env e)
   alias x v
   pure (bindVar x v env)
 
-recLet :: Env -> [Bind] -> Expr -> M SVal
+bindContext :: Int -> M Text
+bindContext x = ("in bind " <>) <$> sourceName x
+
+recLet :: Env -> [IBind] -> IExpr -> M SVal
 recLet env binds body = do
-  holes <- traverse (\b -> inContext (ctx b) (placeholder (bindName b) (bindTy b))) binds
-  let env' = foldr (uncurry bindVar) env (zip (fmap bindName binds) holes)
+  holes <- traverse (\b -> bindContext (ibName b) >>= (`inContext` hole b)) binds
+  let env' = foldr (uncurry bindVar) env (zip (fmap ibName binds) holes)
   zipWithM_ (tieBind env') binds holes
   eval env' body
   where
-    ctx b = "in bind " <> unName (bindName b)
-    tieBind env' b hole = inContext (ctx b) $ do
-      v <- eval env' (bindExpr b)
-      alias (bindName b) v
-      tie (bindName b) hole v
+    hole b = sourceName (ibName b) >>= (`placeholder` ibTy b)
+    tieBind env' b h = do
+      ctx <- bindContext (ibName b)
+      inContext ctx $ do
+        v <- eval env' (ibExpr b)
+        alias (ibName b) v
+        name <- sourceName (ibName b)
+        tie name h v
 
--- | Fresh wires for every scalar component of a recursively bound value.
-placeholder :: Name -> Ty -> M SVal
+-- | Fresh wires for every scalar component of a recursively bound value,
+-- named @x@ in error messages.
+placeholder :: Text -> Ty -> M SVal
 placeholder x = \case
   TSignal _ t -> placeholder x t
   TProd ts -> STuple <$> traverse (placeholder x) ts
-  TFun _ _ -> failN ("a recursive let cannot bind the function " <> unName x)
+  TFun _ _ -> failN ("a recursive let cannot bind the function " <> x)
   t
     | isScalar t -> (`SAtom` t) . WVar <$> freshId
-    | otherwise -> failN ("recursive binding " <> unName x <> " has a non-scalar type " <> showT t)
+    | otherwise -> failN ("recursive binding " <> x <> " has a non-scalar type " <> showT t)
 
-tie :: Name -> SVal -> SVal -> M ()
+-- | Tie the wires of a recursive binding @x@ to its value with copies.
+tie :: Text -> SVal -> SVal -> M ()
 tie x hole v = case (hole, v) of
-  (SAtom (WVar i) t, SAtom w t') | t == t' -> emitAt i (aliasBase x) t (RCopy w)
+  (SAtom (WVar i) t, SAtom w t') | t == t' -> emitAt i (Text.take maxAliasLength x) t (RCopy w)
   (STuple hs, STuple vs) | length hs == length vs -> zipWithM_ (tie x) hs vs
-  _ -> failN ("the value of recursive binding " <> unName x <> " does not match its type")
+  _ -> failN ("the value of recursive binding " <> x <> " does not match its type")
 
 project :: Natural -> SVal -> M SVal
 project i v = do
@@ -530,10 +619,12 @@ stateWires v0 = do
 buildModule :: Program -> Either GinError NModule
 buildModule prog = do
   let top = progTop prog
+      (defs, topId, names) = internProgram prog
       inputs = IntMap.fromList (zip [0 ..] (fmap portName (topInputs top)))
       st0 =
         St
-          { stDefs = Map.fromList [(defName d, d) | d <- progDefs prog]
+          { stDefs = defs
+          , stNames = names
           , stInputs = inputs
           , stNextId = IntMap.size inputs
           , stBinds = IntMap.empty
@@ -541,18 +632,20 @@ buildModule prog = do
           , stSteps = 0
           , stShared = Map.empty
           , stAliases = IntMap.empty
-          , stGlobals = Map.empty
-          , stActive = Set.empty
+          , stGlobals = IntMap.empty
+          , stActive = IntSet.empty
           , stCurDef = Nothing
           , stDepth = 0
           }
-  (outs, st) <- runStateT (elaborate top) st0
+  (outs, st) <- runStateT (elaborate top topId) st0
   withContext ("in top entity " <> topName top) (assemble prog outs st)
 
-elaborate :: TopEntity -> M [(Port, W)]
-elaborate top = inContext ("in top entity " <> topName top) $ do
+-- | Apply the top entity's definition, whose name has the given id, to its
+-- inputs and read its outputs.
+elaborate :: TopEntity -> Int -> M [(Port, W)]
+elaborate top topId = inContext ("in top entity " <> topName top) $ do
   when (null (topOutputs top)) $ failN "the top entity has no outputs"
-  f <- global (topDef top)
+  f <- global topId
   args <- zipWithM input [0 ..] (topInputs top)
   result <- foldM apply f args
   parts <- spine (length (topOutputs top)) result

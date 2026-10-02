@@ -69,6 +69,14 @@ run_meta do
   GinTest.expectError (certify ``Counter.spec ``Counter.counter [``Counter.counter])
     ["Counter.spec is not a theorem"]
 
+-- The allowed axioms are listed in one trailing sentence, after the names of
+-- the offending ones.
+#guard Gin.Export.allowedNote == "Allowed axioms: propext, Classical.choice, Quot.sound."
+run_meta do
+  GinTest.expectError
+    (Gin.Export.certify ``GinTest.Certificate.fromAxiom ``Counter.counter [``Counter.counter])
+    ["disallowed axioms: GinTest.Certificate.counterClaim. " ++ Gin.Export.allowedNote]
+
 -- Hints for the axioms that usually signal an unchecked proof.
 #guard Gin.Export.axiomHint ``sorryAx == " (the proof is incomplete: it uses sorry)"
 #guard GinTest.containsStr (Gin.Export.axiomHint `Foo.bar._native.native_decide.ax_1_1) "native_decide"

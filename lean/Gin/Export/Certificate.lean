@@ -22,6 +22,11 @@ namespace Gin.Export
 /-- The axioms a certified design may depend on. -/
 def allowedAxioms : List Name := [``propext, ``Classical.choice, ``Quot.sound]
 
+/-- The sentence that ends every axiom error. Tools that look for the name
+of the offending axiom in an error should ignore it. -/
+def allowedNote : String :=
+  "Allowed axioms: " ++ ", ".intercalate (allowedAxioms.map (·.toString)) ++ "."
+
 /-- Why an axiom outside the allowed list typically shows up. -/
 def axiomHint (a : Name) : String :=
   if a == ``sorryAx then " (the proof is incomplete: it uses sorry)"
@@ -37,7 +42,7 @@ def checkedAxioms (what : String) (n : Name) : MetaM (Array Name) := do
   let bad := axs.filter (!allowedAxioms.contains ·)
   unless bad.isEmpty do
     let names := ", ".intercalate (bad.toList.map fun a => a.toString ++ axiomHint a)
-    throwError "{what} {n} depends on disallowed axioms: {names}; only propext, Classical.choice and Quot.sound are allowed"
+    throwError "{what} {n} depends on disallowed axioms: {names}. {allowedNote}"
   return axs
 
 /-- The certificate for refinement theorem `thm` about the top definition

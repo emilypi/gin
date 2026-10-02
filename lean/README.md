@@ -48,4 +48,11 @@ them together with the Lean change that produced them.
 - `collectAxioms` cannot see proofs that skipped the kernel
   (`debug.skipKernelTC`); that is why the export script runs `leanchecker`
   first. Do not export without it.
+- The exporter refuses to write a file gin would reject on reading
+  (`docs/file-formats.md`, "Resource limits"): any number above
+  2147483647, arrays and objects nested deeper than 4096, or more than
+  16 MiB. In particular a clock period must be at most 2147483647 ps
+  (about 2.1 µs, a clock of at least about 466 kHz). Constant shifts by
+  the width or more are emitted as shifts by the width, which mean the
+  same.
 - JSON key order in the generated files is not significant.

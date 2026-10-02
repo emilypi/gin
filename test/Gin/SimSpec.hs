@@ -921,6 +921,23 @@ doublingDefs k = [Def (doubling i) (TFun (bv 8) (bv 8)) (ELam [("v", bv 8)] (bod
 doubling :: Int -> Name
 doubling i = Name (Text.pack ("T.g" <> show i))
 
+-- | @h0 v = let s = sig.pure v in v@ and @hi v = h(i-1) (h(i-1) v)@,
+-- with @h10@ lifted over the input: the identity, making and dropping
+-- @2^10@ signals a cycle.
+droppedSignals :: Program
+droppedSignals =
+  programWith
+    (bv8Ports ["x"])
+    (bv8Ports ["o"])
+    (overPorts (bv8Ports ["x"]) (liftE [bv 8] (bv 8) (EGlobal (h 10)) [var "x"]))
+    [Def (h i) (TFun (bv 8) (bv 8)) (ELam [("v", bv 8)] (body i)) | i <- [0 .. 10]]
+  where
+    h :: Int -> Name
+    h i = Name (Text.pack ("T.h" <> show i))
+    body i
+      | i <= 0 = ELet False [Bind "s" (sig (bv 8)) (pureE (bv 8) (var "v"))] (var "v")
+      | otherwise = EApp (EGlobal (h (i - 1))) [EApp (EGlobal (h (i - 1))) [var "v"]]
+
 -- | A counter whose output is its input, computed with @g18@ of
 -- 'doublingDefs' (about @7 * 2^18@ steps) in the cycle where the count is
 -- 3 and directly in every other cycle.
@@ -938,6 +955,52 @@ expensiveAtThree =
           [ EApp (incr 8) [var "s"]
           , EIf (bvEq8 (var "s") (ELit (b8 3))) (EApp (EGlobal (doubling 18)) [var "i"]) (var "i")
           ]
+
+-- | @r0 s = register v s@ and @ri s = r(i-1) (r(i-1) s)@: @ri@ delays a
+-- signal of the type of @v@ through @2^i@ registers. The defs @T.r0 ..
+-- T.rk@.
+registerDoubling :: Value -> Int -> [Def]
+registerDoubling v k =
+  [Def (registers i) (TFun (sig t) (sig t)) (ELam [("s", sig t)] (body i)) | i <- [0 .. k]]
+  where
+    t = valueTy v
+    body i
+      | i <= 0 = registerE v (var "s")
+      | otherwise = EApp (EGlobal (registers (i - 1))) [EApp (EGlobal (registers (i - 1))) [var "s"]]
+
+-- | The name of @ri@ in 'registerDoubling'.
+registers :: Int -> Name
+registers i = Name (Text.pack ("T.r" <> show i))
+
+-- | A one-input top whose output is its input delayed by the registers of
+-- @rk@, then of @rj@ for each @j@ in the list, from 'registerDoubling'
+-- with initial value 0.
+delayedBy :: Int -> [Int] -> Program
+delayedBy k more =
+  programWith
+    (bv8Ports ["x"])
+    (bv8Ports ["o"])
+    (overPorts (bv8Ports ["x"]) (foldr (\j e -> EApp (EGlobal (registers j)) [e]) (var "x") (k : more)))
+    (registerDoubling (b8 0) k)
+
+-- | Signals of @n@-component Bool tuples through the @2^k@ registers of
+-- @rk@ ('registerDoubling'); the output is the first component.
+wideRegisters :: Int -> Int -> Program
+wideRegisters n k =
+  programWith
+    [Port "b" TBool]
+    [Port "o" TBool]
+    ( overPorts [Port "b" TBool] $
+        liftE
+          [tupleTy]
+          TBool
+          (ELam [("p", tupleTy)] (EProj 0 (var "p")))
+          [EApp (EGlobal (registers k)) [liftE [TBool] tupleTy (ELam [("v", TBool)] wide) [var "b"]]]
+    )
+    (registerDoubling (VTuple (replicate n (VBool False))) k)
+  where
+    tupleTy = TProd (replicate n TBool)
+    wide = ETuple (replicate n (var "v"))
 
 -- | Names @prefix1 .. prefixn@ bound in order, each by @step@ applied to
 -- the one before (@prefix0@ for the first).
@@ -981,6 +1044,28 @@ coreLimitSpec = do
     r <- settled (simulateCore expensiveAtThree rows)
     r `shouldBeSimError` "the cycle needs more than 1048576 evaluation steps"
     r `shouldBeSimError` "in cycle 3"
+  it "[sim-budget] rejects the 2^20 registers of the register-doubling program while building" $ do
+    r <- settled (simulateCore (delayedBy 20 []) (replicate 3 [b8 1]))
+    r `shouldBeSimError` "the signal network has more than 262144 nodes"
+    r `shouldBeSimError` "in def T.top"
+  it "[sim-budget] runs a network of exactly 2^18 nodes and rejects one more" $ do
+    -- One input and 2^17 + 2^16 + .. + 2^0 = 2^18 - 1 registers.
+    let atLimit = delayedBy 17 [16, 15 .. 0]
+    r <- settled (simulateCore atLimit [[b8 1], [b8 2]])
+    r `shouldBe` Right [[b8 0], [b8 0]]
+    r' <- settled (simulateCore (delayedBy 17 ([16, 15 .. 0] <> [0])) [[b8 1], [b8 2]])
+    r' `shouldBeSimError` "the signal network has more than 262144 nodes"
+  it "[sim-budget] charges a cycle for every state component its registers store" $ do
+    -- 2^11 registers, each storing 1024 components a cycle.
+    simulateCore (wideRegisters 1024 2) [[VBool True]] `shouldBe` Right [[VBool False]]
+    r <- settled (simulateCore (wideRegisters 1024 11) [[VBool True]])
+    r `shouldBeSimError` "the cycle needs more than 1048576 evaluation steps"
+    r `shouldBeSimError` "in cycle 0"
+  it "[sim-budget] does not count signals a function makes and drops against the node limit" $ do
+    -- 2^10 sig.pure nodes a cycle, for 300 cycles.
+    let rows = [[b8 (t `mod` 256)] | t <- [0 .. 299]]
+    r <- settled (simulateCore droppedSignals rows)
+    r `shouldBe` Right rows
   it "[sim-budget] runs 10000 cycles of about 7 * 2^12 steps, more than 2^28 steps in all" $ do
     let rows = [[b8 (t `mod` 256)] | t <- [0 .. 9999]]
     r <- settledWithin 120 (simulateCore (doublingWork 12) rows)

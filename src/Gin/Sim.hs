@@ -91,18 +91,21 @@ import Numeric.Natural (Natural)
 -- register or mealy state).
 --
 -- Evaluation is bounded. Building the signal network may take @2^28@
--- evaluation steps and each cycle @2^20@, so a run takes at most
--- @2^28 + rows * 2^20@ steps; taking more, or nesting values and
--- applications more than 100000 deep (for example in a recursive
--- function that never returns), is an error. A step is an expression
--- evaluated, a value computed or a function applied. A cycle may take
--- 16 steps for each bind a normal form may have
+-- evaluation steps and create @2^18@ nodes, and each cycle may take
+-- @2^20@ steps, so a run takes at most @2^28 + rows * 2^20@ steps. Going
+-- beyond these, or nesting values and applications more than 100000 deep
+-- (for example in a recursive function that never returns), is an error.
+-- A step is an expression evaluated, a value computed or a function
+-- applied, and in a cycle also a node visited, a register or mealy
+-- machine advanced, or a component of its next state stored. A cycle may
+-- take 16 steps for each bind a normal form may have
 -- ('Gin.Limits.maxNormalBinds'), and evaluation takes about 4 steps a
--- cycle for an operation inside a function and 8 for a @sig.lift@ node
--- of one operation. A program that normalizes can still exceed the cycle
--- budget if evaluating it takes far more steps than its normal form has
--- binds: one that applies functions @2^19@ times a cycle to compute the
--- identity, which normalizes to no binds at all, is stopped in cycle 0.
+-- cycle for an operation inside a function, 8 for a @sig.lift@ node of
+-- one operation and 3 for a register. A program that normalizes can
+-- still exceed the cycle budget if evaluating it takes far more steps
+-- than its normal form has binds: one that applies functions @2^19@
+-- times a cycle to compute the identity, which normalizes to no binds at
+-- all, is stopped in cycle 0.
 simulateCore :: Program -> [[Value]] -> Either GinError [[Value]]
 simulateCore prog rows = do
   validateRows [(portName p, portTy p) | p <- topInputs (progTop prog)] rows
@@ -175,6 +178,12 @@ buildSteps = 4096 * maxNormalBinds
 -- does.
 cycleSteps :: Int
 cycleSteps = 16 * maxNormalBinds
+
+-- | Nodes building the signal network may create: 4 for each bind a
+-- normal form may have, @2^18@ in all. This bounds the memory the network
+-- holds for the whole run, and the steps a cycle spends visiting nodes.
+maxNetworkNodes :: Int
+maxNetworkNodes = 4 * maxNormalBinds
 
 -- | Bound on values being computed and functions being applied at the
 -- same time. Well-typed programs without unbounded recursion stay far
@@ -283,6 +292,8 @@ data Loop s = Loop
 
 data Sim s = Sim
   { simSteps :: !(STRef s Int)
+  , simNodes :: !(STRef s Int)
+  -- ^ Nodes created while building the network.
   , simCycle :: !(STRef s Int)
   , simFresh :: !(STRef s Int)
   -- ^ Numbers for nodes and activations.
@@ -486,7 +497,7 @@ loopError l =
 
 runCore :: Program -> [[Value]] -> ST s (Either GinError [[Value]])
 runCore prog rows = do
-  sim <- Sim <$> newSTRef 0 <*> newSTRef (-1) <*> newSTRef 0 <*> newSTRef Map.empty
+  sim <- Sim <$> newSTRef 0 <*> newSTRef 0 <*> newSTRef (-1) <*> newSTRef 0 <*> newSTRef Map.empty
   either (Left . failureError) Right <$> runEval (coreRun prog rows) sim (Here 0 Nothing)
 
 -- | Build the signal network, then run it one cycle per row. Each cycle
@@ -513,7 +524,7 @@ coreRun prog rows = do
           writeSTRef (simSteps sim) 0
         zipWithM_ (\n v -> liftST (writeSTRef (nodeCell n) (Just (t, Ready (fromValue v))))) inputs row
         outs <- within ("in cycle " <> showT t) $ do
-          traverse_ (\n -> tryBottom (cellOf n >>= force)) order
+          traverse_ (\n -> tick >> tryBottom (cellOf n >>= force)) order
           v <- cellOf out >>= force >>= deepValue
           either (failWith . Abort) pure (splitOutputs (topOutputs top) v)
         commits <- within ("in cycle " <> showT t) (traverse (advance t) machines)
@@ -587,7 +598,7 @@ data Visit s = Enter (Node s) | Leave (Node s)
 -- component that is not productive marked as such, and return the action
 -- that stores it. All next states are computed before any is stored.
 advance :: Int -> Node s -> Eval s (ST s ())
-advance t n = case nodeKind n of
+advance t n = tick >> case nodeKind n of
   NRegister st s -> store st <$> settle (cellOf s >>= force)
   NMealy f st i memo -> store st <$> settle (mealyStep f st i memo >>= force >>= pairPart 0 >>= force)
   _ -> pure (pure ())
@@ -598,7 +609,7 @@ advance t n = case nodeKind n of
 -- productive as 'Undefined'.
 settle :: Eval s (D s) -> Eval s (Thunk s)
 settle m =
-  tryBottom m >>= \case
+  tick >> tryBottom m >>= \case
     Left l -> pure (Undefined l)
     Right d -> case d of
       DTuple ths -> Ready . DTuple <$> traverse (settle . force) ths
@@ -634,8 +645,19 @@ splitOutputs ports v = case ports of
 ----------------------------------------------------------------------
 -- Core IR: signals
 
+-- | A new node. Nodes created while the network is built are counted
+-- against 'maxNetworkNodes'. A node created in a cycle, by a function
+-- that makes a signal it cannot return (signals carry only data), is not
+-- part of the network and is not counted.
 newNode :: NodeKind s -> Eval s (Node s)
 newNode kind = do
+  sim <- askSim
+  building <- (< 0) <$> currentCycle
+  when building $ do
+    count <- liftST (readSTRef (simNodes sim))
+    when (count >= maxNetworkNodes) . abort $
+      "the signal network has more than " <> showT maxNetworkNodes <> " nodes"
+    liftST (writeSTRef (simNodes sim) $! count + 1)
   i <- fresh
   Node i kind <$> liftST (newSTRef Nothing)
 

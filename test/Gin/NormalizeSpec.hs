@@ -494,9 +494,12 @@ normalizedWithin seconds p = do
 
 shouldTripLimit :: Program -> Text -> Expectation
 shouldTripLimit p needle = do
-  outcome <- outcomeWithin 20 (normalize p)
+  -- Tripping the evaluation-step budget takes about 10 s on an idle
+  -- machine; the margin keeps the test meaningful (a cost that grew with
+  -- name length would take orders of magnitude longer) on a loaded one.
+  outcome <- outcomeWithin 120 (normalize p)
   case outcome of
-    Nothing -> expectationFailure "normalize did not finish within 20 s"
+    Nothing -> expectationFailure "normalize did not finish within 120 s"
     Just Nothing -> expectationFailure "normalize succeeded"
     Just (Just (stage, msg)) -> do
       stage `shouldBe` StNormalize

@@ -899,20 +899,45 @@ coreLetRecSpec = do
 -- Evaluation limits
 
 -- | @g0 = \v -> v@ and @gi = \v -> g(i-1) (g(i-1) v)@ for @i = 1 .. k@,
--- with @gk@ lifted over the input: the identity, at a cost of @2^k@
--- applications per cycle.
+-- with @gk@ lifted over the input: the identity, at a cost of
+-- @2^(k+1) - 1@ applications, about @7 * 2^k@ evaluation steps, per cycle.
 doublingWork :: Int -> Program
 doublingWork k =
   programWith
     (bv8Ports ["x"])
     (bv8Ports ["o"])
-    (overPorts (bv8Ports ["x"]) (liftE [bv 8] (bv 8) (EGlobal (g k)) [var "x"]))
-    [Def (g i) (TFun (bv 8) (bv 8)) (ELam [("v", bv 8)] (body i)) | i <- [0 .. k]]
+    (overPorts (bv8Ports ["x"]) (liftE [bv 8] (bv 8) (EGlobal (doubling k)) [var "x"]))
+    (doublingDefs k)
+
+-- | The defs @T.g0 .. T.gk@ of 'doublingWork'.
+doublingDefs :: Int -> [Def]
+doublingDefs k = [Def (doubling i) (TFun (bv 8) (bv 8)) (ELam [("v", bv 8)] (body i)) | i <- [0 .. k]]
   where
-    g i = Name (Text.pack ("T.g" <> show i))
     body i
       | i <= 0 = var "v"
-      | otherwise = EApp (EGlobal (g (i - 1))) [EApp (EGlobal (g (i - 1))) [var "v"]]
+      | otherwise = EApp (EGlobal (doubling (i - 1))) [EApp (EGlobal (doubling (i - 1))) [var "v"]]
+
+-- | The name of @gi@ in 'doublingDefs'.
+doubling :: Int -> Name
+doubling i = Name (Text.pack ("T.g" <> show i))
+
+-- | A counter whose output is its input, computed with @g18@ of
+-- 'doublingDefs' (about @7 * 2^18@ steps) in the cycle where the count is
+-- 3 and directly in every other cycle.
+expensiveAtThree :: Program
+expensiveAtThree =
+  programWith
+    (bv8Ports ["x"])
+    (bv8Ports ["o"])
+    (overPorts (bv8Ports ["x"]) (mealyE (b8 0) (bv 8) (bv 8) step (var "x")))
+    (doublingDefs 18)
+  where
+    step =
+      ELam [("s", bv 8), ("i", bv 8)] $
+        ETuple
+          [ EApp (incr 8) [var "s"]
+          , EIf (bvEq8 (var "s") (ELit (b8 3))) (EApp (EGlobal (doubling 18)) [var "i"]) (var "i")
+          ]
 
 -- | Names @prefix1 .. prefixn@ bound in order, each by @step@ applied to
 -- the one before (@prefix0@ for the first).
@@ -940,12 +965,26 @@ coreLimitSpec = do
             chain "s" (sig (bv 8)) next n (var ("s" <> showText n))
     r <- settled (simulateCore prog [[b8 0], [b8 10]])
     r `shouldBe` Right [[b8 (toInteger n `mod` 256)], [b8 ((toInteger n + 10) `mod` 256)]]
-  it "[sim-budget] runs a program whose work doubles with every def while it fits" $
-    simulateCore (doublingWork 12) (replicate 4 [b8 7]) `shouldBe` Right (replicate 4 [b8 7])
-  it "[sim-budget] stops a program with 2^40 applications per cycle at the step limit" $ do
-    r <- settledWithin 120 (simulateCore (doublingWork 40) [[b8 7]])
-    r `shouldBeSimError` "simulation exceeded 268435456 evaluation steps"
+  it "[sim-budget] runs a cycle of about 7 * 2^17 steps, within the 2^20 a cycle may take" $
+    simulateCore (doublingWork 17) [[b8 7], [b8 9]] `shouldBe` Right [[b8 7], [b8 9]]
+  it "[sim-budget] stops a cycle of about 7 * 2^18 steps in cycle 0" $ do
+    r <- settled (simulateCore (doublingWork 18) [[b8 7], [b8 9]])
+    r `shouldBeSimError` "the cycle needs more than 1048576 evaluation steps"
     r `shouldBeSimError` "in cycle 0"
+  it "[sim-budget] stops a program with 2^41 applications per cycle in cycle 0" $ do
+    r <- settled (simulateCore (doublingWork 40) [[b8 7]])
+    r `shouldBeSimError` "the cycle needs more than 1048576 evaluation steps"
+    r `shouldBeSimError` "in cycle 0"
+  it "[sim-budget] gives every cycle the same budget, so only the expensive cycle fails" $ do
+    let rows = fmap (pure . b8) [10 .. 15]
+    simulateCore expensiveAtThree (take 3 rows) `shouldBe` Right (take 3 rows)
+    r <- settled (simulateCore expensiveAtThree rows)
+    r `shouldBeSimError` "the cycle needs more than 1048576 evaluation steps"
+    r `shouldBeSimError` "in cycle 3"
+  it "[sim-budget] runs 10000 cycles of about 7 * 2^12 steps, more than 2^28 steps in all" $ do
+    let rows = [[b8 (t `mod` 256)] | t <- [0 .. 9999]]
+    r <- settledWithin 120 (simulateCore (doublingWork 12) rows)
+    r `shouldBe` Right rows
   where
     showText = Text.pack . show
 

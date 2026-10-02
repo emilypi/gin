@@ -90,10 +90,19 @@ import Numeric.Natural (Natural)
 -- and is an error only if an output needs it (directly, or through a
 -- register or mealy state).
 --
--- Evaluation is bounded, so hostile input cannot run for hours: more
--- than @2^28@ evaluation steps in one run, or values and applications
--- nested more than 100000 deep (for example a recursive function that
--- never returns), are errors.
+-- Evaluation is bounded. Building the signal network may take @2^28@
+-- evaluation steps and each cycle @2^20@, so a run takes at most
+-- @2^28 + rows * 2^20@ steps; taking more, or nesting values and
+-- applications more than 100000 deep (for example in a recursive
+-- function that never returns), is an error. A step is an expression
+-- evaluated, a value computed or a function applied. A cycle may take
+-- 16 steps for each bind a normal form may have
+-- ('Gin.Limits.maxNormalBinds'), and evaluation takes about 4 steps a
+-- cycle for an operation inside a function and 8 for a @sig.lift@ node
+-- of one operation. A program that normalizes can still exceed the cycle
+-- budget if evaluating it takes far more steps than its normal form has
+-- binds: one that applies functions @2^19@ times a cycle to compute the
+-- identity, which normalizes to no binds at all, is stopped in cycle 0.
 simulateCore :: Program -> [[Value]] -> Either GinError [[Value]]
 simulateCore prog rows = do
   validateRows [(portName p, portTy p) | p <- topInputs (progTop prog)] rows
@@ -155,11 +164,17 @@ hasType what ty v
 -- Core IR: limits
 
 -- | Evaluation steps (expressions evaluated, values computed and
--- functions applied) one 'simulateCore' run may take: 4096 per bind a
--- normal form may have, @2^28@ in all. A circuit of a few thousand
--- operations can run the maximum number of vector cycles within it.
-maxSimSteps :: Int
-maxSimSteps = 4096 * maxNormalBinds
+-- functions applied) building the signal network may take: 4096 for each
+-- bind a normal form may have ('maxNormalBinds'), @2^28@ in all.
+buildSteps :: Int
+buildSteps = 4096 * maxNormalBinds
+
+-- | Evaluation steps each cycle may take: 16 for each bind a normal form
+-- may have, @2^20@ in all. Each cycle starts with the full budget, so
+-- the steps of a run grow with its rows, as the work of 'simulateNormal'
+-- does.
+cycleSteps :: Int
+cycleSteps = 16 * maxNormalBinds
 
 -- | Bound on values being computed and functions being applied at the
 -- same time. Well-typed programs without unbounded recursion stay far
@@ -323,15 +338,21 @@ tryBottom m =
     Left (Bottom l) -> pure (Left l)
     Left (Abort e) -> failWith (Abort e)
 
--- | Charge one evaluation step against 'maxSimSteps'.
+-- | Charge one evaluation step against 'buildSteps' while the network is
+-- built, and against 'cycleSteps' in a cycle.
 tick :: Eval s ()
 tick = Eval $ \sim _ -> do
   n <- readSTRef (simSteps sim)
-  if n >= maxSimSteps
-    then
+  building <- (< 0) <$> readSTRef (simCycle sim)
+  let limit = if building then buildSteps else cycleSteps
+  if n < limit
+    then Right () <$ (writeSTRef (simSteps sim) $! n + 1)
+    else
       pure . Left . Abort . simError $
-        "simulation exceeded " <> showT maxSimSteps <> " evaluation steps"
-    else Right () <$ (writeSTRef (simSteps sim) $! n + 1)
+        (if building then "building the signal network" else "the cycle")
+          <> " needs more than "
+          <> showT limit
+          <> " evaluation steps"
 
 -- | One level deeper, bounded by 'maxEvalDepth', optionally inside a new
 -- activation.
@@ -472,6 +493,7 @@ runCore prog rows = do
 -- computes the nodes in dependency order first (a node that needs a value
 -- still being computed is left for later), so long chains of signals do
 -- not nest; then reads the outputs; then computes every next state.
+-- Building and every cycle each have their own step budget.
 coreRun :: Program -> [[Value]] -> Eval s [[Value]]
 coreRun prog rows = do
   defineGlobals prog
@@ -486,7 +508,9 @@ coreRun prog rows = do
   let machines = filter stateful order
       step acc (t, row) = do
         sim <- askSim
-        liftST (writeSTRef (simCycle sim) t)
+        liftST $ do
+          writeSTRef (simCycle sim) t
+          writeSTRef (simSteps sim) 0
         zipWithM_ (\n v -> liftST (writeSTRef (nodeCell n) (Just (t, Ready (fromValue v))))) inputs row
         outs <- within ("in cycle " <> showT t) $ do
           traverse_ (\n -> tryBottom (cellOf n >>= force)) order

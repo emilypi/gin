@@ -83,7 +83,8 @@ spec = do
         unexpectedIdentifiers m (backendTestbench vhdl m (vectorsFor m (inputRows 1 2 m)))
           `shouldBe` Set.empty
     it "folds a slice of a constant instead of slicing a literal" $
-      backendRender vhdl constantSlice `shouldSatisfy` Text.isInfixOf "s <= unsigned'(\"1101\");"
+      backendRender vhdl constantSlice
+        `shouldSatisfy` Text.isInfixOf "gin_v_s := unsigned'(\"1101\");"
 
   describe "testbenches" $ do
     for_ fixtures $ \(name, m, vs) ->

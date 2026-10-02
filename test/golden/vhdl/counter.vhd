@@ -15,11 +15,16 @@ end entity counter;
 
 architecture gin_rtl of counter is
   signal s : unsigned(7 downto 0);
-  signal inc : unsigned(7 downto 0);
   signal s_next : unsigned(7 downto 0);
 begin
-  inc <= s + unsigned'("00000001");
-  s_next <= inc when en = std_logic'('1') else s;
+  process (all)
+    variable gin_v_inc : unsigned(7 downto 0);
+    variable gin_v_s_next : unsigned(7 downto 0);
+  begin
+    gin_v_inc := s + unsigned'("00000001");
+    gin_v_s_next := gin_v_inc when en = std_logic'('1') else s;
+    s_next <= gin_v_s_next;
+  end process;
 
   process (clk)
   begin

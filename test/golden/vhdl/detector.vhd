@@ -15,23 +15,30 @@ end entity detector;
 
 architecture gin_rtl of detector is
   signal s : unsigned(1 downto 0);
-  signal is0 : std_logic;
-  signal is1 : std_logic;
-  signal pick10 : unsigned(1 downto 0);
-  signal pick12 : unsigned(1 downto 0);
-  signal s_inner : unsigned(1 downto 0);
   signal s_next : unsigned(1 downto 0);
-  signal hit_inner : std_logic;
   signal o_hit : std_logic;
 begin
-  is0 <= std_logic'('1') when s = unsigned'("00") else std_logic'('0');
-  is1 <= std_logic'('1') when s = unsigned'("01") else std_logic'('0');
-  pick10 <= unsigned'("01") when b = std_logic'('1') else unsigned'("00");
-  pick12 <= unsigned'("01") when b = std_logic'('1') else unsigned'("10");
-  s_inner <= pick12 when is1 = std_logic'('1') else pick10;
-  s_next <= pick10 when is0 = std_logic'('1') else s_inner;
-  hit_inner <= std_logic'('0') when is1 = std_logic'('1') else b;
-  o_hit <= std_logic'('0') when is0 = std_logic'('1') else hit_inner;
+  process (all)
+    variable gin_v_is0 : std_logic;
+    variable gin_v_is1 : std_logic;
+    variable gin_v_pick10 : unsigned(1 downto 0);
+    variable gin_v_pick12 : unsigned(1 downto 0);
+    variable gin_v_s_inner : unsigned(1 downto 0);
+    variable gin_v_s_next : unsigned(1 downto 0);
+    variable gin_v_hit_inner : std_logic;
+    variable gin_v_o_hit : std_logic;
+  begin
+    gin_v_is0 := std_logic'('1') when s = unsigned'("00") else std_logic'('0');
+    gin_v_is1 := std_logic'('1') when s = unsigned'("01") else std_logic'('0');
+    gin_v_pick10 := unsigned'("01") when b = std_logic'('1') else unsigned'("00");
+    gin_v_pick12 := unsigned'("01") when b = std_logic'('1') else unsigned'("10");
+    gin_v_s_inner := gin_v_pick12 when gin_v_is1 = std_logic'('1') else gin_v_pick10;
+    gin_v_s_next := gin_v_pick10 when gin_v_is0 = std_logic'('1') else gin_v_s_inner;
+    gin_v_hit_inner := std_logic'('0') when gin_v_is1 = std_logic'('1') else b;
+    gin_v_o_hit := std_logic'('0') when gin_v_is0 = std_logic'('1') else gin_v_hit_inner;
+    s_next <= gin_v_s_next;
+    o_hit <= gin_v_o_hit;
+  end process;
 
   process (clk)
   begin

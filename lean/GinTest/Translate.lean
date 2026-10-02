@@ -19,11 +19,19 @@ abbrev Byte := BitVec 8
 def boolOps (a b : Signal System Bool) : Signal System (Bool × Bool × Bool × Bool × Bool × Bool) :=
   lift2 (fun a b => (a && b, a || b, a ^^ b, !a, a == b, a != b)) a b
 
-/-- Conditions built from propositions, `decide` and `bif`. -/
+/-- Conditions built from propositions, `decide` and `bif`. The last output
+is `!(a && b)`, so it observes `a = false`, `True` and `False`. -/
 def conds (a b : Signal System Bool) : Signal System (BitVec 2 × Bool × Bool × Bool) :=
   lift2 (fun (a b : Bool) =>
     (if a ∧ ¬b then 1 else if a ∨ b then 2 else 3, decide (a = b), bif a then b else !b,
-     decide (a = false ∨ True ∧ ¬False))) a b
+     decide ((a = false ∨ True ∧ ¬b) ∧ ¬False))) a b
+
+/-- Comparisons with `false` in every spelling; each output depends on how
+`a = false` is translated. -/
+def falseEqs (a b : Signal System Bool) : Signal System (Bool × Bool × Bool × Bool × Bool) :=
+  lift2 (fun (a b : Bool) =>
+    (decide (a = false), a == false, a != false, decide (a ≠ false),
+     if b = false then a else !a)) a b
 
 /-- Wrapping arithmetic. -/
 def arith (x y : Signal System Byte) : Signal System (Byte × Byte × Byte × Byte × Byte) :=
@@ -116,6 +124,7 @@ open GinTest.Ops in
 run_meta do
   checkAgrees (testEntry ``boolOps ["a", "b"] ["o1", "o2", "o3", "o4", "o5", "o6"] (.of2 boolOps))
   checkAgrees (testEntry ``conds ["a", "b"] ["o1", "o2", "o3", "o4"] (.of2 conds))
+  checkAgrees (testEntry ``falseEqs ["a", "b"] ["o1", "o2", "o3", "o4", "o5"] (.of2 falseEqs))
   checkAgrees (testEntry ``arith ["x", "y"] ["o1", "o2", "o3", "o4", "o5"] (.of2 arith))
   checkAgrees (testEntry ``bitwise ["x", "y"] ["o1", "o2", "o3", "o4", "o5", "o6", "o7"] (.of2 bitwise))
   checkAgrees (testEntry ``comparisons ["x", "y"]

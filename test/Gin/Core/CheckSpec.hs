@@ -207,6 +207,38 @@ illTypedPrims =
     )
   ]
 
+-- | Ill-formed types, each with the message fragment it is rejected with
+-- and a primitive whose annotation contains it but otherwise follows the
+-- rules in "Gin.Core.Prim".
+illFormedTypes :: [(String, Ty, Text, Expr)]
+illFormedTypes =
+  [
+    ( "a signal in another domain"
+    , TSignal "Other" TBool
+    , "domain"
+    , EPrim SigPure (TFun TBool (TSignal "Other" TBool))
+    )
+  , ("a zero-width bit vector", bv 0, "width", EPrim BvNot (TFun (bv 0) (bv 0)))
+  ,
+    ( "a bit vector wider than the maximum width"
+    , bv 4097
+    , "width"
+    , EPrim BvConcat (tFuns [bv 4096, bv 1] (bv 4097))
+    )
+  ,
+    ( "a one-component product"
+    , TProd [TBool]
+    , "product"
+    , EPrim SigPure (TFun (TProd [TBool]) (sig (TProd [TBool])))
+    )
+  ]
+
+-- | Check an expression as the first component of a pair projected away,
+-- so that its type never reaches the declared type of the definition and
+-- only the annotations inside the expression can reject it.
+checkHidden :: Expr -> Either GinError ()
+checkHidden e = checkAs (bv 8) (EProj 1 (ETuple [e, lit8 1]))
+
 ----------------------------------------------------------------------
 
 spec :: Spec
@@ -405,6 +437,19 @@ spec = do
     it "[check-rules] rejects a let bind whose value differs from its annotation" $
       rejectedWith "BitVec 4" $
         checkAs (bv 4) (ELet False [Bind "x" (bv 4) (lit8 1)] (v "x"))
+
+  describe "annotations inside expressions" $ do
+    it "[check-rules] accepts well-formed annotations in a projected-away component" $ do
+      checkHidden (EPrim SigPure (TFun TBool (sig TBool))) `shouldBe` Right ()
+      checkHidden (ELam [("x", bv 8)] (v "x")) `shouldBe` Right ()
+      checkHidden (ELet True [Bind "x" (sig TBool) (v "x")] (lit8 1)) `shouldBe` Right ()
+    for_ illFormedTypes $ \(name, t, fragment, primNode) -> do
+      it ("[check-rules] rejects a primitive annotated with " <> name) $
+        rejectedWith fragment (checkHidden primNode)
+      it ("[check-rules] rejects a lambda binder annotated with " <> name) $
+        rejectedWith fragment (checkHidden (ELam [("x", t)] (v "x")))
+      it ("[check-rules] rejects a let bind annotated with " <> name) $
+        rejectedWith fragment (checkHidden (ELet True [Bind "x" t (v "x")] (lit8 1)))
 
   describe "top entity" $ do
     for_ ["Counter", "", "module", "gin_counter", "a__b", "counter_", "9lives", "wire"] $ \name ->

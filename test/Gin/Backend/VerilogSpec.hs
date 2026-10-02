@@ -23,7 +23,7 @@ import Control.Monad (forM_)
 import Data.Bits (complement, shiftL, shiftR, xor, (.&.), (.|.))
 import Data.ByteString qualified as ByteString
 import Data.Char (isAsciiLower, isDigit, isHexDigit)
-import Data.List (mapAccumL, sort, unsnoc, (!?))
+import Data.List (mapAccumL, sort, stripPrefix, unsnoc, (!?))
 import Data.Map.Lazy qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -33,6 +33,7 @@ import Gin.Backend.Types
 import Gin.Backend.Verilog (verilog)
 import Gin.Backend.Verilog.Testbench (hexDigits, literal, sizedHex)
 import Gin.Core.Syntax (Port (..), Ty (..), Value (..))
+import Gin.Core.Type (maxWidth)
 import Gin.Examples
 import Gin.Netlist.Types
 import Gin.TestUtil
@@ -128,7 +129,7 @@ familySpec fl = do
       ls !? 2 `shouldBe` Just "module counter ("
       filter (Text.any (`elem` ['\r', '\x2028'])) ls `shouldBe` []
     it "defines exactly one module, named after the netlist" $
-      forM_ (allNetlists <> [wideNetlist, decidedNetlist]) $ \m ->
+      forM_ checkedNetlists $ \m ->
         filter ("module " `Text.isPrefixOf`) (Text.lines (render m))
           `shouldBe` ["module " <> unIdent (modName m) <> " ("]
     it "lists ports in the order clock, reset, inputs, outputs" $
@@ -139,7 +140,7 @@ familySpec fl = do
     it "prints a zero-extension to the same width as the plain operand" $
       render (oneOp (HVec 8) (HZext 8 (ref "a"))) `shouldSatisfy` Text.isInfixOf "assign n = a;"
     it "[v-coverage] prints every constant operand as a sized literal" $
-      forM_ (allNetlists <> [wideNetlist, decidedNetlist]) $ \m ->
+      forM_ checkedNetlists $ \m ->
         concatMap unsizedNumbers (codeLines (render m)) `shouldBe` []
   describe "testbench files" $ do
     forM_ examples $ \(name, m, vs) ->
@@ -261,6 +262,27 @@ familySpec fl = do
       suppressed (render decidedNetlist) `shouldBe` ["a1", "a8", "a4096", "r", "s"]
     itWithTools simTools (tag "tb-pass" <> " they simulate as the comparisons they replace") $
       simulate fl decidedNetlist decidedVectors >>= shouldPass (length (vecCycles decidedVectors))
+  describe "comparisons of nets Verilator proves constant" $ do
+    it "wrap each comparison statement, and nothing else, in UNSIGNED and CMPCONST pragmas" $ do
+      comparisonWrapped (render chainNetlist)
+        `shouldBe` Just (fmap (comparisonLine . fst) chainComparisons)
+      forM_ checkedNetlists $ \m ->
+        comparisonWrapped (render m)
+          `shouldBe` Just (filter isComparisonAssign (fmap Text.strip (Text.lines (render m))))
+    itWithTools lintTools (tag "lint" <> " at widths 1, 8 and 4096 they lint clean") $
+      lintClean fl chainNetlist
+    itWithTools ["verilator"] (tag "lint" <> " without the pragmas Verilator rejects each one") $ do
+      let design = stripComparisonPragmas (render chainNetlist)
+      design `shouldNotBe` render chainNetlist
+      warnings <- verilatorWarningLines fl chainNetlist design
+      sort warnings `shouldBe` sort [(code, comparisonLine c) | (c, code) <- chainComparisons]
+    itWithTools simTools (tag "tb-pass" <> " they simulate correctly") $
+      simulate fl chainNetlist chainVectors >>= shouldPass (length (vecCycles chainVectors))
+    itWithTools lintTools "[v-coverage] nets holding 0, 1 or all ones in any operator lint clean" $
+      lintClean fl constantNetsNetlist
+    itWithTools simTools "[v-coverage] nets holding 0, 1 or all ones in any operator simulate" $
+      simulate fl constantNetsNetlist constantNetsVectors
+        >>= shouldPass (length (vecCycles constantNetsVectors))
   where
     tag t = "[" <> flTag fl <> "-" <> t <> "]"
     b = flBackend fl
@@ -393,6 +415,35 @@ stripPragmas = Text.unlines . filter ((`notElem` [lintOff, lintOn]) . Text.strip
 lintOff, lintOn :: Text
 lintOff = "/* verilator lint_off UNUSEDSIGNAL */"
 lintOn = "/* verilator lint_on UNUSEDSIGNAL */"
+
+-- | The pragmas before and after a comparison statement.
+comparisonOff, comparisonOn :: [Text]
+comparisonOff = ["/* verilator lint_off UNSIGNED */", "/* verilator lint_off CMPCONST */"]
+comparisonOn = ["/* verilator lint_on CMPCONST */", "/* verilator lint_on UNSIGNED */"]
+
+-- | The statements wrapped one at a time in the comparison pragmas, in
+-- order, stripped; 'Nothing' when a comparison pragma is outside such a
+-- block.
+comparisonWrapped :: Text -> Maybe [Text]
+comparisonWrapped = go . fmap Text.strip . Text.lines
+  where
+    go = \case
+      [] -> Just []
+      ls
+        | Just (l : rest) <- stripPrefix comparisonOff ls
+        , Just next <- stripPrefix comparisonOn rest ->
+            (l :) <$> go next
+      l : ls
+        | l `elem` comparisonOff <> comparisonOn -> Nothing
+        | otherwise -> go ls
+
+stripComparisonPragmas :: Text -> Text
+stripComparisonPragmas =
+  Text.unlines . filter ((`notElem` comparisonOff <> comparisonOn) . Text.strip) . Text.lines
+
+-- | Whether a stripped design line assigns an unsigned comparison.
+isComparisonAssign :: Text -> Bool
+isComparisonAssign l = "assign " `Text.isPrefixOf` l && any (`Text.isInfixOf` l) [" < ", " <= "]
 
 lastWord :: Text -> Text
 lastWord = maybe "" snd . unsnoc . Text.words
@@ -566,9 +617,15 @@ examples =
 extraNetlists :: [Module]
 extraNetlists = [allOpsNetlist, combNetlist, spareNetlist]
 
--- | Every netlist of this suite except the width-4096 one.
+-- | The netlists with golden design files.
 allNetlists :: [Module]
 allNetlists = [counterNetlist, macNetlist, detectorNetlist] <> extraNetlists
+
+-- | The netlists the checks on design text run over: 'allNetlists' and
+-- the width-4096 ones.
+checkedNetlists :: [Module]
+checkedNetlists =
+  allNetlists <> [wideNetlist, decidedNetlist, chainNetlist, constantNetsNetlist]
 
 moduleName :: Module -> FilePath
 moduleName = Text.unpack . unIdent . modName
@@ -885,19 +942,157 @@ decidedNetlist =
   where
     widths = comparisonWidths
 
--- | Zero, one, all ones, the top bit alone and alternate bits in turn:
--- @a<w>@ starts at zero and @b<w>@ at all ones.
+-- | The edge values in turn: @a<w>@ starts at zero and @b<w>@ at all ones.
 decidedVectors :: Vectors
 decidedVectors = referenceVectors decidedNetlist [row i | i <- [0 .. 4]]
   where
     row :: Int -> [Value]
-    row i = concat [[VBV w (pick i w), VBV w (pick (i + 2) w)] | w <- comparisonWidths]
-    pick i w = case i `mod` 5 of
-      0 -> 0
-      1 -> 1
-      2 -> 2 ^ w - 1
-      3 -> 2 ^ (w - 1)
-      _ -> (2 ^ w - 1) `div` 3
+    row i = concat [[VBV w (edgeValue i w), VBV w (edgeValue (i + 2) w)] | w <- comparisonWidths]
+
+-- | The @i@-th of five edge values of width @w@ (cyclically): zero, one,
+-- all ones, the top bit alone, and alternate bits.
+edgeValue :: Int -> Natural -> Integer
+edgeValue i w = case i `mod` 5 of
+  0 -> 0
+  1 -> 1
+  2 -> 2 ^ w - 1
+  3 -> 2 ^ (w - 1)
+  _ -> (2 ^ w - 1) `div` 3
+
+-- | Comparisons of nets Verilator proves constant, with the warning each
+-- raises without pragmas. At every width in 'comparisonWidths', the four
+-- decided forms: @k<w> <= a<w>@, @m<w> <= a<w>@ and @a<w> < m<w>@ with
+-- net @k<w>@ assigned zero (as the netlist builder does for a shift by
+-- the full width) and net @m<w>@ = @b<w> & 0@; @x<w> <= fo<w>@ and
+-- @fo<w> < x<w>@ with net @fo<w>@ all ones (the comparison @0 <= a<w>@,
+-- folded to @1'b1@, through 'HBitToVec', zero-extended and negated); and
+-- @x1 <= fv<w>@, the 1-bit comparison with that 'HBitToVec' net.
+chainComparisons :: [(Comparison, Text)]
+chainComparisons =
+  concat
+    [ [ ((k <> "_le_" <> a, ref k, Le, ref a), "UNSIGNED")
+      , ((m <> "_le_" <> a, ref m, Le, ref a), "UNSIGNED")
+      , ((a <> "_lt_" <> m, ref a, Lt, ref m), "UNSIGNED")
+      , ((x <> "_le_" <> fo, ref x, Le, ref fo), "CMPCONST")
+      , ((fo <> "_lt_" <> x, ref fo, Lt, ref x), "CMPCONST")
+      , (("x1_le_" <> fv, ref "x1", Le, ref fv), "CMPCONST")
+      ]
+    | w <- comparisonWidths
+    , let ChainNames {cnA = a, cnX = x, cnK = k, cnM = m, cnFv = fv, cnFo = fo} = chainNames w
+    ]
+
+-- | Names of the inputs and helper nets 'chainNetlist' uses at one width.
+data ChainNames = ChainNames
+  { cnA, cnB, cnX, cnK, cnM, cnF, cnFv, cnFz, cnFo :: Text
+  }
+
+chainNames :: Natural -> ChainNames
+chainNames w =
+  ChainNames
+    { cnA = at "a"
+    , cnB = at "b"
+    , cnX = at "x"
+    , cnK = at "k"
+    , cnM = at "m"
+    , cnF = at "f"
+    , cnFv = at "fv"
+    , cnFz = at "fz"
+    , cnFo = at "fo"
+    }
+  where
+    at p = p <> showText w
+
+-- | Every comparison of 'chainComparisons' as an output, after the nets
+-- they compare. No registers.
+chainNetlist :: Module
+chainNetlist =
+  mkModule
+    "chain"
+    [net (n (chainNames w)) (HVec w) | w <- comparisonWidths, n <- [cnA, cnB, cnX]]
+    [Output (net ("o_" <> n) HBit) (ref n) | ((n, _, _, _), _) <- chainComparisons]
+    ( concatMap helpers comparisonWidths
+        <> [DAssign (net n HBit) (HBin (cmpOp op) l r) | ((n, l, op, r), _) <- chainComparisons]
+    )
+  where
+    helpers w =
+      let ns = chainNames w
+          v = HVec w
+       in [ DAssign (net (cnK ns) v) (HOperand (zero w))
+          , DAssign (net (cnM ns) v) (HBin BAnd (ref (cnB ns)) (zero w))
+          , DAssign (net (cnF ns) HBit) (HBin BUle (zero w) (ref (cnA ns)))
+          , DAssign (net (cnFv ns) (HVec 1)) (HBitToVec (ref (cnF ns)))
+          , DAssign (net (cnFz ns) v) (HZext w (ref (cnFv ns)))
+          , DAssign (net (cnFo ns) v) (HUn UNeg (ref (cnFz ns)))
+          ]
+
+chainVectors :: Vectors
+chainVectors = referenceVectors chainNetlist [row i | i <- [0 .. 4]]
+  where
+    row :: Int -> [Value]
+    row i = [VBV w (edgeValue (i + j) w) | w <- comparisonWidths, j <- [0, 1, 3]]
+
+-- | Nets holding 0, 1 and all ones at every width in 'comparisonWidths',
+-- and nets holding each Bool, each fed into every operator next to an
+-- input, with every shift amount, slice and widening the width allows.
+-- Every net is an output.
+constantNetsNetlist :: Module
+constantNetsNetlist =
+  mkModule "constnets" inputs (observeAll decls) decls
+  where
+    inputs = net "p" HBit : [net (input w) (HVec w) | w <- widths]
+    widths = comparisonWidths
+    input w = "a" <> showText w
+    constant w c = "k" <> c <> showText w
+    values :: Natural -> [(Text, Integer)]
+    values w = [("z", 0), ("u", 1), ("f", 2 ^ w - 1)]
+    decls = constants <> zipWith numbered [0 :: Int ..] exprs
+    numbered i (ty, e) = DAssign (net ("n" <> Text.pack (show i)) ty) e
+    constants =
+      [ DAssign (net (constant w c) (HVec w)) (HOperand (vecC w x))
+      | w <- widths
+      , (c, x) <- values w
+      ]
+        <> [ DAssign (net "bz" HBit) (HOperand (bitC False))
+           , DAssign (net "bo" HBit) (HOperand (bitC True))
+           ]
+    exprs =
+      concat [vectorUses w (ref (constant w c)) | w <- widths, (c, _) <- values w]
+        <> concatMap bitUses [ref "bz", ref "bo"]
+    vectorUses w k =
+      let v = HVec w
+          a = ref (input w)
+          resultTy op = if op `elem` [BEq, BUlt, BUle] then HBit else v
+          shifts = if w == 1 then [0] else [1, w - 1]
+       in concat [[(resultTy op, HBin op k a), (resultTy op, HBin op a k)] | op <- allBinOps]
+            <> [ (v, HUn UNot k)
+               , (v, HUn UNeg k)
+               , (v, HMux (ref "p") k a)
+               , (v, HMux (ref "p") a k)
+               , (HVec 1, HSlice 0 0 k)
+               , (v, HSlice (w - 1) 0 k)
+               , (v, HZext w k)
+               ]
+            <> [(v, HShl s k) | s <- shifts]
+            <> [(v, HLshr s k) | s <- shifts]
+            <> [(HVec (w - 1), HSlice (w - 1) 1 k) | w > 1]
+            <> [(HVec (w + 4), HZext (w + 4) k) | w + 4 <= maxWidth]
+            <> [(HVec (2 * w), e) | 2 * w <= maxWidth, e <- [HConcat k a, HConcat a k]]
+    allBinOps = [minBound .. maxBound]
+    bitUses b =
+      [(HBit, HBin op b (ref "p")) | op <- [BAnd, BOr, BXor, BEq]]
+        <> [(HBit, HBin op (ref "p") b) | op <- [BAnd, BOr, BXor, BEq]]
+        <> [ (HBit, HUn UNot b)
+           , (HVec 1, HBitToVec b)
+           , (HVec 8, HMux b (ref "a8") (ref (constant 8 "u")))
+           , (HBit, HMux b (ref "p") (bitC True))
+           ]
+
+-- | Every edge value of each input in turn, with @p@ alternating.
+constantNetsVectors :: Vectors
+constantNetsVectors = referenceVectors constantNetsNetlist [row i | i <- [0 .. 4]]
+  where
+    row :: Int -> [Value]
+    row i = VBool (odd i) : [VBV w (edgeValue i w) | w <- comparisonWidths]
 
 ----------------------------------------------------------------------
 -- Vector edits

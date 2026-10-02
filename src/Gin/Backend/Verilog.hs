@@ -15,21 +15,36 @@
 -- constant (excluded by the netlist invariants) is folded to a literal,
 -- since Verilog cannot slice a literal.
 --
--- A comparison that its constant operand decides on its own (@0 <= x@,
--- @x < 0@, @x <= 2^n-1@, @2^n-1 < x@ for an n-bit @x@) is printed as its
--- one-bit result: Verilator @-Wall@ rejects those four forms at every
--- width when @x@ is a signal (UNSIGNED for the zero forms, CMPCONST for
--- the all-ones forms), and accepts comparisons with any other constant.
--- The other operand of a folded comparison is not read there
--- ('printedExpr').
+-- Verilator @-Wall@ rejects four comparison forms over an n-bit @x@,
+-- unless both operands are literals: UNSIGNED for @0 <= x@ and @x < 0@,
+-- CMPCONST for @x <= 2^n-1@ and @2^n-1 < x@. Comparisons are handled in
+-- two steps:
 --
--- The output passes @verilator --lint-only -Wall@. The only warnings it
--- would otherwise raise are for signals some bit of which nothing reads:
--- the clock and reset of a register-free module, unread inputs, signals
--- read only by folded comparisons, and signals read only through slices
--- that leave bits out. Exactly those declarations are wrapped in
--- @verilator lint_off UNUSEDSIGNAL@ / @lint_on@ pragmas; nothing is
--- suppressed file-wide.
+-- * A comparison in one of those forms with a literal zero or all ones
+--   is printed as its one-bit result, and its other operand is not read
+--   there ('printedExpr').
+--
+-- * Verilator also propagates constants through continuous assignments
+--   (a net assigned a literal, @b & 0@, @a ^ a@, a folded comparison
+--   widened and negated, and so on), so a net can supply the zero or the
+--   all ones as well. Rather than predict which nets it proves constant,
+--   every comparison still printed as one is wrapped in
+--   @verilator lint_off UNSIGNED@ and @lint_off CMPCONST@ pragmas, closed
+--   by the matching @lint_on@ right after its @assign@
+--   ('comparisonPragmas').
+--
+-- The output passes @verilator --lint-only -Wall@ (Verilator 5.052).
+-- Besides those comparison warnings, the only warnings it would raise
+-- are for signals some bit of which nothing reads: the clock and reset
+-- of a register-free module, unread inputs, signals read only by folded
+-- comparisons, and signals read only through slices that leave bits
+-- out. Exactly those declarations are wrapped in
+-- @verilator lint_off UNUSEDSIGNAL@ / @lint_on@ pragmas. Every
+-- suppression covers one declaration or one statement; nothing is
+-- suppressed file-wide. That constants propagated into any operator
+-- other than a comparison raise no warning is measured, not derived: the
+-- test suite lints nets holding 0, 1 and all ones fed into every
+-- operator at widths 1, 8 and 4096.
 module Gin.Backend.Verilog
   ( verilog
   , renderDesign
@@ -107,7 +122,11 @@ renderDesign dialect m =
           (Verilog2005, DAssign {}) -> "wire "
           (Verilog2005, DReg {}) -> "reg "
     statement = fmap indent . \case
-      DAssign n e -> ["assign " <> name n <> " = " <> expression nets (printedExpr e) <> ";"]
+      DAssign n e ->
+        let printed = printedExpr e
+         in comparisonPragmas
+              printed
+              ["assign " <> name n <> " = " <> expression nets printed <> ";"]
       DReg n r o ->
         [ always <> " @(posedge " <> unIdent (modClock m) <> ") begin"
         , indent ("if (" <> unIdent (modReset m) <> ") begin")
@@ -157,6 +176,19 @@ printedExpr = \case
     width = hwWidth . hlitType
     isZero l = value l == 0
     isAllOnes l = value l == 2 ^ width l - 1
+
+-- | Wrap the statement printing the given expression, when that is an
+-- unsigned comparison, in pragmas turning off Verilator's warnings for a
+-- comparison it decides at compile time (see the module header). The
+-- pragmas cover only that statement; every other one is unchanged.
+comparisonPragmas :: HExpr -> [Text] -> [Text]
+comparisonPragmas e ls = case e of
+  HBin op _ _ | op `elem` [BUlt, BUle] -> fmap (pragma "off") codes <> ls <> fmap (pragma "on") back
+  _ -> ls
+  where
+    codes = ["UNSIGNED", "CMPCONST"]
+    back = reverse codes
+    pragma onOff code = "/* verilator lint_" <> onOff <> " " <> code <> " */"
 
 -- | The right-hand side of a continuous assignment.
 expression :: Map Ident HwType -> HExpr -> Text

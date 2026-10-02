@@ -28,6 +28,7 @@ import Data.Map.Lazy qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
+import Data.Text.Read qualified as TextRead
 import Gin.Backend.Types
 import Gin.Backend.Verilog (verilog)
 import Gin.Backend.Verilog.Testbench (hexDigits, literal, sizedHex)
@@ -127,7 +128,7 @@ familySpec fl = do
       ls !? 2 `shouldBe` Just "module counter ("
       filter (Text.any (`elem` ['\r', '\x2028'])) ls `shouldBe` []
     it "defines exactly one module, named after the netlist" $
-      forM_ (allNetlists <> [wideNetlist]) $ \m ->
+      forM_ (allNetlists <> [wideNetlist, decidedNetlist]) $ \m ->
         filter ("module " `Text.isPrefixOf`) (Text.lines (render m))
           `shouldBe` ["module " <> unIdent (modName m) <> " ("]
     it "lists ports in the order clock, reset, inputs, outputs" $
@@ -138,7 +139,7 @@ familySpec fl = do
     it "prints a zero-extension to the same width as the plain operand" $
       render (oneOp (HVec 8) (HZext 8 (ref "a"))) `shouldSatisfy` Text.isInfixOf "assign n = a;"
     it "[v-coverage] prints every constant operand as a sized literal" $
-      forM_ (allNetlists <> [wideNetlist]) $ \m ->
+      forM_ (allNetlists <> [wideNetlist, decidedNetlist]) $ \m ->
         concatMap unsizedNumbers (codeLines (render m)) `shouldBe` []
   describe "testbench files" $ do
     forM_ examples $ \(name, m, vs) ->
@@ -242,6 +243,24 @@ familySpec fl = do
         sort warnings `shouldBe` sort (fmap ("UNUSEDSIGNAL",) (suppressed (render m)))
     itWithTools simTools "[v-unused] a register-free module simulates correctly" $
       simulate fl combNetlist combVectors >>= shouldPass (length (vecCycles combVectors))
+  describe "comparisons a constant operand decides" $ do
+    it "print as their one-bit result, other comparisons as comparisons" $ do
+      let isComparison l = any (\c -> assignPrefix c `Text.isPrefixOf` l) allComparisons
+      filter isComparison (fmap Text.strip (Text.lines (render decidedNetlist)))
+        `shouldBe` fmap foldedLine decidedComparisons <> fmap comparisonLine liveComparisons
+    itWithTools lintTools (tag "lint" <> " at widths 1, 8 and 4096 they lint clean") $
+      lintClean fl decidedNetlist
+    itWithTools ["verilator"] (tag "lint" <> " printed as comparisons, Verilator rejects them") $ do
+      let unfold d = Text.replace (foldedLine d) (comparisonLine (dcComparison d))
+          design = foldr unfold (render decidedNetlist) decidedComparisons
+      design `shouldNotBe` render decidedNetlist
+      warnings <- verilatorWarningLines fl decidedNetlist design
+      sort warnings
+        `shouldBe` sort [(dcWarning d, comparisonLine (dcComparison d)) | d <- decidedComparisons]
+    it "[v-unused] suppresses exactly the signals that only those comparisons read" $
+      suppressed (render decidedNetlist) `shouldBe` ["a1", "a8", "a4096", "r", "s"]
+    itWithTools simTools (tag "tb-pass" <> " they simulate as the comparisons they replace") $
+      simulate fl decidedNetlist decidedVectors >>= shouldPass (length (vecCycles decidedVectors))
   where
     tag t = "[" <> flTag fl <> "-" <> t <> "]"
     b = flBackend fl
@@ -280,18 +299,46 @@ lintClean fl m = withTempDir $ \dir -> do
   icarusRun <- runTool dir "iverilog" [flIcarusStd fl, "-o", "/dev/null", file]
   combined icarusRun `shouldBe` (ExitSuccess, "")
 
--- | Verilator @-Wall@ warnings on a design text, as (code, signal) pairs.
+-- | Verilator @-Wall@ warnings on a design text, as (code, signal) pairs:
+-- the signal is the first quoted name in the message.
 verilatorWarnings :: Flavour -> Module -> Text -> IO [(Text, Text)]
-verilatorWarnings fl m design = withTempDir $ \dir -> do
+verilatorWarnings fl m design = do
+  diagnostics <- verilatorDiagnostics fl m design
+  pure
+    [ (code, Text.takeWhile (/= '\'') (Text.drop 1 (snd (Text.breakOn "'" msg))))
+    | (code, _, msg) <- diagnostics
+    ]
+
+-- | Verilator @-Wall@ warnings on a design text, as (code, source line)
+-- pairs: the source line is the stripped design line the warning points
+-- at, or empty when the warning names no line.
+verilatorWarningLines :: Flavour -> Module -> Text -> IO [(Text, Text)]
+verilatorWarningLines fl m design = do
+  diagnostics <- verilatorDiagnostics fl m design
+  pure
+    [ (code, maybe "" Text.strip (lineNo >>= \n -> Text.lines design !? (n - 1)))
+    | (code, lineNo, _) <- diagnostics
+    ]
+
+-- | Every Verilator @-Wall@ warning on a design text, as its code, the
+-- line it points at (when it names one) and its message.
+verilatorDiagnostics :: Flavour -> Module -> Text -> IO [(Text, Maybe Int, Text)]
+verilatorDiagnostics fl m design = withTempDir $ \dir -> do
   let file = designFile fl (unIdent (modName m))
   writeUtf8 (dir </> file) design
   (_, out, err) <- runTool dir "verilator" (verilatorArgs fl file)
   pure
-    [ (code, Text.takeWhile (/= '\'') (Text.drop 1 (snd (Text.breakOn "'" msg))))
+    [ diagnostic code (Text.drop 1 body)
     | l <- Text.lines (out <> err)
     , Just rest <- [Text.stripPrefix "%Warning-" l]
-    , let (code, msg) = Text.breakOn ":" rest
+    , let (code, body) = Text.breakOn ":" rest
     ]
+  where
+    -- @<file>:<line>:<column>: <message>@
+    diagnostic code body = case Text.splitOn ":" body of
+      _ : lineText : _ : msg
+        | Right (n, "") <- TextRead.decimal lineText -> (code, Just n, Text.intercalate ":" msg)
+      _ -> (code, Nothing, body)
 
 -- | Compile the design and testbench with iverilog, which must be silent,
 -- and run the result under vvp.
@@ -735,6 +782,122 @@ spareNetlist =
     ]
   where
     v8 = HVec 8
+
+-- | A comparison net: its name, left operand, operator and right operand.
+type Comparison = (Text, Operand, Cmp, Operand)
+
+-- | The unsigned comparison operators.
+data Cmp = Lt | Le
+
+cmpOp :: Cmp -> BinOp
+cmpOp = \case
+  Lt -> BUlt
+  Le -> BUle
+
+-- | A comparison its constant operand decides on its own.
+data Decided = Decided
+  { dcComparison :: Comparison
+  , dcResult :: Bool
+  , dcWarning :: Text
+  -- ^ The Verilator @-Wall@ warning it raises when printed as a comparison.
+  }
+
+-- | The widths 'decidedNetlist' compares at.
+comparisonWidths :: [Natural]
+comparisonWidths = [1, 8, 4096]
+
+-- | At every width in 'comparisonWidths': @0 <= a@, @a < 0@, @a <= ones@
+-- and @ones < a@ over input @a<w>@; and @r < 0@ over a register and
+-- @s <= ones@ over a combinational net.
+decidedComparisons :: [Decided]
+decidedComparisons =
+  concat
+    [ [ Decided ("zero_le_" <> a, zero w, Le, ref a) True "UNSIGNED"
+      , Decided (a <> "_lt_zero", ref a, Lt, zero w) False "UNSIGNED"
+      , Decided (a <> "_le_ones", ref a, Le, allOnes w) True "CMPCONST"
+      , Decided ("ones_lt_" <> a, allOnes w, Lt, ref a) False "CMPCONST"
+      ]
+    | w <- comparisonWidths
+    , let a = "a" <> showText w
+    ]
+    <> [ Decided ("r_lt_zero", ref "r", Lt, zero 8) False "UNSIGNED"
+       , Decided ("s_le_ones", ref "s", Le, allOnes 8) True "CMPCONST"
+       ]
+
+-- | Comparisons with the same constants, or with one, whose result
+-- depends on input @b<w>@.
+liveComparisons :: [Comparison]
+liveComparisons =
+  concat
+    [ [ ("zero_lt_" <> b, zero w, Lt, ref b)
+      , (b <> "_le_zero", ref b, Le, zero w)
+      , ("ones_le_" <> b, allOnes w, Le, ref b)
+      , (b <> "_lt_ones", ref b, Lt, allOnes w)
+      , (b <> "_lt_one", ref b, Lt, vecC w 1)
+      ]
+    | w <- comparisonWidths
+    , let b = "b" <> showText w
+    ]
+
+allComparisons :: [Comparison]
+allComparisons = fmap dcComparison decidedComparisons <> liveComparisons
+
+zero, allOnes :: Natural -> Operand
+zero w = vecC w 0
+allOnes w = vecC w (2 ^ w - 1)
+
+showText :: Natural -> Text
+showText = Text.pack . show
+
+-- | The @assign@ statement of a comparison net, without the folding.
+comparisonLine :: Comparison -> Text
+comparisonLine c@(_, l, op, r) =
+  assignPrefix c <> operandText l <> " " <> symbol <> " " <> operandText r <> ";"
+  where
+    symbol = case op of
+      Lt -> "<"
+      Le -> "<="
+    operandText = \case
+      ORef i -> unIdent i
+      OConst k -> literal k
+
+-- | The @assign@ statement of a decided comparison net, folded.
+foldedLine :: Decided -> Text
+foldedLine d = assignPrefix (dcComparison d) <> literal (HLitBit (dcResult d)) <> ";"
+
+assignPrefix :: Comparison -> Text
+assignPrefix (n, _, _, _) = "assign " <> n <> " = "
+
+-- | Every comparison of 'decidedComparisons' and 'liveComparisons' as an
+-- output. Inputs @a<w>@, register @r@ and net @s@ are read only by
+-- decided comparisons.
+decidedNetlist :: Module
+decidedNetlist =
+  mkModule
+    "decided"
+    (concat [[net ("a" <> showText w) (HVec w), net ("b" <> showText w) (HVec w)] | w <- widths])
+    [Output (net ("o_" <> n) HBit) (ref n) | (n, _, _, _) <- allComparisons]
+    ( [ DReg (net "r" (HVec 8)) (HLitVec 8 0) (ref "b8")
+      , DAssign (net "s" (HVec 8)) (HBin BSub (ref "b8") (vecC 8 1))
+      ]
+        <> [DAssign (net n HBit) (HBin (cmpOp op) l r) | (n, l, op, r) <- allComparisons]
+    )
+  where
+    widths = comparisonWidths
+
+-- | Zero, one, all ones, the top bit alone and alternate bits in turn:
+-- @a<w>@ starts at zero and @b<w>@ at all ones.
+decidedVectors :: Vectors
+decidedVectors = referenceVectors decidedNetlist [row i | i <- [0 .. 4]]
+  where
+    row :: Int -> [Value]
+    row i = concat [[VBV w (pick i w), VBV w (pick (i + 2) w)] | w <- comparisonWidths]
+    pick i w = case i `mod` 5 of
+      0 -> 0
+      1 -> 1
+      2 -> 2 ^ w - 1
+      3 -> 2 ^ (w - 1)
+      _ -> (2 ^ w - 1) `div` 3
 
 ----------------------------------------------------------------------
 -- Vector edits

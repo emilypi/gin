@@ -15,12 +15,21 @@
 -- constant (excluded by the netlist invariants) is folded to a literal,
 -- since Verilog cannot slice a literal.
 --
+-- A comparison that its constant operand decides on its own (@0 <= x@,
+-- @x < 0@, @x <= 2^n-1@, @2^n-1 < x@ for an n-bit @x@) is printed as its
+-- one-bit result: Verilator @-Wall@ rejects those four forms at every
+-- width when @x@ is a signal (UNSIGNED for the zero forms, CMPCONST for
+-- the all-ones forms), and accepts comparisons with any other constant.
+-- The other operand of a folded comparison is not read there
+-- ('printedExpr').
+--
 -- The output passes @verilator --lint-only -Wall@. The only warnings it
 -- would otherwise raise are for signals some bit of which nothing reads:
--- the clock and reset of a register-free module, unread inputs, and
--- signals read only through slices that leave bits out. Exactly those
--- declarations are wrapped in @verilator lint_off UNUSEDSIGNAL@ /
--- @lint_on@ pragmas; nothing is suppressed file-wide.
+-- the clock and reset of a register-free module, unread inputs, signals
+-- read only by folded comparisons, and signals read only through slices
+-- that leave bits out. Exactly those declarations are wrapped in
+-- @verilator lint_off UNUSEDSIGNAL@ / @lint_on@ pragmas; nothing is
+-- suppressed file-wide.
 module Gin.Backend.Verilog
   ( verilog
   , renderDesign
@@ -98,7 +107,7 @@ renderDesign dialect m =
           (Verilog2005, DAssign {}) -> "wire "
           (Verilog2005, DReg {}) -> "reg "
     statement = fmap indent . \case
-      DAssign n e -> ["assign " <> name n <> " = " <> expression nets e <> ";"]
+      DAssign n e -> ["assign " <> name n <> " = " <> expression nets (printedExpr e) <> ";"]
       DReg n r o ->
         [ always <> " @(posedge " <> unIdent (modClock m) <> ") begin"
         , indent ("if (" <> unIdent (modReset m) <> ") begin")
@@ -129,6 +138,25 @@ operand :: Operand -> Text
 operand = \case
   ORef i -> unIdent i
   OConst l -> literal l
+
+-- | The expression a continuous assignment prints, and whose operands
+-- count as read: a comparison its constant operand decides becomes its
+-- one-bit result (see the module header); every other expression is
+-- unchanged.
+printedExpr :: HExpr -> HExpr
+printedExpr = \case
+  HBin BUle (OConst l) _ | isZero l -> decided True
+  HBin BUlt _ (OConst l) | isZero l -> decided False
+  HBin BUle _ (OConst l) | isAllOnes l -> decided True
+  HBin BUlt (OConst l) _ | isAllOnes l -> decided False
+  e -> e
+  where
+    decided = HOperand . OConst . HLitBit
+    -- The value 'literal' prints, which is reduced modulo 2^width.
+    value l = litBits l `mod` (2 ^ width l)
+    width = hwWidth . hlitType
+    isZero l = value l == 0
+    isAllOnes l = value l == 2 ^ width l - 1
 
 -- | The right-hand side of a continuous assignment.
 expression :: Map Ident HwType -> HExpr -> Text
@@ -187,8 +215,9 @@ minus a b = if a >= b then a - b else 0
 
 -- | Signals some bit of which no declaration or output reads: the clock
 -- and reset when there is no register, and every input or declared net
--- whose reads (whole operands, or bit ranges through slices) leave a
--- bit out.
+-- whose reads in the printed design (whole operands, or bit ranges
+-- through slices; none in a folded comparison, see 'printedExpr') leave
+-- a bit out.
 notFullyRead :: Module -> Set Ident
 notFullyRead m =
   Set.fromList $
@@ -210,9 +239,9 @@ notFullyRead m =
         ]
     declReads = \case
       DReg _ _ o -> whole o
-      DAssign _ e -> case e of
+      DAssign _ e -> case printedExpr e of
         HSlice hi lo (ORef i) -> [(i, Just (lo, hi))]
-        _ -> concatMap whole (exprOperands e)
+        printed -> concatMap whole (exprOperands printed)
     whole = \case
       ORef i -> [(i, Nothing)]
       OConst _ -> []

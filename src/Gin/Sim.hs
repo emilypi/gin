@@ -5,15 +5,19 @@
 -- with the Lean model and the HDL simulation) is evidence that the
 -- compiler preserved the meaning of the program.
 --
--- 'simulateCore' is a denotational interpreter of the core IR. A signal
--- denotes a lazy stream with one element per cycle, a function denotes a
--- Haskell closure, and a recursive @let@ ties the knot through those lazy
--- streams. Before any stream element is demanded, the interpreter checks
--- that every feedback loop passes through @sig.register@: each signal
--- carries the set of recursive binders its current-cycle value depends
--- on (@sig.register@ resets that set, @sig.lift@ and @sig.mealy@ propagate
--- it from their inputs), and a binder that reaches itself is reported as
--- not productive instead of looping.
+-- 'simulateCore' is an interpreter of the core IR. It first applies the
+-- top entity to its input signals, which builds the network of signals
+-- the program describes (inputs and @sig.pure@, @sig.lift@,
+-- @sig.register@ and @sig.mealy@ nodes), and then runs that network one
+-- cycle at a time. Values are computed by need, each at most once per
+-- cycle. To keep long chains of values from nesting deeply, arguments,
+-- @let@ binds and tuple components are computed as soon as they are
+-- bound, unless they need a value that is still being computed; those
+-- are computed when used. A value that is needed again while it is still
+-- being computed depends on itself within the cycle: that is reported as
+-- a recursive let that is not productive, instead of looping. At the end
+-- of each cycle the next state of every register and mealy machine is
+-- computed, so a cycle never needs the values of an earlier one.
 --
 -- 'simulateNormal' runs the normal form cycle by cycle: register state in
 -- a map, binds evaluated in order, outputs read, then registers updated.
@@ -22,15 +26,17 @@ module Gin.Sim
   , simulateNormal
   ) where
 
-import Control.Monad (foldM, unless, when, zipWithM, zipWithM_)
+import Control.Applicative ((<|>))
+import Control.Monad (ap, foldM, unless, when, zipWithM, zipWithM_, (>=>))
+import Control.Monad.ST (ST, runST)
+import Data.Foldable (traverse_)
 import Data.Graph (SCC (..), stronglyConnComp)
-import Data.List (genericDrop, transpose, uncons)
+import Data.List (genericDrop)
 import Data.List.NonEmpty qualified as NonEmpty
-import Data.Map.Lazy qualified as LMap
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
-import Data.Set (Set)
+import Data.Maybe (listToMaybe)
+import Data.STRef (STRef, newSTRef, readSTRef, writeSTRef)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -52,7 +58,8 @@ import Gin.Core.Syntax
   , validValue
   , valueTy
   )
-import Gin.Error (GinError, Stage (StSim), ginError, withContext)
+import Gin.Error (GinError (..), Stage (StSim), ginError, withContext)
+import Gin.Limits (maxNormalBinds)
 import Gin.Sim.Prim (evalPrim)
 import Numeric.Natural (Natural)
 
@@ -64,27 +71,34 @@ import Numeric.Natural (Natural)
 --
 -- Rows are validated before anything is evaluated. A top entity with
 -- several outputs must return the right-nested product of
--- @docs/semantics.md@; output @j@ is read along that spine. Only signals,
--- and tuples of signals, may be defined in terms of themselves by a
--- recursive @let@: recursion through a plain value or a function is
--- rejected rather than evaluated. Evaluation deeper than 100000 nested
--- applications is reported as an error instead of exhausting the stack.
+-- @docs/semantics.md@; output @j@ is read along that spine.
+--
+-- Results are those of evaluation by need: a value matters only if an
+-- output, a register or mealy state, or another such value needs it, and
+-- @if@ needs its condition and then one branch. A recursive @let@
+-- therefore denotes the solution of its equations whenever every value
+-- can be computed without needing itself within the same cycle. Feedback
+-- through @sig.register@ or the state of @sig.mealy@ always qualifies,
+-- and so do, for example, @p = (7, p.0)@, a @sig.lift@ whose function
+-- ignores the argument that is fed back, and a @sig.mealy@ machine whose
+-- output depends only on its state while its input is computed from that
+-- output. When the condition of an @if@ needs the value being computed,
+-- the @if@ still has a value if both branches agree on it, component by
+-- component for tuples: the output of
+-- @\\s e -> if e then (s + 1, s) else (s, s)@ is @s@ whatever @e@ is.
+-- Any other value that needs itself within a cycle is not productive,
+-- and is an error only if an output needs it (directly, or through a
+-- register or mealy state).
+--
+-- Evaluation is bounded, so hostile input cannot run for hours: more
+-- than @2^28@ evaluation steps in one run, or values and applications
+-- nested more than 100000 deep (for example a recursive function that
+-- never returns), are errors.
 simulateCore :: Program -> [[Value]] -> Either GinError [[Value]]
 simulateCore prog rows = do
-  let top = progTop prog
-      inputs = topInputs top
-  validateRows [(portName p, portTy p) | p <- inputs] rows
-  globals <- globalEnv prog
-  topValue <-
-    fromMaybe
-      (Left (simError ("top entity def " <> unName (topDef top) <> " is not defined")))
-      (Map.lookup (topDef top) globals)
-  let columns = take (length inputs) (transpose rows <> repeat [])
-      inputSignals = [DSig (Sig Set.empty (fmap (Right . fromValue) col)) | col <- columns]
-  out <-
-    withContext ("in def " <> unName (topDef top)) $
-      applyAll 0 topValue inputSignals >>= asSignal "the top entity's result"
-  readOutputs (topOutputs top) (length rows) (sigStream out)
+  validateRows [(portName p, portTy p) | p <- topInputs (progTop prog)] rows
+  noGlobalRecursion prog
+  runST (runCore prog rows)
 
 -- | Simulate a normal-form module, same row conventions.
 --
@@ -138,323 +152,709 @@ hasType what ty v
   | otherwise = Left (simError (what <> ": expected type " <> showT ty <> ", got " <> showT v))
 
 ----------------------------------------------------------------------
--- Core IR: semantic domain
+-- Core IR: limits
 
--- | Identity of a recursive binder's signal: the evaluation depth of its
--- @let@ and the index of the signal among the leaves of that @let@'s
--- binders. Lets that are open at the same time have distinct depths.
-type Placeholder = (Int, Int)
+-- | Evaluation steps (expressions evaluated, values computed and
+-- functions applied) one 'simulateCore' run may take: 4096 per bind a
+-- normal form may have, @2^28@ in all. A circuit of a few thousand
+-- operations can run the maximum number of vector cycles within it.
+maxSimSteps :: Int
+maxSimSteps = 4096 * maxNormalBinds
 
--- | Denotation of a core IR expression.
-data D
-  = DBool !Bool
-  | DBV !Natural !Integer
-  | DTuple ![D]
-  | -- | A closure; the 'Int' is the evaluation depth of the application.
-    DFun !(Int -> D -> Either GinError D)
-  | DSig !Sig
-
-data Sig = Sig
-  { sigDeps :: !(Set Placeholder)
-  -- ^ Recursive binders this signal's value depends on within one cycle.
-  , sigStream :: [Either GinError D]
-  -- ^ One element per cycle, produced lazily.
-  }
-
--- | The evaluation context: global defs, and the depth of the current
--- application (bounded by 'maxEvalDepth').
-data Ctx = Ctx
-  { ctxGlobals :: Map Name (Either GinError D)
-  , ctxDepth :: !Int
-  }
-
-type Env = Map Name D
-
--- | Bound on nested applications. Well-typed programs without recursion
--- among globals stay far below it; it turns runaway evaluation of
--- malformed input into an error.
+-- | Bound on values being computed and functions being applied at the
+-- same time. Well-typed programs without unbounded recursion stay far
+-- below it; it keeps runaway recursion from exhausting the stack.
 maxEvalDepth :: Int
 maxEvalDepth = 100000
 
-fromValue :: Value -> D
+-- | Context lines kept on an error raised inside nested evaluation.
+maxContextLines :: Int
+maxContextLines = 16
+
+----------------------------------------------------------------------
+-- Core IR: semantic domain
+
+-- | Denotation of a core IR expression, in weak head normal form.
+data D s
+  = DBool !Bool
+  | DBV !Natural !Integer
+  | DTuple ![Thunk s]
+  | -- | A closure, applied to an argument that may not be computed yet.
+    DFun !(Thunk s -> Eval s (D s))
+  | DSig !(Node s)
+
+-- | A value that may not have been computed yet.
+data Thunk s
+  = Ready !(D s)
+  | -- | A register or mealy state component that was not productive.
+    Undefined !(Loop s)
+  | Lazy !(Cell s)
+
+-- | A value computed when it is first needed.
+data Cell s = Cell
+  { cellLabel :: !(Maybe Text)
+  -- ^ The recursive binder this value belongs to, named in loop errors.
+  , cellContext :: !(Maybe Text)
+  -- ^ Context added to an error raised while computing the value.
+  , cellState :: !(STRef s (CellState s))
+  }
+
+data CellState s
+  = -- | Not computed yet. A 'Guard' records an earlier attempt that
+    -- needed a value still being computed, and when it would fail again.
+    Pending !(Maybe (Guard s)) (Eval s (D s))
+  | -- | Being computed, by the activation with this number.
+    Running !Int
+  | Done (D s)
+
+-- | An activation: a cell being computed, and the number of the
+-- computation, so a later computation of the same cell is distinguished.
+data Active s = Active !(STRef s (CellState s)) !Int
+
+-- | A failed attempt to compute a value, made while the given activation
+-- was the innermost one (or at top level). While that activation is
+-- still running, everything the attempt found running still is, so
+-- trying again would fail the same way.
+data Guard s = Guard !(Maybe (Active s)) !(Loop s)
+
+-- | A node of the signal network. Its value at the current cycle is
+-- created when it is first asked for in that cycle.
+data Node s = Node
+  { nodeId :: !Int
+  , nodeKind :: !(NodeKind s)
+  , nodeCell :: !(STRef s (Maybe (Int, Thunk s)))
+  -- ^ The cycle the cached value belongs to, and the value.
+  }
+
+data NodeKind s
+  = -- | A top-entity input; the cycle loop sets its value.
+    NInput
+  | NPure !(Thunk s)
+  | NLift !(Thunk s) ![Node s]
+  | -- | The state (the cycle it belongs to, and its value) and the input.
+    NRegister !(STRef s (Int, Thunk s)) !(Node s)
+  | -- | Step function, state, input, and the step result of one cycle.
+    NMealy !(Thunk s) !(STRef s (Int, Thunk s)) !(Node s) !(STRef s (Maybe (Int, Thunk s)))
+  | -- | A recursive binder of signal type, and the node it stands for.
+    NPlaceholder !Text !(Thunk s)
+
+type Env s = Map Name (Thunk s)
+
+fromValue :: Value -> D s
 fromValue = \case
   VBool b -> DBool b
   VBV w x -> DBV w x
-  VTuple vs -> DTuple (fmap fromValue vs)
-
-toValue :: D -> Either GinError Value
-toValue = \case
-  DBool b -> Right (VBool b)
-  DBV w x -> Right (VBV w x)
-  DTuple ds -> VTuple <$> traverse toValue ds
-  DFun _ -> Left (simError "expected a value, got a function")
-  DSig _ -> Left (simError "expected a value, got a signal")
-
-asSignal :: Text -> D -> Either GinError Sig
-asSignal what = \case
-  DSig s -> Right s
-  _ -> Left (simError (what <> " is not a signal"))
+  VTuple vs -> DTuple (fmap (Ready . fromValue) vs)
 
 ----------------------------------------------------------------------
--- Core IR: evaluation
+-- Core IR: evaluation monad
 
--- | Global defs, each evaluated lazily at most once. Recursion among
--- globals is rejected up front, so the lazy map is well founded.
-globalEnv :: Program -> Either GinError (Map Name (Either GinError D))
-globalEnv prog = do
-  let defs = progDefs prog
-      graph = [(d, defName d, Set.toList (globalRefs (defBody d))) | d <- defs]
+-- | Why evaluation stopped.
+data Failure s
+  = -- | A value was needed while it was being computed.
+    Bottom !(Loop s)
+  | -- | Anything else; ends the simulation.
+    Abort !GinError
+
+data Loop s = Loop
+  { loopOrigin :: !(Maybe (STRef s (CellState s)))
+  -- ^ The value needed again while being computed; 'Nothing' once the
+  -- failure has propagated past it, so the whole loop is known.
+  , loopNames :: ![Text]
+  -- ^ Recursive binders on the loop, most recently passed first.
+  , loopCycle :: !Int
+  -- ^ The cycle, or -1 while the signal network is built.
+  }
+
+data Sim s = Sim
+  { simSteps :: !(STRef s Int)
+  , simCycle :: !(STRef s Int)
+  , simFresh :: !(STRef s Int)
+  -- ^ Numbers for nodes and activations.
+  , simGlobals :: !(STRef s (Map Name (Thunk s)))
+  }
+
+-- | Where evaluation is: its nesting depth and the innermost activation.
+data Here s = Here !Int !(Maybe (Active s))
+
+-- | Evaluation with a shared step budget.
+newtype Eval s a = Eval (Sim s -> Here s -> ST s (Either (Failure s) a))
+
+runEval :: Eval s a -> Sim s -> Here s -> ST s (Either (Failure s) a)
+runEval (Eval m) = m
+
+instance Functor (Eval s) where
+  fmap f (Eval m) = Eval $ \sim here -> fmap f <$> m sim here
+
+instance Applicative (Eval s) where
+  pure x = Eval $ \_ _ -> pure (Right x)
+  (<*>) = ap
+
+instance Monad (Eval s) where
+  Eval m >>= k = Eval $ \sim here ->
+    m sim here >>= \case
+      Left f -> pure (Left f)
+      Right x -> runEval (k x) sim here
+
+liftST :: ST s a -> Eval s a
+liftST m = Eval $ \_ _ -> Right <$> m
+
+askSim :: Eval s (Sim s)
+askSim = Eval $ \sim _ -> pure (Right sim)
+
+innermost :: Eval s (Maybe (Active s))
+innermost = Eval $ \_ (Here _ active) -> pure (Right active)
+
+failWith :: Failure s -> Eval s a
+failWith f = Eval $ \_ _ -> pure (Left f)
+
+abort :: Text -> Eval s a
+abort = failWith . Abort . simError
+
+-- | Run a computation, returning how it failed instead of failing.
+attempt :: Eval s a -> Eval s (Either (Failure s) a)
+attempt (Eval m) = Eval $ \sim here -> Right <$> m sim here
+
+-- | Catch a loop; any other failure propagates.
+tryBottom :: Eval s a -> Eval s (Either (Loop s) a)
+tryBottom m =
+  attempt m >>= \case
+    Right x -> pure (Right x)
+    Left (Bottom l) -> pure (Left l)
+    Left (Abort e) -> failWith (Abort e)
+
+-- | Charge one evaluation step against 'maxSimSteps'.
+tick :: Eval s ()
+tick = Eval $ \sim _ -> do
+  n <- readSTRef (simSteps sim)
+  if n >= maxSimSteps
+    then
+      pure . Left . Abort . simError $
+        "simulation exceeded " <> showT maxSimSteps <> " evaluation steps"
+    else Right () <$ (writeSTRef (simSteps sim) $! n + 1)
+
+-- | One level deeper, bounded by 'maxEvalDepth', optionally inside a new
+-- activation.
+deeper :: Maybe (Active s) -> Eval s a -> Eval s a
+deeper new (Eval m) = Eval $ \sim (Here d active) ->
+  if d >= maxEvalDepth
+    then
+      pure . Left . Abort . simError $
+        "evaluation nested more than "
+          <> showT maxEvalDepth
+          <> " values and applications deep (a recursive function that does not return?)"
+    else m sim (Here (d + 1) (new <|> active))
+
+fresh :: Eval s Int
+fresh = do
+  sim <- askSim
+  liftST $ do
+    i <- readSTRef (simFresh sim)
+    i <$ (writeSTRef (simFresh sim) $! i + 1)
+
+currentCycle :: Eval s Int
+currentCycle = askSim >>= liftST . readSTRef . simCycle
+
+-- | A value computed on first use.
+delay :: Maybe Text -> Maybe Text -> Eval s (D s) -> Eval s (Thunk s)
+delay label ctx m = Lazy . Cell label ctx <$> liftST (newSTRef (Pending Nothing m))
+
+-- | A value whose computation just failed with the given loop, to be
+-- computed again when it is needed and could succeed.
+retry :: Maybe Text -> Loop s -> Eval s (D s) -> Eval s (Thunk s)
+retry ctx loop m = do
+  active <- innermost
+  Lazy . Cell Nothing ctx <$> liftST (newSTRef (Pending (Just (Guard active loop)) m))
+
+-- | Is the activation (or top level, for 'Nothing') still running?
+running :: Maybe (Active s) -> Eval s Bool
+running = \case
+  Nothing -> pure True
+  Just (Active ref a) ->
+    liftST (readSTRef ref) >>= \case
+      Running a' -> pure (a == a')
+      _ -> pure False
+
+-- | The value of a thunk, computing it if needed. A computation that
+-- fails because it needs a value still being computed is not cached as a
+-- failure: once that value is known it may succeed. Until then (see
+-- 'Guard') it fails again without being repeated.
+force :: Thunk s -> Eval s (D s)
+force = \case
+  Ready d -> pure d
+  Undefined l -> failWith (Bottom l)
+  Lazy c ->
+    liftST (readSTRef (cellState c)) >>= \case
+      Done d -> pure d
+      Running _ -> do
+        t <- currentCycle
+        failWith (Bottom (Loop (Just (cellState c)) [] t))
+      Pending g m -> maybe (pure Nothing) recheck g >>= maybe (compute c m) (failWith . passing c . Bottom)
+  where
+    recheck (Guard active l) = (\stuck -> if stuck then Just l else Nothing) <$> running active
+
+compute :: Cell s -> Eval s (D s) -> Eval s (D s)
+compute c m = do
+  tick
+  a <- fresh
+  outer <- innermost
+  liftST (writeSTRef (cellState c) (Running a))
+  attempt (deeper (Just (Active (cellState c) a)) m) >>= \case
+    Right d -> d <$ liftST (writeSTRef (cellState c) (Done d))
+    Left f -> do
+      liftST . writeSTRef (cellState c) $ case f of
+        Bottom l -> Pending (Just (Guard outer l)) m
+        Abort _ -> Pending Nothing m
+      failWith (passing c f)
+
+-- | Record that a failure propagated out of the computation of a cell.
+passing :: Cell s -> Failure s -> Failure s
+passing c = \case
+  Bottom l
+    | Just origin <- loopOrigin l ->
+        Bottom
+          l
+            { loopNames = maybe id addName (cellLabel c) (loopNames l)
+            , loopOrigin = if origin == cellState c then Nothing else Just origin
+            }
+    | otherwise -> Bottom l
+  Abort e -> Abort (maybe e (`nestedIn` e) (cellContext c))
+  where
+    addName n ns
+      | n `elem` ns || length ns >= 8 = ns
+      | otherwise = n : ns
+
+-- | Add a context line, unless the error already carries many.
+nestedIn :: Text -> GinError -> GinError
+nestedIn ctx e
+  | length (errContext e) < maxContextLines = e {errContext = errContext e <> [ctx]}
+  | otherwise = e
+
+-- | Turn every failure into an error with the given context line.
+within :: Text -> Eval s a -> Eval s a
+within ctx m =
+  attempt m >>= \case
+    Right x -> pure x
+    Left f -> do
+      let e = failureError f
+      failWith (Abort e {errContext = errContext e <> [ctx]})
+
+failureError :: Failure s -> GinError
+failureError = \case
+  Abort e -> e
+  Bottom l -> loopError l
+
+loopError :: Loop s -> GinError
+loopError l =
+  simError $
+    "recursive let is not productive: "
+      <> subject
+      <> atCycle
+      <> " depends on itself (feedback must pass through sig.register or the state of"
+      <> " sig.mealy)"
+  where
+    subject = case reverse (loopNames l) of
+      [] -> "a value"
+      ns -> "the value of " <> Text.intercalate ", " ns
+    atCycle
+      | loopCycle l >= 0 = " at cycle " <> showT (loopCycle l)
+      | otherwise = ""
+
+----------------------------------------------------------------------
+-- Core IR: running the program
+
+runCore :: Program -> [[Value]] -> ST s (Either GinError [[Value]])
+runCore prog rows = do
+  sim <- Sim <$> newSTRef 0 <*> newSTRef (-1) <*> newSTRef 0 <*> newSTRef Map.empty
+  either (Left . failureError) Right <$> runEval (coreRun prog rows) sim (Here 0 Nothing)
+
+-- | Build the signal network, then run it one cycle per row. Each cycle
+-- computes the nodes in dependency order first (a node that needs a value
+-- still being computed is left for later), so long chains of signals do
+-- not nest; then reads the outputs; then computes every next state.
+coreRun :: Program -> [[Value]] -> Eval s [[Value]]
+coreRun prog rows = do
+  defineGlobals prog
+  let top = progTop prog
+  inputs <- traverse (const (newNode NInput)) (topInputs top)
+  (out, order) <- within ("in def " <> unName (topDef top)) $ do
+    g <- globalThunk ("top entity def " <> unName (topDef top) <> " is not defined") (topDef top)
+    f <- force g
+    out <- applyAll f [Ready (DSig n) | n <- inputs] >>= asNode "the top entity's result"
+    order <- network out
+    pure (out, order)
+  let machines = filter stateful order
+      step acc (t, row) = do
+        sim <- askSim
+        liftST (writeSTRef (simCycle sim) t)
+        zipWithM_ (\n v -> liftST (writeSTRef (nodeCell n) (Just (t, Ready (fromValue v))))) inputs row
+        outs <- within ("in cycle " <> showT t) $ do
+          traverse_ (\n -> tryBottom (cellOf n >>= force)) order
+          v <- cellOf out >>= force >>= deepValue
+          either (failWith . Abort) pure (splitOutputs (topOutputs top) v)
+        commits <- within ("in cycle " <> showT t) (traverse (advance t) machines)
+        liftST (sequence_ commits)
+        pure (outs : acc)
+  reverse <$> foldM step [] (zip [0 ..] rows)
+  where
+    stateful n = case nodeKind n of
+      NRegister {} -> True
+      NMealy {} -> True
+      _ -> False
+
+-- | Recursion among globals is rejected up front: a global is evaluated
+-- at most once, so it must not need itself.
+noGlobalRecursion :: Program -> Either GinError ()
+noGlobalRecursion prog =
   case [NonEmpty.toList ds | NECyclicSCC ds <- stronglyConnComp graph] of
     [] -> Right ()
     ds : _ ->
       Left . simError $
         "recursion among globals: " <> Text.intercalate ", " (fmap (unName . defName) ds)
-  let globals = LMap.fromList [(defName d, evalDef d) | d <- defs]
-      evalDef d =
-        withContext ("in def " <> unName (defName d)) (eval (Ctx globals 0) Map.empty (defBody d))
-  Right globals
+  where
+    graph = [(d, defName d, Set.toList (globalRefs (defBody d))) | d <- progDefs prog]
 
-eval :: Ctx -> Env -> Expr -> Either GinError D
-eval ctx env = \case
-  EVar n -> maybe (Left (simError ("unbound variable " <> unName n))) Right (Map.lookup n env)
-  EGlobal n ->
-    fromMaybe (Left (simError ("unknown global " <> unName n))) (Map.lookup n (ctxGlobals ctx))
-  ELit v -> Right (fromValue v)
-  EPrim op _ -> Right (primValue op)
-  EApp f args -> do
-    fv <- eval ctx env f
-    avs <- traverse (eval ctx env) args
-    applyAll (ctxDepth ctx) fv avs
-  ELam binders body -> case binders of
-    [] -> Left (simError "lambda without binders")
-    _ -> Right (closure ctx env (fmap fst binders) body)
-  ELet False binds body -> do
-    let bindOne e b = do
-          d <- inBind b (eval ctx e (bindExpr b))
-          Right (Map.insert (bindName b) d e)
-    env' <- foldM bindOne env binds
-    eval ctx env' body
-  ELet True binds body -> letRec ctx env binds >>= \env' -> eval ctx env' body
-  ETuple es -> DTuple <$> traverse (eval ctx env) es
-  EProj i e ->
-    eval ctx env e >>= \case
-      DTuple ds | Just d <- listToMaybe (genericDrop i ds) -> Right d
-      _ -> Left (simError ("projection " <> showT i <> " out of a value without that component"))
-  EIf c t e ->
-    eval ctx env c >>= \case
-      DBool True -> eval ctx env t
-      DBool False -> eval ctx env e
-      _ -> Left (simError "if condition is not a Bool")
+-- | Every global def, as a value computed on first use.
+defineGlobals :: Program -> Eval s ()
+defineGlobals prog = do
+  defs <- traverse global (progDefs prog)
+  sim <- askSim
+  liftST (writeSTRef (simGlobals sim) (Map.fromList defs))
+  where
+    global d = do
+      th <- delay Nothing (Just ("in def " <> unName (defName d))) (eval Map.empty (defBody d))
+      pure (defName d, th)
 
-inBind :: Bind -> Either GinError a -> Either GinError a
-inBind b = withContext ("in bind " <> unName (bindName b))
+globalThunk :: Text -> Name -> Eval s (Thunk s)
+globalThunk missing n = do
+  sim <- askSim
+  globals <- liftST (readSTRef (simGlobals sim))
+  maybe (abort missing) pure (Map.lookup n globals)
 
-closure :: Ctx -> Env -> [Name] -> Expr -> D
-closure ctx env names body = DFun $ \depth arg ->
-  let ctx' = ctx {ctxDepth = depth}
-   in case names of
-        [x] -> eval ctx' (Map.insert x arg env) body
-        x : xs -> Right (closure ctx' (Map.insert x arg env) xs body)
-        [] -> eval ctx' env body
+-- | Every node the network rooted at a node depends on, each after the
+-- nodes it reads (except around loops). Recursive binders are resolved
+-- on the way, so the whole network is built before the first cycle.
+network :: Node s -> Eval s [Node s]
+network root = go Set.empty [Enter root] []
+  where
+    go _ [] order = pure (reverse order)
+    go seen (visit : rest) order = case visit of
+      Leave n -> go seen rest (n : order)
+      Enter n
+        | Set.member (nodeId n) seen -> go seen rest order
+        | otherwise -> do
+            next <- successors n
+            go (Set.insert (nodeId n) seen) (fmap Enter next <> (Leave n : rest)) order
+    successors n = case nodeKind n of
+      NInput -> pure []
+      NPure _ -> pure []
+      NLift _ ns -> pure ns
+      NRegister _ s -> pure [s]
+      NMealy _ _ s _ -> pure [s]
+      NPlaceholder _ target ->
+        tryBottom (force target) >>= \case
+          Right (DSig m) -> pure [m]
+          _ -> pure []
 
-apply :: Int -> D -> D -> Either GinError D
-apply depth f arg
-  | depth >= maxEvalDepth =
-      Left (simError ("evaluation exceeded " <> showT maxEvalDepth <> " nested applications"))
-  | otherwise = case f of
-      DFun g -> g (depth + 1) arg
-      _ -> Left (simError "applied a value that is not a function")
+-- | A step of the depth-first walk in 'network'.
+data Visit s = Enter (Node s) | Leave (Node s)
 
-applyAll :: Int -> D -> [D] -> Either GinError D
-applyAll depth = foldM (apply depth)
+-- | Compute the next state of a register or mealy node, with every
+-- component that is not productive marked as such, and return the action
+-- that stores it. All next states are computed before any is stored.
+advance :: Int -> Node s -> Eval s (ST s ())
+advance t n = case nodeKind n of
+  NRegister st s -> store st <$> settle (cellOf s >>= force)
+  NMealy f st i memo -> store st <$> settle (mealyStep f st i memo >>= force >>= pairPart 0 >>= force)
+  _ -> pure (pure ())
+  where
+    store st th = writeSTRef st (t + 1, th)
+
+-- | Compute a value completely, keeping each component that is not
+-- productive as 'Undefined'.
+settle :: Eval s (D s) -> Eval s (Thunk s)
+settle m =
+  tryBottom m >>= \case
+    Left l -> pure (Undefined l)
+    Right d -> case d of
+      DTuple ths -> Ready . DTuple <$> traverse (settle . force) ths
+      DBool _ -> pure (Ready d)
+      DBV _ _ -> pure (Ready d)
+      _ -> abort "the state of a register or mealy machine is not a value"
+
+deepValue :: D s -> Eval s Value
+deepValue = \case
+  DBool b -> pure (VBool b)
+  DBV w x -> pure (VBV w x)
+  DTuple ths -> VTuple <$> traverse (force >=> deepValue) ths
+  DFun _ -> abort "expected a value, got a function"
+  DSig _ -> abort "expected a value, got a signal"
+
+-- | Split an output value along the right-nested product spine into one
+-- value per output port.
+splitOutputs :: [Port] -> Value -> Either GinError [Value]
+splitOutputs ports v = case ports of
+  [p] -> pure <$> port p v
+  p : rest -> case v of
+    VTuple [o, more] -> (:) <$> port p o <*> splitOutputs rest more
+    _ ->
+      Left . simError $
+        "expected a pair ("
+          <> portName p
+          <> ", remaining outputs) on the output spine, got "
+          <> showT v
+  [] -> Left (simError "the top entity has no outputs")
+  where
+    port p = hasType ("output " <> portName p) (portTy p)
+
+----------------------------------------------------------------------
+-- Core IR: signals
+
+newNode :: NodeKind s -> Eval s (Node s)
+newNode kind = do
+  i <- fresh
+  Node i kind <$> liftST (newSTRef Nothing)
+
+asNode :: Text -> D s -> Eval s (Node s)
+asNode what = \case
+  DSig n -> pure n
+  _ -> abort (what <> " is not a signal")
+
+-- | The value of a signal at the current cycle, not yet computed.
+cellOf :: Node s -> Eval s (Thunk s)
+cellOf n = case nodeKind n of
+  NPure x -> pure x
+  NRegister st _ -> stateAt st
+  NInput -> cached (nodeCell n) (abort "internal error: an input has no value at this cycle")
+  NLift f ns -> cached (nodeCell n) . delay Nothing Nothing $ do
+    fv <- force f
+    traverse cellOf ns >>= applyAll fv
+  NMealy f st i memo ->
+    cached (nodeCell n) . delay Nothing Nothing $
+      mealyStep f st i memo >>= force >>= pairPart 1 >>= force
+  NPlaceholder name target ->
+    cached (nodeCell n) . delay (Just name) Nothing $
+      force target >>= asNode name >>= cellOf >>= force
+
+-- | A per-cycle value, created at most once per cycle.
+cached :: STRef s (Maybe (Int, Thunk s)) -> Eval s (Thunk s) -> Eval s (Thunk s)
+cached ref make = do
+  t <- currentCycle
+  liftST (readSTRef ref) >>= \case
+    Just (t', th) | t' == t -> pure th
+    _ -> do
+      th <- make
+      th <$ liftST (writeSTRef ref (Just (t, th)))
+
+-- | The state of a register or mealy machine at the current cycle.
+stateAt :: STRef s (Int, Thunk s) -> Eval s (Thunk s)
+stateAt st = do
+  t <- currentCycle
+  (t', th) <- liftST (readSTRef st)
+  if t' == t
+    then pure th
+    else abort "internal error: a register or mealy state is not available at this cycle"
+
+-- | The step function applied to the current state and input.
+mealyStep
+  :: Thunk s -> STRef s (Int, Thunk s) -> Node s -> STRef s (Maybe (Int, Thunk s)) -> Eval s (Thunk s)
+mealyStep f st i memo = cached memo . delay Nothing Nothing $ do
+  fv <- force f
+  s <- stateAt st
+  x <- cellOf i
+  applyAll fv [s, x]
+
+pairPart :: Int -> D s -> Eval s (Thunk s)
+pairPart k = \case
+  DTuple [s, o] -> pure (if k == 0 then s else o)
+  _ -> abort "sig.mealy step function did not return a (state, output) pair"
+
+----------------------------------------------------------------------
+-- Core IR: expressions
+
+eval :: Env s -> Expr -> Eval s (D s)
+eval env expr = do
+  tick
+  case expr of
+    EVar n -> maybe (abort ("unbound variable " <> unName n)) force (Map.lookup n env)
+    EGlobal n -> globalThunk ("unknown global " <> unName n) n >>= force
+    ELit v -> pure (fromValue v)
+    EPrim op _ -> pure (primValue op)
+    EApp f args -> do
+      fv <- eval env f
+      traverse (eager Nothing env) args >>= applyAll fv
+    ELam binders body -> case binders of
+      [] -> abort "lambda without binders"
+      _ -> pure (closure env (fmap fst binders) body)
+    ELet False binds body -> do
+      let bind e b = do
+            th <- eager (Just ("in bind " <> unName (bindName b))) e (bindExpr b)
+            pure (Map.insert (bindName b) th e)
+      env' <- foldM bind env binds
+      eval env' body
+    ELet True binds body -> letRec env binds >>= (`eval` body)
+    ETuple es -> DTuple <$> traverse (eager Nothing env) es
+    EProj i e -> eval env e >>= project i >>= force
+    EIf c t e -> conditional env c t e
+
+-- | An argument, @let@ bind or tuple component, computed now so chains of
+-- them do not nest. One that needs a value still being computed is left
+-- to be computed when it is used, which is what makes evaluation by need.
+eager :: Maybe Text -> Env s -> Expr -> Eval s (Thunk s)
+eager ctx env = \case
+  EVar n | Just th <- Map.lookup n env -> pure th
+  ELit v -> pure (Ready (fromValue v))
+  e ->
+    attempt (eval env e) >>= \case
+      Right d -> pure (Ready d)
+      Left (Bottom loop) -> retry ctx loop (eval env e)
+      Left (Abort err) -> failWith (Abort (maybe err (`nestedIn` err) ctx))
+
+project :: Natural -> D s -> Eval s (Thunk s)
+project i = \case
+  DTuple ths | Just th <- listToMaybe (genericDrop i ths) -> pure th
+  _ -> abort ("projection " <> showT i <> " out of a value without that component")
+
+-- | @if c t e@ computes @c@, then one branch. When the condition needs the
+-- value being computed, the result is what both branches agree on
+-- ('agree').
+conditional :: Env s -> Expr -> Expr -> Expr -> Eval s (D s)
+conditional env c t e =
+  tryBottom (eval env c) >>= \case
+    Right d -> choose d (eval env t) (eval env e)
+    Left loop -> do
+      cond <- retry Nothing loop (eval env c)
+      th <- delay Nothing Nothing (eval env t)
+      el <- delay Nothing Nothing (eval env e)
+      agree loop cond th el
+
+choose :: D s -> Eval s a -> Eval s a -> Eval s a
+choose d th el = case d of
+  DBool True -> th
+  DBool False -> el
+  _ -> abort "if condition is not a Bool"
+
+-- | The value of an @if@ whose condition could not be computed: equal
+-- scalar branches give that scalar, and tuple branches give a tuple of
+-- component-wise @if@s, each of which tries the condition again when it
+-- is needed. Otherwise the loop that stopped the condition is reported.
+agree :: Loop s -> Thunk s -> Thunk s -> Thunk s -> Eval s (D s)
+agree loop cond th el = do
+  a <- force th
+  b <- force el
+  case (a, b) of
+    (DTuple as, DTuple bs)
+      | length as == length bs ->
+          DTuple <$> zipWithM (\x y -> delay Nothing Nothing (select x y)) as bs
+    (DBool x, DBool y) | x == y -> pure a
+    (DBV w x, DBV w' y) | w == w' && x == y -> pure a
+    _ -> failWith (Bottom loop)
+  where
+    select x y =
+      tryBottom (force cond) >>= \case
+        Right d -> choose d (force x) (force y)
+        Left loop' -> agree loop' cond x y
+
+closure :: Env s -> [Name] -> Expr -> D s
+closure env names body = DFun $ \arg -> case names of
+  [x] -> eval (Map.insert x arg env) body
+  x : xs -> pure (closure (Map.insert x arg env) xs body)
+  [] -> eval env body
+
+apply :: D s -> Thunk s -> Eval s (D s)
+apply f arg = do
+  tick
+  case f of
+    DFun g -> deeper Nothing (g arg)
+    _ -> abort "applied a value that is not a function"
+
+applyAll :: D s -> [Thunk s] -> Eval s (D s)
+applyAll = foldM apply
 
 -- | A prim as a curried function of 'primArity' arguments.
-primValue :: PrimOp -> D
+primValue :: PrimOp -> D s
 primValue op = collect (primArity op) []
   where
-    collect k acc = DFun $ \depth arg ->
+    collect k acc = DFun $ \arg ->
       if k <= 1
-        then runPrim depth op (reverse (arg : acc))
-        else Right (collect (k - 1) (arg : acc))
+        then runPrim op (reverse (arg : acc))
+        else pure (collect (k - 1) (arg : acc))
 
--- | A saturated prim application.
-runPrim :: Int -> PrimOp -> [D] -> Either GinError D
-runPrim depth op args
-  | isCombinational op = fromValue <$> (traverse toValue args >>= evalPrim op)
+-- | A saturated prim application. Combinational prims need the values of
+-- all their arguments; signal prims build a node, needing only which
+-- nodes their signal arguments are.
+runPrim :: PrimOp -> [Thunk s] -> Eval s (D s)
+runPrim op args
+  | isCombinational op = do
+      vs <- traverse (force >=> scalar) args
+      either (failWith . Abort) (pure . fromValue) (evalPrim op vs)
   | otherwise = case (op, args) of
-      (SigPure, [x]) -> Right (DSig (Sig Set.empty (repeat (Right x))))
-      (SigLift _, f : ss) -> do
-        sigs <- traverse (asSignal (primName op <> " argument")) ss
-        let element xs = sequence xs >>= applyAll depth f
-        Right . DSig $
-          Sig (foldMap sigDeps sigs) (fmap element (zipStreams (fmap sigStream sigs)))
+      (SigPure, [x]) -> DSig <$> newNode (NPure x)
+      (SigLift _, f : ss@(_ : _)) -> do
+        ns <- traverse signal ss
+        DSig <$> newNode (NLift f ns)
       (SigRegister v, [s]) -> do
-        sg <- asSignal (primName op <> " argument") s
-        Right (DSig (Sig Set.empty (Right (fromValue v) : sigStream sg)))
+        n <- signal s
+        st <- liftST (newSTRef (0, Ready (fromValue v)))
+        DSig <$> newNode (NRegister st n)
       (SigMealy v, [f, s]) -> do
-        sg <- asSignal (primName op <> " argument") s
-        Right (DSig (Sig (sigDeps sg) (mealyStream depth f (fromValue v) (sigStream sg))))
-      _ -> Left (simError (primName op <> " applied to unexpected arguments"))
-
--- | Element-wise transposition of streams; ends with the shortest one.
-zipStreams :: [[a]] -> [[a]]
-zipStreams ss = case traverse uncons ss of
-  Just cells -> fmap fst cells : zipStreams (fmap snd cells)
-  Nothing -> []
-
--- | @(st(t+1), o(t)) = f (st t) (i t)@ with @st(0) = v@.
-mealyStream :: Int -> D -> D -> [Either GinError D] -> [Either GinError D]
-mealyStream depth f v0 = go (Right v0)
+        n <- signal s
+        st <- liftST (newSTRef (0, Ready (fromValue v)))
+        memo <- liftST (newSTRef Nothing)
+        DSig <$> newNode (NMealy f st n memo)
+      _ -> abort (primName op <> " applied to unexpected arguments")
   where
-    go st = \case
-      [] -> []
-      i : is ->
-        let r = do
-              s <- st
-              x <- i
-              applyAll depth f [s, x] >>= \case
-                DTuple [s', o] -> Right (s', o)
-                _ -> Left (simError "sig.mealy step function did not return a (state, output) pair")
-         in fmap snd r : go (fmap fst r) is
+    signal th = force th >>= asNode (primName op <> " argument")
+    scalar = \case
+      DBool b -> pure (VBool b)
+      DBV w x -> pure (VBV w x)
+      _ -> abort (primName op <> " applied to a value that is not a Bool or a bit vector")
 
 ----------------------------------------------------------------------
 -- Core IR: recursive lets
 
--- | Binds of a recursive @let@, in dependency order: a bind that refers to
--- no binder of its strongly connected component is evaluated like a
--- non-recursive bind; each recursive component is evaluated by 'tieKnot'.
-letRec :: Ctx -> Env -> [Bind] -> Either GinError Env
-letRec ctx env0 binds = foldM step env0 (stronglyConnComp graph)
+-- | Every binder of a recursive @let@ is computed when it is first
+-- needed, in an environment where all of them are bound. A binder of
+-- signal type is bound to a placeholder node that stands for the node
+-- its expression builds, so the expression can refer to it before that
+-- node exists; tuples are bound component by component.
+letRec :: Env s -> [Bind] -> Eval s (Env s)
+letRec env binds = do
+  refs <- traverse (const (liftST (newSTRef (Pending Nothing unset)))) binds
+  let cells =
+        [ Lazy (Cell (Just (unName (bindName b))) (Just ("in bind " <> unName (bindName b))) r)
+        | (b, r) <- zip binds refs
+        ]
+  slots <- sequence [recSlot (unName (bindName b)) (bindTy b) c | (b, c) <- zip binds cells]
+  let env' = foldr (\(b, s) -> Map.insert (bindName b) s) env (zip binds slots)
+  zipWithM_ (\b r -> liftST (writeSTRef r (Pending Nothing (eval env' (bindExpr b))))) binds refs
+  pure env'
   where
-    names = Set.fromList (fmap bindName binds)
-    graph = [(b, bindName b, refs b) | b <- binds]
-    refs b = Set.toList (Set.intersection names (freeVars (bindExpr b)))
-    inner = ctx {ctxDepth = ctxDepth ctx + 1}
-    step env = \case
-      AcyclicSCC b -> do
-        d <- inBind b (eval inner env (bindExpr b))
-        Right (Map.insert (bindName b) d env)
-      NECyclicSCC bs -> tieKnot ctx env (NonEmpty.toList bs)
+    unset = abort "internal error: a recursive binder was used before it was defined"
 
--- | Where the signals sit in a signal-like type: one numbered leaf per
--- 'TSignal', nested along 'TProd'.
-data Shape = Leaf !Int | Node ![Shape]
-
--- | Number the signal leaves of the given types from @next@; 'Nothing'
--- unless every type is a signal or a tuple of signal-like types.
-shapes :: Int -> [Ty] -> Maybe (Int, [Shape])
-shapes next = \case
-  [] -> Just (next, [])
-  t : ts -> do
-    (next', s) <- case t of
-      TSignal _ _ -> Just (next + 1, Leaf next)
-      TProd cs -> fmap Node <$> shapes next cs
-      _ -> Nothing
-    fmap (s :) <$> shapes next' ts
-
--- | Leaf indices of a shape with the component path to each.
-leafPaths :: Shape -> [(Int, [Int])]
-leafPaths = \case
-  Leaf l -> [(l, [])]
-  Node ss -> concat [[(l, i : p) | (l, p) <- leafPaths s] | (i, s) <- zip [0 ..] ss]
-
--- | The signals at the leaves of a value of the given shape.
-leaves :: Shape -> D -> Either GinError [(Int, Sig)]
-leaves shape d = case (shape, d) of
-  (Leaf l, DSig s) -> Right [(l, s)]
-  (Node ss, DTuple ds) | length ss == length ds -> concat <$> zipWithM leaves ss ds
-  _ -> Left (simError "recursive binding does not have the shape of its declared type")
-
--- | Replace the dependency set of every leaf signal.
-relabel :: (Int -> Set Placeholder) -> Shape -> D -> D
-relabel deps shape d = case (shape, d) of
-  (Leaf l, DSig s) -> DSig s {sigDeps = deps l}
-  (Node ss, DTuple ds) -> DTuple (zipWith (relabel deps) ss ds)
-  _ -> d
-
--- | A recursive component: bind each binder to a placeholder of its type
--- whose streams are, lazily, those of the binder's own value; evaluate
--- the binds; reject a cycle of current-cycle dependencies among the
--- placeholders; and rebind each binder to its value, with dependencies on
--- the placeholders replaced by what those placeholders depend on.
-tieKnot :: Ctx -> Env -> [Bind] -> Either GinError Env
-tieKnot ctx env binds = do
-  shps <- case shapes 0 (fmap bindTy binds) of
-    Just (_, ss) -> Right ss
-    Nothing ->
-      Left . simError $
-        "recursive let: "
-          <> Text.intercalate ", " [unName (bindName b) <> " : " <> showT (bindTy b) | b <- binds]
-          <> " is defined in terms of itself, but only signals and tuples of signals may be"
-          <> " recursive (feedback through sig.register)"
-  let depth = ctxDepth ctx
-      inner = ctx {ctxDepth = depth + 1}
-      results = [inBind b (eval inner env' (bindExpr b)) | b <- binds]
-      streams =
-        LMap.fromList
-          [(l, leafStream p r) | (s, r) <- zip shps results, (l, p) <- leafPaths s]
-      placeholder = \case
-        Leaf l -> DSig (Sig (Set.singleton (depth, l)) (LMap.findWithDefault [] l streams))
-        Node ss -> DTuple (fmap placeholder ss)
-      env' = foldr (\(b, s) -> Map.insert (bindName b) (placeholder s)) env (zip binds shps)
-  values <- sequence results
-  sigs <- concat <$> zipWithM3 (\b s d -> inBind b (leaves s d)) binds shps values
-  let local s = [l | (dep, l) <- Set.toList (sigDeps s), dep == depth]
-      binderOf =
-        Map.fromList
-          [(l, unName (bindName b)) | (b, s) <- zip binds shps, (l, _) <- leafPaths s]
-      loops = stronglyConnComp [(l, l, local s) | (l, s) <- sigs]
-  case [NonEmpty.toList ls | NECyclicSCC ls <- loops] of
-    [] -> Right ()
-    ls : _ ->
-      Left . simError $
-        "recursive let is not productive: the value of "
-          <> Text.intercalate ", " (Set.toList (Set.fromList (mapMaybe (`Map.lookup` binderOf) ls)))
-          <> " at a cycle depends on itself at that cycle"
-          <> " (feedback must pass through sig.register)"
-  let resolved = LMap.fromList [(l, resolve (sigDeps s)) | (l, s) <- sigs]
-      resolve = foldMap $ \p@(dep, l) ->
-        if dep == depth then resolvedAt l else Set.singleton p
-      resolvedAt l = LMap.findWithDefault Set.empty l resolved
-      finals = [relabel resolvedAt s d | (s, d) <- zip shps values]
-  Right (foldr (\(b, d) -> Map.insert (bindName b) d) env (zip binds finals))
+-- | What a recursive binder of the given type is bound to, given the
+-- binder's value.
+recSlot :: Text -> Ty -> Thunk s -> Eval s (Thunk s)
+recSlot name ty value = case ty of
+  TSignal _ _ -> do
+    target <- delay (Just name) Nothing $ do
+      n <- force value >>= asNode name
+      DSig <$> case nodeKind n of
+        NPlaceholder _ t -> force t >>= asNode name
+        _ -> pure n
+    Ready . DSig <$> newNode (NPlaceholder name target)
+  TProd ts | any carriesSignal ts -> do
+    let part i t = delay Nothing Nothing (force value >>= project i >>= force) >>= recSlot name t
+    Ready . DTuple <$> zipWithM part [0 ..] ts
+  _ -> pure value
   where
-    zipWithM3 f as bs cs = sequence (zipWith3 f as bs cs)
-
--- | The stream at a component path of a binder's value.
-leafStream :: [Int] -> Either GinError D -> [Either GinError D]
-leafStream path = \case
-  Left e -> repeat (Left e)
-  Right d -> case follow path d of
-    Just (DSig s) -> sigStream s
-    _ -> repeat (Left (simError "recursive binding does not have the shape of its declared type"))
-  where
-    follow = \case
-      [] -> Just
-      i : is -> \case
-        DTuple ds -> listToMaybe (drop i ds) >>= follow is
-        _ -> Nothing
-
--- | Free local variables of an expression.
-freeVars :: Expr -> Set Name
-freeVars = \case
-  EVar n -> Set.singleton n
-  EGlobal _ -> Set.empty
-  ELit _ -> Set.empty
-  EPrim _ _ -> Set.empty
-  EApp f as -> foldMap freeVars (f : as)
-  ELam bs body -> freeVars body `Set.difference` Set.fromList (fmap fst bs)
-  ELet False binds body ->
-    foldr (\b acc -> freeVars (bindExpr b) <> Set.delete (bindName b) acc) (freeVars body) binds
-  ELet True binds body ->
-    foldMap freeVars (body : fmap bindExpr binds)
-      `Set.difference` Set.fromList (fmap bindName binds)
-  ETuple es -> foldMap freeVars es
-  EProj _ e -> freeVars e
-  EIf c t e -> foldMap freeVars [c, t, e]
+    carriesSignal = \case
+      TSignal _ _ -> True
+      TProd ts -> any carriesSignal ts
+      _ -> False
 
 -- | Globals an expression refers to.
-globalRefs :: Expr -> Set Name
+globalRefs :: Expr -> Set.Set Name
 globalRefs = \case
   EGlobal n -> Set.singleton n
   EVar _ -> Set.empty
@@ -466,31 +866,6 @@ globalRefs = \case
   ETuple es -> foldMap globalRefs es
   EProj _ e -> globalRefs e
   EIf c t e -> foldMap globalRefs [c, t, e]
-
--- | The first @n@ elements of the top entity's output stream, split
--- along the right-nested product spine into one value per output port.
-readOutputs :: [Port] -> Int -> [Either GinError D] -> Either GinError [[Value]]
-readOutputs ports n = go 0 []
-  where
-    go t acc stream
-      | t >= n = Right (reverse acc)
-      | otherwise = case stream of
-          [] -> Left (simError ("the output signal ends after " <> showT t <> " cycles"))
-          x : xs -> do
-            row <- inCycle t (x >>= toValue >>= spine ports)
-            go (t + 1) (row : acc) xs
-    spine ps v = case ps of
-      [p] -> pure <$> port p v
-      p : rest -> case v of
-        VTuple [o, more] -> (:) <$> port p o <*> spine rest more
-        _ ->
-          Left . simError $
-            "expected a pair ("
-              <> portName p
-              <> ", remaining outputs) on the output spine, got "
-              <> showT v
-      [] -> Left (simError "the top entity has no outputs")
-    port p = hasType ("output " <> portName p) (portTy p)
 
 ----------------------------------------------------------------------
 -- Normal form

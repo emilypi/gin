@@ -29,6 +29,7 @@ spec = do
     coreExampleSpec
     coreSemanticsSpec
     coreLetRecSpec
+    coreLimitSpec
   describe "simulateNormal" normalSpec
   describe "both simulators" $ do
     multiOutputSpec
@@ -487,10 +488,15 @@ shouldBeSimError result needle = case result of
 -- | Evaluate a result completely within ten seconds, so a simulator that
 -- loops fails the test instead of hanging the suite.
 settled :: (Show a) => a -> IO a
-settled x =
-  timeout 10000000 (evaluate (length (show x))) >>= \case
+settled = settledWithin 10
+
+-- | 'settled' with a limit in seconds.
+settledWithin :: (Show a) => Int -> a -> IO a
+settledWithin seconds x =
+  timeout (seconds * 1000000) (evaluate (length (show x))) >>= \case
     Just _ -> pure x
-    Nothing -> x <$ expectationFailure "simulation did not finish within 10 s"
+    Nothing ->
+      x <$ expectationFailure ("simulation did not finish within " <> show seconds <> " s")
 
 ----------------------------------------------------------------------
 -- Core IR semantics
@@ -668,6 +674,49 @@ stepProgram =
 boolLoop :: Expr -> Program
 boolLoop rhs = topProgram [] [Port "o" TBool] (ELet True [Bind "s" (sig TBool) rhs] (var "s"))
 
+-- | A counter that saturates at 3 because its own output, fed back,
+-- enables it: @c = mealy step 0 (lift (\v -> v < 3) c)@. The output of
+-- @step@ is its state, so it does not depend on the enable it computes.
+saturatingProgram :: Expr -> Program
+saturatingProgram step =
+  topProgram [] (bv8Ports ["c"]) $
+    ELet
+      True
+      [ Bind "c" (sig (bv 8)) . mealyE (b8 0) TBool (bv 8) step $
+          liftE [bv 8] TBool (ELam [("v", bv 8)] (bvUlt8 (var "v") (ELit (b8 3)))) [var "c"]
+      ]
+      (var "c")
+  where
+    bvUlt8 a b = EApp (prim BvUlt [bv 8, bv 8] TBool) [a, b]
+
+-- | @\s e -> (if e then s + 1 else s, s)@.
+stepInside :: Expr
+stepInside =
+  ELam [("s", bv 8), ("e", TBool)] $
+    ETuple [EIf (var "e") (EApp (incr 8) [var "s"]) (var "s"), var "s"]
+
+-- | @\s e -> if e then (s + 1, s) else (s, s)@: 'stepInside' with the @if@
+-- outside the pair.
+stepOutside :: Expr
+stepOutside =
+  ELam [("s", bv 8), ("e", TBool)] $
+    EIf (var "e") (ETuple [EApp (incr 8) [var "s"], var "s"]) (ETuple [var "s", var "s"])
+
+-- | The normal form of 'saturatingProgram'.
+saturatingNormal :: NModule
+saturatingNormal =
+  normalModule
+    []
+    [NOutput "c" (bv 8) (AVar "s")]
+    [ NBind "s" (bv 8) (NReg (b8 0) (AVar "s_next"))
+    , NBind "en" TBool (NPrim BvUlt [AVar "s", ALit (b8 3)])
+    , NBind "inc" (bv 8) (NPrim BvAdd [AVar "s", ALit (b8 1)])
+    , NBind "s_next" (bv 8) (NMux (AVar "en") (AVar "inc") (AVar "s"))
+    ]
+
+saturated :: [[Value]]
+saturated = fmap (pure . b8) [0, 1, 2, 3, 3, 3]
+
 coreLetRecSpec :: Spec
 coreLetRecSpec = do
   it "[sim-letrec] feeds a register back into its own input" $
@@ -746,7 +795,7 @@ coreLetRecSpec = do
         prog = topProgram [] (bv8Ports ["a"]) (ELet True [Bind "a" (sig (bv 8)) inner] (var "a"))
     r <- settled (simulateCore prog (replicate 3 []))
     r `shouldBeSimError` "not productive"
-  it "[sim-letrec] rejects recursion through a plain value" $ do
+  it "[sim-letrec] rejects a plain value defined in terms of itself" $ do
     let prog =
           topProgram [] (bv8Ports ["o"]) $
             ELet
@@ -754,16 +803,151 @@ coreLetRecSpec = do
               [Bind "k" (bv 8) (bvBin BvAdd 8 (var "k") (ELit (b8 1)))]
               (pureE (bv 8) (var "k"))
     r <- settled (simulateCore prog (replicate 3 []))
-    r `shouldBeSimError` "recursive"
-  it "[sim-letrec] rejects a recursive function" $ do
+    r `shouldBeSimError` "not productive: the value of k at cycle 0 depends on itself"
+  it "[sim-letrec] lets sig.lift feed back an argument its function ignores" $ do
+    let five = ELam [("v", bv 8)] (ELit (b8 5))
+        prog =
+          topProgram [] (bv8Ports ["s"]) $
+            ELet True [Bind "s" (sig (bv 8)) (liftE [bv 8] (bv 8) five [var "s"])] (var "s")
+    simulateCore prog (replicate 3 []) `shouldBe` Right (replicate 3 [b8 5])
+  it "[sim-letrec] lets a recursive tuple of values read its own components" $ do
+    let prog =
+          topProgram [] (bv8Ports ["o"]) $
+            ELet
+              True
+              [Bind "p" (TProd [bv 8, bv 8]) (ETuple [ELit (b8 7), EProj 0 (var "p")])]
+              (pureE (bv 8) (EProj 1 (var "p")))
+    simulateCore prog (replicate 3 []) `shouldBe` Right (replicate 3 [b8 7])
+  it "[sim-letrec] feeds back a mealy output that depends only on the state" $ do
+    simulateCore (saturatingProgram stepInside) (replicate 6 []) `shouldBe` Right saturated
+    simulateNormal saturatingNormal (replicate 6 []) `shouldBe` Right saturated
+  it "[sim-letrec] gives an if whose condition is fed back the value its branches agree on" $ do
+    simulateCore (saturatingProgram stepOutside) (replicate 6 []) `shouldBe` Right saturated
+    let five = ELam [("v", bv 8)] (EIf (bvEq8 (var "v") (ELit (b8 0))) (ELit (b8 5)) (ELit (b8 5)))
+        prog =
+          topProgram [] (bv8Ports ["s"]) $
+            ELet True [Bind "s" (sig (bv 8)) (liftE [bv 8] (bv 8) five [var "s"])] (var "s")
+    simulateCore prog (replicate 3 []) `shouldBe` Right (replicate 3 [b8 5])
+  it "[sim-letrec] agrees component by component when an if reads its own result" $ do
+    -- s = lift (\q -> if q.1 then (3, true) else (4, true)) s: the flag is
+    -- true in both branches, so the condition holds and the count is 3.
+    let pairTy = TProd [bv 8, TBool]
+        pair n = ETuple [ELit (b8 n), ELit (VBool True)]
+        f = ELam [("q", pairTy)] (EIf (EProj 1 (var "q")) (pair 3) (pair 4))
+        prog =
+          topProgram [] (bv8Ports ["o"]) $
+            ELet True [Bind "s" (sig pairTy) (liftE [pairTy] pairTy f [var "s"])] $
+              liftE [pairTy] (bv 8) (ELam [("q", pairTy)] (EProj 0 (var "q"))) [var "s"]
+    simulateCore prog (replicate 3 []) `shouldBe` Right (replicate 3 [b8 3])
+  it "[sim-letrec] rejects an if fed back through its condition when its branches differ" $ do
+    let f = ELam [("v", bv 8)] (EIf (bvEq8 (var "v") (ELit (b8 0))) (ELit (b8 1)) (ELit (b8 2)))
+        prog =
+          topProgram [] (bv8Ports ["s"]) $
+            ELet True [Bind "s" (sig (bv 8)) (liftE [bv 8] (bv 8) f [var "s"])] (var "s")
+    r <- settled (simulateCore prog (replicate 3 []))
+    r `shouldBeSimError` "not productive: the value of s at cycle 0 depends on itself"
+  it "[sim-letrec] ignores a value that is not productive when no output needs it" $ do
+    let prog =
+          topProgram [] [Port "o" TBool] $
+            ELet True [Bind "x" (sig TBool) notLoop] (pureE TBool (ELit (VBool True)))
+    simulateCore prog (replicate 3 []) `shouldBe` Right (replicate 3 [VBool True])
+  it "[sim-letrec] reports a loop behind a register in the cycle that reads it" $ do
+    let prog =
+          topProgram [] [Port "o" TBool] $
+            ELet
+              True
+              [Bind "x" (sig TBool) notLoop, Bind "r" (sig TBool) (registerE (VBool False) (var "x"))]
+              (var "r")
+    simulateCore prog [[]] `shouldBe` Right [[VBool False]]
+    r <- settled (simulateCore prog [[], []])
+    r `shouldBeSimError` "not productive: the value of x at cycle 0 depends on itself"
+    r `shouldBeSimError` "in cycle 1"
+  it "[sim-letrec] evaluates a recursive function that returns" $ do
+    -- pop v = if v == 0 then 0 else (v & 1) + pop (v >> 1)
+    let lshr1 e = EApp (prim (BvLshr 1) [bv 8] (bv 8)) [e]
+        pop =
+          ELam [("v", bv 8)] $
+            EIf
+              (bvEq8 (var "v") (ELit (b8 0)))
+              (ELit (b8 0))
+              ( bvBin
+                  BvAdd
+                  8
+                  (bvBin BvAnd 8 (var "v") (ELit (b8 1)))
+                  (EApp (var "pop") [lshr1 (var "v")])
+              )
+        prog =
+          topProgram (bv8Ports ["x"]) (bv8Ports ["o"]) . overPorts (bv8Ports ["x"]) $
+            ELet
+              True
+              [Bind "pop" (TFun (bv 8) (bv 8)) pop]
+              (liftE [bv 8] (bv 8) (var "pop") [var "x"])
+    simulateCore prog (fmap (pure . b8) [0, 1, 255, 165, 128])
+      `shouldBe` Right (fmap (pure . b8) [0, 1, 8, 4, 1])
+  it "[sim-letrec] reports a recursive function that never returns" $ do
     let f = Bind "f" (TFun (bv 8) (bv 8)) (ELam [("v", bv 8)] (EApp (var "f") [var "v"]))
         prog =
           topProgram (bv8Ports ["x"]) (bv8Ports ["o"]) . overPorts (bv8Ports ["x"]) $
             ELet True [f] (liftE [bv 8] (bv 8) (var "f") [var "x"])
     r <- settled (simulateCore prog [[b8 1]])
-    r `shouldBeSimError` "recursive"
+    r `shouldBeSimError` "nested more than 100000"
   where
     accNext' acc = liftE [bv 8, bv 8] (bv 8) (addPrim 8) [var acc, var "x"]
+    notLoop = liftE [TBool] TBool (prim BoolNot [TBool] TBool) [var "x"]
+
+----------------------------------------------------------------------
+-- Evaluation limits
+
+-- | @g0 = \v -> v@ and @gi = \v -> g(i-1) (g(i-1) v)@ for @i = 1 .. k@,
+-- with @gk@ lifted over the input: the identity, at a cost of @2^k@
+-- applications per cycle.
+doublingWork :: Int -> Program
+doublingWork k =
+  programWith
+    (bv8Ports ["x"])
+    (bv8Ports ["o"])
+    (overPorts (bv8Ports ["x"]) (liftE [bv 8] (bv 8) (EGlobal (g k)) [var "x"]))
+    [Def (g i) (TFun (bv 8) (bv 8)) (ELam [("v", bv 8)] (body i)) | i <- [0 .. k]]
+  where
+    g i = Name (Text.pack ("T.g" <> show i))
+    body i
+      | i <= 0 = var "v"
+      | otherwise = EApp (EGlobal (g (i - 1))) [EApp (EGlobal (g (i - 1))) [var "v"]]
+
+-- | Names @prefix1 .. prefixn@ bound in order, each by @step@ applied to
+-- the one before (@prefix0@ for the first).
+chain :: Text -> Ty -> (Expr -> Expr) -> Int -> Expr -> Expr
+chain prefix ty step n =
+  ELet False [Bind (name i) ty (step (EVar (name (i - 1)))) | i <- [1 .. n]]
+  where
+    name i = Name (prefix <> Text.pack (show i))
+
+coreLimitSpec :: Spec
+coreLimitSpec = do
+  it "[sim-depth] evaluates a chain of let binds longer than the nesting limit" $ do
+    let n = 150000
+        f = ELam [("x0", bv 8)] (chain "x" (bv 8) (EApp (incr 8) . pure) n (var ("x" <> showText n)))
+        prog =
+          topProgram (bv8Ports ["x"]) (bv8Ports ["o"]) . overPorts (bv8Ports ["x"]) $
+            liftE [bv 8] (bv 8) f [var "x"]
+    r <- settled (simulateCore prog [[b8 0], [b8 10]])
+    r `shouldBe` Right [[b8 (toInteger n `mod` 256)], [b8 ((toInteger n + 10) `mod` 256)]]
+  it "[sim-depth] runs a chain of signals longer than the nesting limit" $ do
+    let n = 150000
+        next s = liftE [bv 8] (bv 8) (incr 8) [s]
+        prog =
+          topProgram (bv8Ports ["s0"]) (bv8Ports ["o"]) . overPorts (bv8Ports ["s0"]) $
+            chain "s" (sig (bv 8)) next n (var ("s" <> showText n))
+    r <- settled (simulateCore prog [[b8 0], [b8 10]])
+    r `shouldBe` Right [[b8 (toInteger n `mod` 256)], [b8 ((toInteger n + 10) `mod` 256)]]
+  it "[sim-budget] runs a program whose work doubles with every def while it fits" $
+    simulateCore (doublingWork 12) (replicate 4 [b8 7]) `shouldBe` Right (replicate 4 [b8 7])
+  it "[sim-budget] stops a program with 2^40 applications per cycle at the step limit" $ do
+    r <- settledWithin 120 (simulateCore (doublingWork 40) [[b8 7]])
+    r `shouldBeSimError` "simulation exceeded 268435456 evaluation steps"
+    r `shouldBeSimError` "in cycle 0"
+  where
+    showText = Text.pack . show
 
 ----------------------------------------------------------------------
 -- Normal form

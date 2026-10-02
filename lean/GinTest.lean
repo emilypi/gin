@@ -6,3 +6,4 @@ import GinTest.Vectors
 import GinTest.Translate
 import GinTest.Unsupported
 import GinTest.Capture
+import GinTest.Examples

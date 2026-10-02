@@ -1,0 +1,100 @@
+{
+  "format": "gin-ir/1",
+  "producer": {"tool": "gin-test-examples", "leanVersion": "n/a"},
+  "top": {
+    "name": "counter",
+    "domain": {"name": "System", "periodPs": 10000},
+    "inputs": [{"name": "en", "type": {"t": "bool"}}],
+    "outputs": [{"name": "count", "type": {"t": "bv", "width": 8}}],
+    "def": "Counter.counter"
+  },
+  "defs": [
+    {
+      "name": "Counter.counter",
+      "type": {
+        "t": "fun",
+        "arg": {"t": "signal", "domain": "System", "elem": {"t": "bool"}},
+        "res": {"t": "signal", "domain": "System", "elem": {"t": "bv", "width": 8}}
+      },
+      "body": {
+        "e": "lam",
+        "binders": [
+          {"name": "en", "type": {"t": "signal", "domain": "System", "elem": {"t": "bool"}}}
+        ],
+        "body": {
+          "e": "app",
+          "fun": {
+            "e": "prim",
+            "op": "sig.mealy",
+            "type": {
+              "t": "fun",
+              "arg": {
+                "t": "fun",
+                "arg": {"t": "bv", "width": 8},
+                "res": {
+                  "t": "fun",
+                  "arg": {"t": "bool"},
+                  "res": {"t": "prod", "elems": [{"t": "bv", "width": 8}, {"t": "bv", "width": 8}]}
+                }
+              },
+              "res": {
+                "t": "fun",
+                "arg": {"t": "signal", "domain": "System", "elem": {"t": "bool"}},
+                "res": {"t": "signal", "domain": "System", "elem": {"t": "bv", "width": 8}}
+              }
+            },
+            "params": {"init": {"bv": 8, "val": "0"}}
+          },
+          "args": [
+            {
+              "e": "lam",
+              "binders": [
+                {"name": "s", "type": {"t": "bv", "width": 8}},
+                {"name": "e", "type": {"t": "bool"}}
+              ],
+              "body": {
+                "e": "tuple",
+                "elems": [
+                  {
+                    "e": "if",
+                    "cond": {"e": "var", "name": "e"},
+                    "then": {
+                      "e": "app",
+                      "fun": {
+                        "e": "prim",
+                        "op": "bv.add",
+                        "type": {
+                          "t": "fun",
+                          "arg": {"t": "bv", "width": 8},
+                          "res": {
+                            "t": "fun",
+                            "arg": {"t": "bv", "width": 8},
+                            "res": {"t": "bv", "width": 8}
+                          }
+                        },
+                        "params": {}
+                      },
+                      "args": [
+                        {"e": "var", "name": "s"},
+                        {"e": "lit", "value": {"bv": 8, "val": "1"}}
+                      ]
+                    },
+                    "else": {"e": "var", "name": "s"}
+                  },
+                  {"e": "var", "name": "s"}
+                ]
+              }
+            },
+            {"e": "var", "name": "en"}
+          ]
+        }
+      }
+    }
+  ],
+  "certificate": {
+    "theorem": "Counter.counter_correct",
+    "statement": "(hand-written test fixture)",
+    "axioms": ["propext", "sorryAx"],
+    "implAxioms": []
+  }
+}

@@ -6,12 +6,16 @@ module Gin.Certificate
   , checkCertificate
   ) where
 
+import Data.Containers.ListUtils (nubOrd)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
-import Gin.Core.Syntax (Certificate)
-import Gin.Error (GinError)
+import Data.Text qualified as Text
+import Gin.Core.Syntax (Certificate (..))
+import Gin.Error (GinError, Stage (..), ginError)
 
+-- | The axioms a certificate may name. A policy can only widen what is
+-- accepted up to 'alwaysRejected', which no policy admits.
 newtype CertPolicy = CertPolicy
   { allowedAxioms :: Set Text
   }
@@ -34,4 +38,24 @@ alwaysRejected =
 -- axiom in 'alwaysRejected' or containing @._native.@. Errors use
 -- 'StCertificate' and name every offending axiom.
 checkCertificate :: CertPolicy -> Certificate -> Either GinError ()
-checkCertificate = error "not yet implemented: checkCertificate"
+checkCertificate policy c = case problems of
+  [] -> Right ()
+  ps -> Left (ginError StCertificate (Text.intercalate "; " ps))
+  where
+    problems =
+      ["empty theorem name" | blank (certTheorem c)]
+        <> ["empty statement" | blank (certStatement c)]
+        <> axiomProblems "axioms" (certAxioms c)
+        <> axiomProblems "implAxioms" (certImplAxioms c)
+    blank = Text.null . Text.strip
+    axiomProblems list axioms =
+      [ "axiom " <> axiom <> " (in " <> list <> ") " <> reason
+      | axiom <- nubOrd axioms
+      , Just reason <- [verdict axiom]
+      ]
+    verdict axiom
+      | Set.member axiom alwaysRejected = Just "is never allowed"
+      | "._native." `Text.isInfixOf` axiom =
+          Just "comes from native evaluation (native_decide, bv_decide) and is never allowed"
+      | Set.member axiom (allowedAxioms policy) = Nothing
+      | otherwise = Just "is not allowed by the axiom policy"

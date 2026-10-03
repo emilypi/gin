@@ -91,25 +91,36 @@ import Numeric.Natural (Natural)
 -- and is an error only if an output needs it (directly, or through a
 -- register or mealy state).
 --
--- Evaluation is bounded. Building the signal network may take @2^28@
--- evaluation steps and create @2^18@ nodes, and each cycle may take
--- @2^20@ steps, so a run takes at most @2^28 + rows * 2^20@ steps. Going
--- beyond these, or nesting values and applications more than 100000 deep
--- (for example in a recursive function that never returns), is an error.
--- A step is an expression evaluated, a value computed or a function
--- applied, and in a cycle also a node visited, a register or mealy
--- machine advanced, or a component of its next state stored. A cycle may
--- take 16 steps for each bind a normal form may have
--- ('Gin.Limits.maxNormalBinds'), and evaluation takes about 4 steps a
--- cycle for an operation inside a function, 8 for a @sig.lift@ node of
--- one operation and 3 for a register. A program that normalizes can
--- still exceed the cycle budget if evaluating it takes far more steps
--- than its normal form has binds: one that applies functions @2^19@
--- times a cycle to compute the identity, which normalizes to no binds at
--- all, is stopped in cycle 0. Ordinary helper-call overhead, constants
--- computed once, and identity lifts can likewise exceed these bounds for
--- programs the normalizer accepts. Exceeding a bound returns an error
--- for which 'isBudgetError' holds: the simulation is inconclusive, not a
+-- Evaluation is bounded. Work done once for the whole run may take
+-- @2^28@ evaluation steps and create @2^18@ signal nodes: building the
+-- signal network, and computing the values that are the same in every
+-- cycle, such as global definitions and the binds of a recursive @let@
+-- met while the network is built, even when a cycle is the first to need
+-- them. Each cycle may take a further @2^20@ steps, so a run takes at
+-- most @2^28 + rows * 2^20@ steps. Going beyond these, or nesting values
+-- and applications more than 100000 deep (for example in a recursive
+-- function that never returns), is an error.
+--
+-- A step is an expression evaluated, an argument, @let@ bind or tuple
+-- component bound (variables and literals included), a component of a
+-- literal tuple, a value computed or a function applied, and in a cycle
+-- also a node visited, a register or mealy machine advanced, or a
+-- component of its next state stored. Every node counts against the
+-- node bound: inputs, @sig.pure@, @sig.lift@ (identity lifts included),
+-- registers, mealy machines and the nodes that stand for recursive
+-- binders, whether the network is being built or a value computed once
+-- creates them (it keeps them for the rest of the run); signals a cycle
+-- makes and drops are not counted. A cycle may take 16 steps for each
+-- bind a normal form may have ('Gin.Limits.maxNormalBinds'), and
+-- evaluation takes about 6 steps a cycle for an operation inside a
+-- function, 10 for a @sig.lift@ node of one operation and 3 for a
+-- register. A program that normalizes can still exceed these bounds if
+-- evaluating it takes far more steps, or nodes, than its normal form has
+-- binds: one that applies functions @2^17@ times a cycle to compute the
+-- identity, which normalizes to no binds at all, is stopped in cycle 0,
+-- and ordinary helper-call overhead and identity lifts can likewise
+-- exceed them. Exceeding a bound returns an error for which
+-- 'isBudgetError' holds: the simulation is inconclusive, not a
 -- disagreement, and callers should report it as such. Whenever
 -- 'simulateCore' returns a result, it agrees with 'simulateNormal' on
 -- the normalized program.
@@ -188,22 +199,29 @@ hasType what ty v
 ----------------------------------------------------------------------
 -- Core IR: limits
 
--- | Evaluation steps (expressions evaluated, values computed and
--- functions applied) building the signal network may take: 4096 for each
--- bind a normal form may have ('maxNormalBinds'), @2^28@ in all.
+-- | Evaluation steps the work done once for the whole run may take
+-- ('Once'): building the signal network, and computing the values that
+-- are the same in every cycle. 4096 for each bind a normal form may have
+-- ('maxNormalBinds'), @2^28@ in all.
 buildSteps :: Int
 buildSteps = 4096 * maxNormalBinds
 
--- | Evaluation steps each cycle may take: 16 for each bind a normal form
--- may have, @2^20@ in all. Each cycle starts with the full budget, so
--- the steps of a run grow with its rows, as the work of 'simulateNormal'
--- does.
+-- | Evaluation steps each cycle may take ('PerCycle'): 16 for each bind a
+-- normal form may have, @2^20@ in all. Each cycle starts with the full
+-- budget, so the steps of a run grow with its rows, as the work of
+-- 'simulateNormal' does.
 cycleSteps :: Int
 cycleSteps = 16 * maxNormalBinds
 
--- | Nodes building the signal network may create: 4 for each bind a
--- normal form may have, @2^18@ in all. This bounds the memory the network
--- holds for the whole run, and the steps a cycle spends visiting nodes.
+-- | Signal nodes the work done once may create: four times
+-- 'maxNormalBinds', @2^18@ in all. Every node counts (inputs, @sig.pure@
+-- and @sig.lift@ nodes, registers, mealy machines and the nodes standing
+-- for recursive binders), so this is not a bound on binds: a normal form
+-- has no bind for an input, a @sig.pure@ or an identity lift, and a
+-- design of 65536 registers built from four nodes each exceeds it
+-- although its normal form has only 65536 binds. Nodes are kept for the
+-- whole run, so this bounds the memory they hold, and the steps a cycle
+-- spends visiting the network.
 maxNetworkNodes :: Int
 maxNetworkNodes = 4 * maxNormalBinds
 
@@ -242,6 +260,9 @@ data Cell s = Cell
   -- ^ The recursive binder this value belongs to, named in loop errors.
   , cellContext :: !(Maybe Text)
   -- ^ Context added to an error raised while computing the value.
+  , cellCharge :: !Charge
+  -- ^ The bound its computation counts against: that of the work done
+  -- when the cell was created.
   , cellState :: !(STRef s (CellState s))
   }
 
@@ -313,17 +334,36 @@ data Loop s = Loop
   }
 
 data Sim s = Sim
-  { simSteps :: !(STRef s Int)
+  { simOnceSteps :: !(STRef s Int)
+  -- ^ Steps of the work done once, against 'buildSteps'.
+  , simSteps :: !(STRef s Int)
+  -- ^ Steps of the current cycle, against 'cycleSteps'.
   , simNodes :: !(STRef s Int)
-  -- ^ Nodes created while building the network.
+  -- ^ Nodes created by the work done once.
   , simCycle :: !(STRef s Int)
   , simFresh :: !(STRef s Int)
   -- ^ Numbers for nodes and activations.
   , simGlobals :: !(STRef s (Map Name (Thunk s)))
   }
 
--- | Where evaluation is: its nesting depth and the innermost activation.
-data Here s = Here !Int !(Maybe (Active s))
+-- | Which work evaluation is doing, and so which bound its steps count
+-- against.
+data Charge
+  = -- | Work whose result is kept for the whole run: building the signal
+    -- network, and computing a value created while doing such work (a
+    -- global definition, or a bind of a recursive @let@ met while the
+    -- network is built), even when a cycle is the first to need it. Such
+    -- a value is the same in every cycle, so it is computed once. Its
+    -- steps count against 'buildSteps', and the nodes it creates, which
+    -- it keeps, against 'maxNetworkNodes'.
+    Once
+  | -- | Computing the values of one cycle, against 'cycleSteps'.
+    PerCycle
+  deriving stock (Eq)
+
+-- | Where evaluation is: its nesting depth, the innermost activation, and
+-- the work it is doing.
+data Here s = Here !Int !(Maybe (Active s)) !Charge
 
 -- | Evaluation with a shared step budget.
 newtype Eval s a = Eval (Sim s -> Here s -> ST s (Either (Failure s) a))
@@ -351,7 +391,14 @@ askSim :: Eval s (Sim s)
 askSim = Eval $ \sim _ -> pure (Right sim)
 
 innermost :: Eval s (Maybe (Active s))
-innermost = Eval $ \_ (Here _ active) -> pure (Right active)
+innermost = Eval $ \_ (Here _ active _) -> pure (Right active)
+
+currentCharge :: Eval s Charge
+currentCharge = Eval $ \_ (Here _ _ c) -> pure (Right c)
+
+-- | Run a computation as the given work.
+withCharge :: Charge -> Eval s a -> Eval s a
+withCharge c (Eval m) = Eval $ \sim (Here d active _) -> m sim (Here d active c)
 
 failWith :: Failure s -> Eval s a
 failWith f = Eval $ \_ _ -> pure (Left f)
@@ -371,33 +418,41 @@ tryBottom m =
     Left (Bottom l) -> pure (Left l)
     Left (Abort e) -> failWith (Abort e)
 
--- | Charge one evaluation step against 'buildSteps' while the network is
--- built, and against 'cycleSteps' in a cycle.
+-- | Charge one evaluation step.
 tick :: Eval s ()
-tick = Eval $ \sim _ -> do
-  n <- readSTRef (simSteps sim)
-  building <- (< 0) <$> readSTRef (simCycle sim)
-  let limit = if building then buildSteps else cycleSteps
-  if n < limit
-    then Right () <$ (writeSTRef (simSteps sim) $! n + 1)
-    else
+tick = charge 1
+
+-- | Charge evaluation steps to the work being done: against 'buildSteps'
+-- for work done once, and against 'cycleSteps' in a cycle.
+charge :: Int -> Eval s ()
+charge k = Eval $ \sim (Here _ _ c) -> do
+  let (counter, limit) = case c of
+        Once -> (simOnceSteps sim, buildSteps)
+        PerCycle -> (simSteps sim, cycleSteps)
+  n <- readSTRef counter
+  if n <= limit - k
+    then Right () <$ (writeSTRef counter $! n + k)
+    else do
+      building <- (< 0) <$> readSTRef (simCycle sim)
+      let work = case c of
+            Once
+              | building -> "building the signal network needs"
+              | otherwise -> "the values computed once for the whole run need"
+            PerCycle -> "the cycle needs"
       pure . Left . Abort . budgetError $
-        (if building then "building the signal network" else "the cycle")
-          <> " needs more than "
-          <> showT limit
-          <> " evaluation steps"
+        work <> " more than " <> showT limit <> " evaluation steps"
 
 -- | One level deeper, bounded by 'maxEvalDepth', optionally inside a new
 -- activation.
 deeper :: Maybe (Active s) -> Eval s a -> Eval s a
-deeper new (Eval m) = Eval $ \sim (Here d active) ->
+deeper new (Eval m) = Eval $ \sim (Here d active c) ->
   if d >= maxEvalDepth
     then
       pure . Left . Abort . budgetError $
         "evaluation nested more than "
           <> showT maxEvalDepth
           <> " values and applications deep (a recursive function that does not return?)"
-    else m sim (Here (d + 1) (new <|> active))
+    else m sim (Here (d + 1) (new <|> active) c)
 
 fresh :: Eval s Int
 fresh = do
@@ -409,16 +464,19 @@ fresh = do
 currentCycle :: Eval s Int
 currentCycle = askSim >>= liftST . readSTRef . simCycle
 
--- | A value computed on first use.
+-- | A value computed on first use, as part of the work being done now.
 delay :: Maybe Text -> Maybe Text -> Eval s (D s) -> Eval s (Thunk s)
-delay label ctx m = Lazy . Cell label ctx <$> liftST (newSTRef (Pending Nothing m))
+delay label ctx m = do
+  c <- currentCharge
+  Lazy . Cell label ctx c <$> liftST (newSTRef (Pending Nothing m))
 
 -- | A value whose computation just failed with the given loop, to be
 -- computed again when it is needed and could succeed.
 retry :: Maybe Text -> Loop s -> Eval s (D s) -> Eval s (Thunk s)
 retry ctx loop m = do
   active <- innermost
-  Lazy . Cell Nothing ctx <$> liftST (newSTRef (Pending (Just (Guard active loop)) m))
+  c <- currentCharge
+  Lazy . Cell Nothing ctx c <$> liftST (newSTRef (Pending (Just (Guard active loop)) m))
 
 -- | Is the activation (or top level, for 'Nothing') still running?
 running :: Maybe (Active s) -> Eval s Bool
@@ -447,13 +505,15 @@ force = \case
   where
     recheck (Guard active l) = (\stuck -> if stuck then Just l else Nothing) <$> running active
 
+-- | Compute a cell's value as the work that created it, so a value
+-- created while building the network is charged to the work done once
+-- even when a cycle is the first to need it.
 compute :: Cell s -> Eval s (D s) -> Eval s (D s)
-compute c m = do
-  tick
+compute c m = withCharge (cellCharge c) tick >> do
   a <- fresh
   outer <- innermost
   liftST (writeSTRef (cellState c) (Running a))
-  attempt (deeper (Just (Active (cellState c) a)) m) >>= \case
+  attempt (deeper (Just (Active (cellState c) a)) (withCharge (cellCharge c) m)) >>= \case
     Right d -> d <$ liftST (writeSTRef (cellState c) (Done d))
     Left f -> do
       liftST . writeSTRef (cellState c) $ case f of
@@ -519,14 +579,22 @@ loopError l =
 
 runCore :: Program -> [[Value]] -> ST s (Either GinError [[Value]])
 runCore prog rows = do
-  sim <- Sim <$> newSTRef 0 <*> newSTRef 0 <*> newSTRef (-1) <*> newSTRef 0 <*> newSTRef Map.empty
-  either (Left . failureError) Right <$> runEval (coreRun prog rows) sim (Here 0 Nothing)
+  sim <-
+    Sim
+      <$> newSTRef 0
+      <*> newSTRef 0
+      <*> newSTRef 0
+      <*> newSTRef (-1)
+      <*> newSTRef 0
+      <*> newSTRef Map.empty
+  either (Left . failureError) Right <$> runEval (coreRun prog rows) sim (Here 0 Nothing Once)
 
 -- | Build the signal network, then run it one cycle per row. Each cycle
 -- computes the nodes in dependency order first (a node that needs a value
 -- still being computed is left for later), so long chains of signals do
 -- not nest; then reads the outputs; then computes every next state.
--- Building and every cycle each have their own step budget.
+-- The work done once and every cycle each have their own step budget
+-- ('Charge').
 coreRun :: Program -> [[Value]] -> Eval s [[Value]]
 coreRun prog rows = do
   defineGlobals prog
@@ -539,7 +607,7 @@ coreRun prog rows = do
     order <- network out
     pure (out, order)
   let machines = filter stateful order
-      step acc (t, row) = do
+      step acc (t, row) = withCharge PerCycle $ do
         sim <- askSim
         liftST $ do
           writeSTRef (simCycle sim) t
@@ -667,15 +735,17 @@ splitOutputs ports v = case ports of
 ----------------------------------------------------------------------
 -- Core IR: signals
 
--- | A new node. Nodes created while the network is built are counted
--- against 'maxNetworkNodes'. A node created in a cycle, by a function
--- that makes a signal it cannot return (signals carry only data), is not
--- part of the network and is not counted.
+-- | A new node. Nodes created by work done once ('Once') are counted
+-- against 'maxNetworkNodes': those of the network, and those of a value
+-- computed once, such as a global signal a cycle is the first to need,
+-- which keeps them for the rest of the run. A node created in a cycle,
+-- by a function that makes a signal it cannot return (signals carry only
+-- data), is dropped when the cycle ends and is not counted.
 newNode :: NodeKind s -> Eval s (Node s)
 newNode kind = do
   sim <- askSim
-  building <- (< 0) <$> currentCycle
-  when building $ do
+  kept <- (== Once) <$> currentCharge
+  when kept $ do
     count <- liftST (readSTRef (simNodes sim))
     when (count >= maxNetworkNodes) . failWith . Abort . budgetError $
       "the signal network has more than " <> showT maxNetworkNodes <> " nodes"
@@ -746,7 +816,7 @@ eval env expr = do
   case expr of
     EVar n -> maybe (abort ("unbound variable " <> unName n)) force (Map.lookup n env)
     EGlobal n -> globalThunk ("unknown global " <> unName n) n >>= force
-    ELit v -> pure (fromValue v)
+    ELit v -> literal v
     EPrim op _ -> pure (primValue op)
     EApp f args -> do
       fv <- eval env f
@@ -768,15 +838,34 @@ eval env expr = do
 -- | An argument, @let@ bind or tuple component, computed now so chains of
 -- them do not nest. One that needs a value still being computed is left
 -- to be computed when it is used, which is what makes evaluation by need.
+-- Binding one costs a step, even a variable or a literal, so binding many
+-- of them (a wide tuple of copies of a variable) is not free.
 eager :: Maybe Text -> Env s -> Expr -> Eval s (Thunk s)
-eager ctx env = \case
-  EVar n | Just th <- Map.lookup n env -> pure th
-  ELit v -> pure (Ready (fromValue v))
-  e ->
-    attempt (eval env e) >>= \case
-      Right d -> pure (Ready d)
-      Left (Bottom loop) -> retry ctx loop (eval env e)
-      Left (Abort err) -> failWith (Abort (maybe err (`nestedIn` err) ctx))
+eager ctx env expr =
+  tick >> case expr of
+    EVar n | Just th <- Map.lookup n env -> pure th
+    ELit v -> Ready <$> literal v
+    e ->
+      attempt (eval env e) >>= \case
+        Right d -> pure (Ready d)
+        Left (Bottom loop) -> retry ctx loop (eval env e)
+        Left (Abort err) -> failWith (Abort (maybe err (`nestedIn` err) ctx))
+
+-- | A literal, costing a step for each component of a tuple, as tuples
+-- and scalars in it are counted by 'valueSize', beyond the step already
+-- charged for the expression.
+literal :: Value -> Eval s (D s)
+literal v = case v of
+  VTuple _ -> fromValue v <$ charge (valueSize v - 1)
+  _ -> pure (fromValue v)
+
+-- | The tuples and scalars a value is made of.
+valueSize :: Value -> Int
+valueSize = go 0
+  where
+    go !n = \case
+      VTuple vs -> foldl' go (n + 1) vs
+      _ -> n + 1
 
 project :: Natural -> D s -> Eval s (Thunk s)
 project i = \case
@@ -885,14 +974,14 @@ runPrim op args
 -- needed, in an environment where all of them are bound. A binder of
 -- signal type is bound to a placeholder node that stands for the node
 -- its expression builds, so the expression can refer to it before that
--- node exists; tuples are bound component by component.
+-- node exists; tuples are bound component by component. Binding each
+-- binder costs a step.
 letRec :: Env s -> [Bind] -> Eval s (Env s)
 letRec env binds = do
-  refs <- traverse (const (liftST (newSTRef (Pending Nothing unset)))) binds
-  let cells =
-        [ Lazy (Cell (Just (unName (bindName b))) (Just ("in bind " <> unName (bindName b))) r)
-        | (b, r) <- zip binds refs
-        ]
+  work <- currentCharge
+  refs <- traverse (const (tick >> liftST (newSTRef (Pending Nothing unset)))) binds
+  let cell b = Lazy . Cell (Just (unName (bindName b))) (Just ("in bind " <> unName (bindName b))) work
+      cells = zipWith cell binds refs
   slots <- sequence [recSlot (unName (bindName b)) (bindTy b) c | (b, c) <- zip binds cells]
   let env' = foldr (\(b, s) -> Map.insert (bindName b) s) env (zip binds slots)
   zipWithM_ (\b r -> liftST (writeSTRef r (Pending Nothing (eval env' (bindExpr b))))) binds refs

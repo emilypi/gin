@@ -7,6 +7,7 @@ import Data.Either (isRight)
 import Data.Foldable (for_)
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Gin.Core.Check (checkProgram)
 import Gin.Core.Normal
 import Gin.Core.Syntax
 import Gin.Error (GinError (..), Stage (..), renderError)
@@ -485,18 +486,21 @@ shouldBeSimError result needle = case result of
     renderError e `shouldSatisfy` Text.isInfixOf needle
   Right r -> expectationFailure ("expected a simulation error, got " <> show r)
 
--- | Evaluate a result completely within ten seconds, so a simulator that
+-- | Evaluate a result completely within 'timeLimit', so a simulator that
 -- loops fails the test instead of hanging the suite.
 settled :: (Show a) => a -> IO a
-settled = settledWithin 10
-
--- | 'settled' with a limit in seconds.
-settledWithin :: (Show a) => Int -> a -> IO a
-settledWithin seconds x =
-  timeout (seconds * 1000000) (evaluate (length (show x))) >>= \case
+settled x =
+  timeout (timeLimit * 1000000) (evaluate (length (show x))) >>= \case
     Just _ -> pure x
     Nothing ->
-      x <$ expectationFailure ("simulation did not finish within " <> show seconds <> " s")
+      x <$ expectationFailure ("simulation did not finish within " <> show timeLimit <> " s")
+
+-- | Seconds a simulation in these tests may take. The slowest takes a few
+-- seconds when built without optimization and far less with it; the bound
+-- is generous so that only a simulation that does not end, or one that
+-- became far slower, fails, even on a loaded machine.
+timeLimit :: Int
+timeLimit = 60
 
 ----------------------------------------------------------------------
 -- Core IR semantics
@@ -900,22 +904,122 @@ coreLetRecSpec = do
 
 -- | @g0 = \v -> v@ and @gi = \v -> g(i-1) (g(i-1) v)@ for @i = 1 .. k@,
 -- with @gk@ lifted over the input: the identity, at a cost of
--- @2^(k+1) - 1@ applications, about @7 * 2^k@ evaluation steps, per cycle.
+-- @2^(k+1) - 1@ applications, about @9 * 2^k@ evaluation steps, per cycle.
 doublingWork :: Int -> Program
-doublingWork k =
+doublingWork = doublingOver (var "v")
+
+-- | 'doublingWork' with @g0 v = base@: @2^k@ calls of @g0@ a cycle.
+doublingOver :: Expr -> Int -> Program
+doublingOver base k =
   programWith
     (bv8Ports ["x"])
     (bv8Ports ["o"])
     (overPorts (bv8Ports ["x"]) (liftE [bv 8] (bv 8) (EGlobal (doubling k)) [var "x"]))
-    (doublingDefs k)
+    (doublingDefsWith base k)
 
 -- | The defs @T.g0 .. T.gk@ of 'doublingWork'.
 doublingDefs :: Int -> [Def]
-doublingDefs k = [Def (doubling i) (TFun (bv 8) (bv 8)) (ELam [("v", bv 8)] (body i)) | i <- [0 .. k]]
+doublingDefs = doublingDefsWith (var "v")
+
+-- | The defs @T.g0 .. T.gk@ of 'doublingOver'.
+doublingDefsWith :: Expr -> Int -> [Def]
+doublingDefsWith base k =
+  [Def (doubling i) (TFun (bv 8) (bv 8)) (ELam [("v", bv 8)] (body i)) | i <- [0 .. k]]
   where
     body i
-      | i <= 0 = var "v"
+      | i <= 0 = base
       | otherwise = EApp (EGlobal (doubling (i - 1))) [EApp (EGlobal (doubling (i - 1))) [var "v"]]
+
+-- | Bodies for @g0 v@ in 'doublingOver' that bind @w@ operands, each a
+-- variable or a literal, and then return @v@, so a call costs about @w@
+-- evaluation steps and does nothing else.
+operandBodies :: [(String, Int -> Expr)]
+operandBodies =
+  [ ("component of a tuple of variables", wideTuple (var "v"))
+  , ("component of a tuple of literals", wideTuple (ELit (b8 0)))
+  , ("bind of a let", \w -> ELet False (binds w) (var "v"))
+  , ("bind of a recursive let", \w -> ELet True (binds w) (var "v"))
+  ]
+  where
+    binds w = [Bind (Name (Text.pack ("a" <> show i))) (bv 8) (var "v") | i <- [1 .. w]]
+
+-- | @let t = (e, .., e) in v@, with @w@ components.
+wideTuple :: Expr -> Int -> Expr
+wideTuple e w =
+  ELet False [Bind "t" (TProd (replicate w (bv 8))) (ETuple (replicate w e))] (var "v")
+
+-- | @k = g18 7@ in a recursive let, read through @sig.pure@: a constant
+-- that costs about @9 * 2^18@ steps, more than a cycle may take, and is
+-- computed when cycle 0 first needs it.
+recursiveConstant :: Program
+recursiveConstant =
+  programWith
+    []
+    (bv8Ports ["o"])
+    (ELet True [Bind "k" (bv 8) constant] (pureE (bv 8) (var "k")))
+    (doublingDefs 18)
+  where
+    constant = EApp (EGlobal (doubling 18)) [ELit (b8 7)]
+
+-- | A global constant @T.k = g18 7@, added to the input inside a lifted
+-- function, so it is first needed while cycle 0 is computed.
+globalConstant :: Program
+globalConstant =
+  programWith
+    (bv8Ports ["x"])
+    (bv8Ports ["o"])
+    (overPorts (bv8Ports ["x"]) (liftE [bv 8] (bv 8) addK [var "x"]))
+    (Def "T.k" (bv 8) (EApp (EGlobal (doubling 18)) [ELit (b8 7)]) : doublingDefs 18)
+  where
+    addK = ELam [("v", bv 8)] (bvBin BvAdd 8 (var "v") (EGlobal "T.k"))
+
+-- | Five global signals @T.sj = r16 (sig.pure j)@, each built from @2^16@
+-- registers ('registerDoubling'), and a lifted function that is the
+-- identity but binds @T.sj@ in the cycles where its input is @j@. A
+-- global is computed once, so each of these signals is built the first
+-- time a cycle needs it and kept for the rest of the run.
+globalSignals :: Program
+globalSignals =
+  programWith
+    (bv8Ports ["x"])
+    (bv8Ports ["o"])
+    (overPorts (bv8Ports ["x"]) (liftE [bv 8] (bv 8) pick [var "x"]))
+    ([Def (signalGlobal j) (sig (bv 8)) (built j) | j <- [0 .. 4]] <> registerDoubling (b8 0) 16)
+  where
+    built j = EApp (EGlobal (registers 16)) [pureE (bv 8) (ELit (b8 j))]
+    pick = ELam [("v", bv 8)] (foldr bindAt (var "v") [0 .. 4])
+    bindAt j =
+      EIf
+        (bvEq8 (var "v") (ELit (b8 j)))
+        (ELet False [Bind "s" (sig (bv 8)) (EGlobal (signalGlobal j))] (var "v"))
+    signalGlobal j = Name (Text.pack ("T.s" <> show j))
+
+-- | @g0 s = base@ and @gi s = g(i-1) (g(i-1) s)@ on 8-bit signals, with
+-- @gk@ applied to the input: building the network calls @g0@ @2^k@ times,
+-- although the network is just the input.
+signalDoubling :: Expr -> Int -> Program
+signalDoubling base k =
+  programWith
+    (bv8Ports ["x"])
+    (bv8Ports ["o"])
+    (overPorts (bv8Ports ["x"]) (EApp (EGlobal (h k)) [var "x"]))
+    [Def (h i) (TFun sig8 sig8) (ELam [("s", sig8)] (body i)) | i <- [0 .. k]]
+  where
+    sig8 = sig (bv 8)
+    h :: Int -> Name
+    h i = Name (Text.pack ("T.h" <> show i))
+    body i
+      | i <= 0 = base
+      | otherwise = EApp (EGlobal (h (i - 1))) [EApp (EGlobal (h (i - 1))) [var "s"]]
+
+-- | @let t = l in x@ for a literal tuple @l@ of @2^n@ Bools: about @2^n@
+-- evaluation steps (one for each component), spent far faster than steps
+-- that evaluate expressions, so tests can reach the large bounds quickly
+-- even when built without optimization.
+literalWork :: Int -> Text -> Expr
+literalWork n x = ELet False [Bind "t" (valueTy wide) (ELit wide)] (var x)
+  where
+    wide = VTuple (replicate (2 ^ n) (VBool False))
 
 -- | The name of @gi@ in 'doublingDefs'.
 doubling :: Int -> Name
@@ -939,7 +1043,7 @@ droppedSignals =
       | otherwise = EApp (EGlobal (h (i - 1))) [EApp (EGlobal (h (i - 1))) [var "v"]]
 
 -- | A counter whose output is its input, computed with @g18@ of
--- 'doublingDefs' (about @7 * 2^18@ steps) in the cycle where the count is
+-- 'doublingDefs' (about @9 * 2^18@ steps) in the cycle where the count is
 -- 3 and directly in every other cycle.
 expensiveAtThree :: Program
 expensiveAtThree =
@@ -1013,7 +1117,7 @@ chain prefix ty step n =
 coreLimitSpec :: Spec
 coreLimitSpec = do
   it "[sim-depth] evaluates a chain of let binds longer than the nesting limit" $ do
-    let n = 150000
+    let n = 110000
         f = ELam [("x0", bv 8)] (chain "x" (bv 8) (EApp (incr 8) . pure) n (var ("x" <> showText n)))
         prog =
           topProgram (bv8Ports ["x"]) (bv8Ports ["o"]) . overPorts (bv8Ports ["x"]) $
@@ -1028,9 +1132,9 @@ coreLimitSpec = do
             chain "s" (sig (bv 8)) next n (var ("s" <> showText n))
     r <- settled (simulateCore prog [[b8 0], [b8 10]])
     r `shouldBe` Right [[b8 (toInteger n `mod` 256)], [b8 ((toInteger n + 10) `mod` 256)]]
-  it "[sim-budget] runs a cycle of about 7 * 2^17 steps, within the 2^20 a cycle may take" $
-    simulateCore (doublingWork 17) [[b8 7], [b8 9]] `shouldBe` Right [[b8 7], [b8 9]]
-  it "[sim-budget] stops a cycle of about 7 * 2^18 steps in cycle 0" $ do
+  it "[sim-budget] runs a cycle of about 9 * 2^16 steps, within the 2^20 a cycle may take" $
+    simulateCore (doublingWork 16) [[b8 7], [b8 9]] `shouldBe` Right [[b8 7], [b8 9]]
+  it "[sim-budget] stops a cycle of about 9 * 2^18 steps in cycle 0" $ do
     r <- settled (simulateCore (doublingWork 18) [[b8 7], [b8 9]])
     r `shouldBeSimError` "the cycle needs more than 1048576 evaluation steps"
     r `shouldBeSimError` "in cycle 0"
@@ -1074,10 +1178,65 @@ coreLimitSpec = do
     let rows = [[b8 (t `mod` 256)] | t <- [0 .. 299]]
     r <- settled (simulateCore droppedSignals rows)
     r `shouldBe` Right rows
-  it "[sim-budget] runs 10000 cycles of about 7 * 2^12 steps, more than 2^28 steps in all" $ do
+  it "[sim-budget] [o0-fast] runs 10000 cycles of 2^15 steps, more than 2^28 steps in all" $ do
     let rows = [[b8 (t `mod` 256)] | t <- [0 .. 9999]]
-    r <- settledWithin 120 (simulateCore (doublingWork 12) rows)
+        prog =
+          topProgram (bv8Ports ["x"]) (bv8Ports ["o"]) . overPorts (bv8Ports ["x"]) $
+            liftE [bv 8] (bv 8) (ELam [("v", bv 8)] (literalWork 15 "v")) [var "x"]
+    r <- settled (simulateCore prog rows)
     r `shouldBe` Right rows
+  it "[sim-build-charge] charges a recursive-let constant to the building budget, not to cycle 0" $ do
+    checkProgram recursiveConstant `shouldBe` Right ()
+    r <- settled (simulateCore recursiveConstant (replicate 3 []))
+    r `shouldBe` Right (replicate 3 [b8 7])
+  it "[sim-build-charge] charges a global constant to the building budget, not to cycle 0" $ do
+    checkProgram globalConstant `shouldBe` Right ()
+    r <- settled (simulateCore globalConstant [[b8 1], [b8 2]])
+    r `shouldBe` Right [[b8 8], [b8 9]]
+  it "[sim-build-charge] counts the nodes a global builds during a cycle against the node limit" $ do
+    -- Each global signal is 2^16 + 1 nodes and the network itself 2, so
+    -- three fit within 2^18 nodes and the fourth does not. A global is
+    -- built once, so binding it again in a later cycle adds no nodes.
+    checkProgram globalSignals `shouldBe` Right ()
+    let rows = fmap (pure . b8)
+    r <- settled (simulateCore globalSignals (rows [0, 1, 2, 0, 1, 2]))
+    r `shouldBe` Right (rows [0, 1, 2, 0, 1, 2])
+    r' <- settled (simulateCore globalSignals (rows [0, 1, 2, 3]))
+    r' `shouldBeSimError` "the signal network has more than 262144 nodes"
+    r' `shouldBeSimError` "in cycle 3"
+    either isBudgetError (const False) r' `shouldBe` True
+  for_ operandBodies $ \(what, body) ->
+    it ("[sim-operand-charge] charges a step for each " <> what) $ do
+      -- 2^10 calls a cycle: 512 operands each fit in the 2^20 steps of a
+      -- cycle, 1100 do not.
+      r <- settled (simulateCore (doublingOver (body 512) 10) [[b8 7]])
+      r `shouldBe` Right [[b8 7]]
+      r' <- settled (simulateCore (doublingOver (body 1100) 10) [[b8 7]])
+      r' `shouldBeSimError` "the cycle needs more than 1048576 evaluation steps"
+      r' `shouldBeSimError` "in cycle 0"
+  it "[sim-operand-charge] stops the wide-tuple program in cycle 0, long before it would finish" $ do
+    -- 2^14 calls a cycle, each binding a tuple of 100000 copies of its
+    -- argument: if components were free, a cycle would take minutes.
+    let prog = doublingOver (wideTuple (var "v") 100000) 14
+    checkProgram prog `shouldBe` Right ()
+    r <- settled (simulateCore prog [[b8 7]])
+    r `shouldBeSimError` "the cycle needs more than 1048576 evaluation steps"
+    r `shouldBeSimError` "in cycle 0"
+  it "[sim-build-limit] builds a network whose functions are applied 2^17 times" $ do
+    r <- settled (simulateCore (signalDoubling (var "s") 16) [[b8 1], [b8 2]])
+    r `shouldBe` Right [[b8 1], [b8 2]]
+  it "[sim-build-limit] [o0-fast] builds a network that takes 2^27 steps, within 60 s" $ do
+    -- 2^11 calls of 2^16 steps each.
+    r <- settled (simulateCore (signalDoubling (literalWork 16 "s") 11) [[b8 1]])
+    r `shouldBe` Right [[b8 1]]
+  it "[sim-build-limit] [o0-fast] stops building after 2^28 steps, within 60 s" $ do
+    -- 2^40 calls of 2^16 steps each: building would never finish.
+    let prog = signalDoubling (literalWork 16 "s") 40
+    checkProgram prog `shouldBe` Right ()
+    r <- settled (simulateCore prog [[b8 1]])
+    r `shouldBeSimError` "building the signal network needs more than 268435456 evaluation steps"
+    r `shouldBeSimError` "in def T.top"
+    either isBudgetError (const False) r `shouldBe` True
   where
     showText = Text.pack . show
 
@@ -1320,9 +1479,26 @@ badRows =
   ]
 
 rowsRejectSpec :: Spec
-rowsRejectSpec =
+rowsRejectSpec = do
   for_ badRows $ \(what, prog, nm, rows, cyc) -> do
     it ("[sim-rows-reject] simulateCore rejects " <> what) $
       simulateCore prog rows `shouldBeSimError` cyc
     it ("[sim-rows-reject] simulateNormal rejects " <> what) $
       simulateNormal nm rows `shouldBeSimError` cyc
+  -- Each circuit below fails in cycle 0 if it is run, so only a check of
+  -- every row before the first cycle reports the bad row of cycle 2.
+  it "[sim-rows-reject] simulateCore checks every row before it simulates a cycle" $ do
+    r <- settled (simulateCore (doublingWork 18) [[b8 7], [b8 7], [b8 7, b8 8]])
+    r `shouldBeSimError` "expected 1 input values"
+    r `shouldBeSimError` "in cycle 2"
+  it "[sim-rows-reject] simulateNormal checks every row before it simulates a cycle" $ do
+    let readsLater =
+          normalModule
+            [("x", bv 8)]
+            [NOutput "o" (bv 8) (AVar "a")]
+            [ NBind "a" (bv 8) (NPrim BvAdd [AVar "b", ALit (b8 1)])
+            , NBind "b" (bv 8) (NPrim BvAdd [AVar "x", ALit (b8 1)])
+            ]
+    simulateNormal readsLater [[b8 1], [b8 1], [b8 1, b8 2]]
+      `shouldBeSimError` "expected 1 input values"
+    simulateNormal readsLater [[b8 1], [b8 1], [b8 1, b8 2]] `shouldBeSimError` "in cycle 2"

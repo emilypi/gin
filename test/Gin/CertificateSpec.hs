@@ -38,6 +38,22 @@ rejectedNaming fragments = \case
 nativeAxiom :: Text
 nativeAxiom = "Counter.counter_correct._native.bv_decide.ax_1_5"
 
+-- | Texts with no visible character: whitespace, and characters in the
+-- categories Cc, Cf, Zl, Zp, Co and Cn.
+invisibleOnly :: [Text]
+invisibleOnly =
+  [ "\x200B"
+  , "\x200B \t\x200C"
+  , "\x202E"
+  , "\n\r"
+  , "\xFEFF"
+  , "\x2028\x2029"
+  , "\x00A0\x3000"
+  , "\xE000"
+  , "\x0378"
+  , "\ESC"
+  ]
+
 decodeFixture :: FilePath -> IO Program
 decodeFixture path = do
   bytes <- LBS.readFile path
@@ -111,6 +127,91 @@ spec = do
           Text.unpack (errMessage e) `shouldNotContain` "propext"
           Text.unpack (errMessage e) `shouldNotContain` "Quot.sound"
         Right () -> expectationFailure "expected sorryAx to be rejected"
+
+  describe "axiom name normalization" $ do
+    it "[cert-normalize] rejects quoted and padded spellings of sorryAx and the kernel bypasses" $
+      for_
+        [ "«sorryAx»"
+        , " sorryAx "
+        , "sorryAx  "
+        , "«Lean».«ofReduceBool»"
+        , "Lean.«ofReduceBool»"
+        , "«Lean».ofReduceNat"
+        , " Lean.«trustCompiler» "
+        ]
+        $ \axiom -> do
+          rejectedNaming [axiom, "never allowed"] $
+            checkCertificate (allowing [axiom]) (cert [axiom] [])
+          rejectedNaming [axiom, "never allowed"] $
+            checkCertificate (allowing [axiom]) (cert [] [axiom])
+    it "[cert-normalize] rejects quoted spellings of native-decision axioms" $
+      for_
+        [ "Counter.thm.«_native».bv_decide.ax_1_5"
+        , "«Counter».«thm».«_native».native_decide.ax_1"
+        , " Counter.thm._native.ax "
+        ]
+        $ \axiom ->
+          rejectedNaming [axiom, "native"] $
+            checkCertificate (allowing [axiom]) (cert [axiom] [])
+    it "[cert-normalize] rejects spellings that only resemble a rejected axiom once unquoted" $
+      for_ ["«Lean.ofReduceBool»", "«sorryAx »", "_root_.sorryAx", "Lean . trustCompiler"] $
+        \axiom ->
+          rejectedNaming [axiom, "never allowed"] $
+            checkCertificate (allowing [axiom]) (cert [axiom] [])
+    it "[cert-normalize] accepts quoted and padded spellings of the standard axioms" $
+      checkCertificate
+        defaultPolicy
+        (cert ["«propext»", " Classical.choice "] ["«Quot».«sound»", "Quot.«sound»"])
+        `shouldBe` Right ()
+    it "[cert-normalize] does not take a quoted name with a dot inside for a qualified name" $
+      -- «Classical.choice» is one component: a different constant from
+      -- Classical.choice, which anyone could declare as an axiom.
+      rejectedNaming ["«Classical.choice»", "not allowed"] $
+        checkCertificate defaultPolicy (cert ["«Classical.choice»"] [])
+    it "[cert-normalize] does not trim whitespace inside quotes" $
+      rejectedNaming ["Classical.« choice»", "not allowed"] $
+        checkCertificate defaultPolicy (cert ["Classical.« choice»"] [])
+    it "[cert-normalize] compares policy entries after the same normalization" $ do
+      checkCertificate (allowing ["«Foo».myAxiom "]) (cert ["Foo.myAxiom"] [])
+        `shouldBe` Right ()
+      checkCertificate (allowing ["Foo.myAxiom"]) (cert ["Foo.«myAxiom»"] ["«Foo».myAxiom"])
+        `shouldBe` Right ()
+    it "[cert-normalize] rejects axiom names that are empty after normalization, even if allowed" $
+      for_ ["", " ", "\t\n", "«»"] $ \axiom ->
+        rejectedNaming ["not a valid axiom name"] $
+          checkCertificate (allowing [axiom]) (cert ["propext", axiom] [])
+    it "[cert-normalize] rejects axiom names with control or invisible characters, even if allowed" $
+      for_
+        [ "propext\n"
+        , "Foo.ax\r"
+        , "prop\x200B\&ext"
+        , "Foo.\x202E\&ax"
+        , "Foo\x2028.ax"
+        , "Foo.\xE000"
+        , "Foo.\x0378"
+        , "\ESC[2Jpropext"
+        ]
+        $ \axiom -> do
+          rejectedNaming ["not a valid axiom name"] $
+            checkCertificate (allowing [axiom]) (cert [axiom] [])
+          rejectedNaming ["not a valid axiom name"] $
+            checkCertificate (allowing [axiom]) (cert [] [axiom])
+
+  describe "empty theorem names and statements" $ do
+    it "[cert-invisible] treats a theorem name of only invisible characters as empty" $
+      for_ invisibleOnly $ \name ->
+        rejectedNaming ["empty theorem name"] $
+          checkCertificate defaultPolicy (cert [] []){certTheorem = name}
+    it "[cert-invisible] treats a statement of only invisible characters as empty" $
+      for_ invisibleOnly $ \statement ->
+        rejectedNaming ["empty statement"] $
+          checkCertificate defaultPolicy (cert [] []){certStatement = statement}
+    it "[cert-invisible] reports both an empty theorem name and an empty statement" $
+      rejectedNaming ["empty theorem name", "empty statement"] $
+        checkCertificate defaultPolicy (cert [] []){certTheorem = "\x200B", certStatement = "\xFEFF"}
+    it "[cert-invisible] accepts a name with one visible character among invisible ones" $
+      checkCertificate defaultPolicy (cert [] []){certTheorem = "\x200B x \x200B"}
+        `shouldBe` Right ()
 
   describe "sorry fixture" $ do
     it "[cert-sorry-fixture] decodes, type-checks, and fails only the certificate policy" $ do

@@ -18,6 +18,7 @@ import Gin.Examples
 import Gin.Limits
 import Gin.Vectors
 import Numeric.Natural (Natural)
+import System.Environment (lookupEnv)
 import System.Timeout (timeout)
 import Test.Hspec
 import Test.QuickCheck
@@ -250,6 +251,51 @@ spaces n = LBS8.replicate (fromIntegral n) ' '
 bvValue :: Integer -> Text -> A.Value
 bvValue w s = A.object ["bv" A..= w, "val" A..= s]
 
+-- | counter whose certificate lists the definitions its statement depends
+-- on, as the exporter renders them: several lines, Unicode, and a string
+-- literal whose quotes and backslash must be escaped.
+counterWithSpec :: Program
+counterWithSpec =
+  withSpecDefs
+    [ SpecDef
+        "Counter.spec"
+        "Counter.spec : Gin.Signal Bool \x2192 Gin.Signal (BitVec 8) :=\n\
+        \  fun en => Gin.Signal.mealy Counter.specStep 0#8 en"
+    , SpecDef
+        "Counter.specStep"
+        "Counter.specStep : BitVec 8 \x2192 Bool \x2192 BitVec 8 \xD7 BitVec 8 :=\n\
+        \  fun s e => (if e = true then s + 1#8 else s, s)"
+    , SpecDef "Counter.label" "Counter.label : String := \"count\\\\n\""
+    ]
+    counterProgram
+      { progCertificate =
+          (progCertificate counterProgram)
+            { certStatement =
+                "\x2200 (en : Gin.Signal Bool), Counter.counter en = Counter.spec en"
+            }
+      }
+
+withSpecDefs :: [SpecDef] -> Program -> Program
+withSpecDefs defs p = p{progCertificate = (progCertificate p){certSpecDefs = defs}}
+
+specJson :: A.Value
+specJson = asJson (encodeProgram counterWithSpec)
+
+-- | Canonical encoding of 'counterWithSpec'.
+specFixture :: FilePath
+specFixture = "test/fixtures/ir/counter-spec.canonical.json"
+
+-- | Compare with a canonical encoding under @test/fixtures/ir@, ignoring
+-- trailing whitespace in the file. With @GIN_ACCEPT=1@ in the environment,
+-- (re)write the file instead.
+goldenBytes :: FilePath -> LBS.ByteString -> Expectation
+goldenBytes file actual =
+  lookupEnv "GIN_ACCEPT" >>= \case
+    Just "1" -> LBS.writeFile file (actual <> "\n")
+    _ -> do
+      expected <- LBS.readFile file
+      actual `shouldBe` LBS8.dropWhileEnd isSpace expected
+
 ----------------------------------------------------------------------
 -- Expectations
 
@@ -336,6 +382,31 @@ spec = do
     it "[json-roundtrip] encodes the counter vectors canonically" $ do
       expected <- LBS.readFile "test/fixtures/ir/counter.vectors.canonical.json"
       encodeVectors counterVectors `shouldBe` LBS8.dropWhileEnd isSpace expected
+
+  describe "specification definitions" $ do
+    it "[json-specdefs] round-trips a certificate with spec definitions" $
+      decodeProgram (encodeProgram counterWithSpec) `shouldBe` Right counterWithSpec
+    it "[json-specdefs] encodes a certificate with spec definitions canonically" $
+      goldenBytes specFixture (encodeProgram counterWithSpec)
+    it "[json-specdefs] decodes the canonical fixture to the program" $ do
+      bytes <- LBS.readFile specFixture
+      decodeProgram bytes `shouldBe` Right counterWithSpec
+    it "[json-specdefs] encodes specDefinitions after implAxioms, each name before its body" $
+      LBS8.unpack (encodeProgram counterWithSpec)
+        `shouldContain` "\"implAxioms\":[],\"specDefinitions\":[{\"name\":\"Counter.spec\",\"body\":"
+    it "[json-specdefs] decodes a certificate without specDefinitions as having none" $
+      decodeProgram (A.encode (deleteAt [K "certificate"] "specDefinitions" specJson))
+        `shouldBe` Right (withSpecDefs [] counterWithSpec)
+    it "[json-specdefs] decodes an explicit empty list as none and omits it when encoding" $ do
+      let doc = insertAt [K "certificate"] "specDefinitions" (A.toJSON noValues) counterJson
+      decodeProgram (A.encode doc) `shouldBe` Right counterProgram
+      LBS8.unpack (encodeProgram counterProgram) `shouldNotContain` "specDefinitions"
+    it "[json-specdefs] rejects malformed spec definitions" $ do
+      let defsPath = [K "certificate", K "specDefinitions"]
+      rejectsProgram "specDefinitions" (setAt defsPath A.Null specJson)
+      rejectsProgram "specDefinitions" (setAt defsPath (A.String "Counter.spec") specJson)
+      rejectsProgram "body" (deleteAt (defsPath <> [I 0]) "body" specJson)
+      rejectsProgram "name" (setAt (defsPath <> [I 1, K "name"]) (A.toJSON (1 :: Int)) specJson)
 
   describe "counter fixture" $ do
     it "[json-counter-fixture] decodes to counterProgram" $ do

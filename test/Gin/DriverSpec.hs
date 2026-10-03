@@ -8,6 +8,7 @@ import Data.List (sort)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
+import GHC.Clock (getMonotonicTime)
 import GHC.IO.Handle (hDuplicate, hDuplicateTo)
 import Gin.Backend.SystemVerilog (systemVerilog)
 import Gin.Backend.Types (Backend (..))
@@ -21,15 +22,20 @@ import Gin.Limits (maxInputBytes)
 import Gin.Netlist.Build (buildNetlist)
 import Gin.Netlist.Types (Module)
 import Gin.Normalize (normalize)
-import Gin.TestUtil (withTempDir)
+import Gin.TestUtil (itWithTools, withTempDir)
 import Gin.Vectors (Cycle (..), Vectors (..))
 import System.Directory
   ( createDirectory
   , createFileLink
   , doesDirectoryExist
+  , findExecutable
+  , getPermissions
   , listDirectory
   , pathIsSymbolicLink
+  , setOwnerExecutable
+  , setPermissions
   )
+import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.IO (Handle, IOMode (..), hClose, hFlush, stderr, stdout, withBinaryFile)
@@ -42,6 +48,8 @@ spec = do
   certificateSpec
   vectorsMismatchSpec
   simSpec
+  validateSpec
+  timeoutSpec
 
 ----------------------------------------------------------------------
 -- Exit codes and usage
@@ -90,6 +98,9 @@ exitCodeSpec = describe "exit codes" $ do
         , ["sim", file]
         , ["compile", file, "--target", "chisel"]
         , ["testbench", file, "--vectors", vecs, "-o"]
+        , ["validate", file, "--vectors", vecs, "--tool-timeout", "0"]
+        , ["validate", file, "--vectors", vecs, "--tool-timeout", "soon"]
+        , ["validate", file, "--vectors", vecs, "--tool-timeout", "99999999999999999999"]
         ]
         $ \args -> do
           r <- gin args
@@ -97,17 +108,17 @@ exitCodeSpec = describe "exit codes" $ do
           (args, runOut r) `shouldBe` (args, "")
           (args, Text.isInfixOf "Usage: gin" (runErr r)) `shouldBe` (args, True)
   it "[cli-exit-codes] returns 0 and prints usage to stdout for --help" $
-    forM_ [["--help"], ["compile", "--help"], ["sim", "--help"]] $ \args -> do
+    forM_ [["--help"], ["compile", "--help"], ["validate", "--help"]] $ \args -> do
       r <- gin args
       (args, runCode r) `shouldBe` (args, ExitSuccess)
       (args, Text.isInfixOf "Usage: gin" (runOut r)) `shouldBe` (args, True)
       (args, runErr r) `shouldBe` (args, "")
-  it "[cli-exit-codes] lists every command and testbench's options in the help" $ do
+  it "[cli-exit-codes] lists every command and validate's options in the help" $ do
     top <- gin ["--help"]
-    forM_ ["check", "compile", "testbench", "sim"] $ \c ->
+    forM_ ["check", "compile", "testbench", "sim", "validate"] $ \c ->
       runOut top `shouldContainText` c
-    v <- gin ["testbench", "--help"]
-    forM_ ["--vectors", "--target", "-o DIR", "--allow-axiom"] $
+    v <- gin ["validate", "--help"]
+    forM_ ["--vectors", "--target", "--allow-axiom", "--allow-missing-tools", "--tool-timeout"] $
       shouldContainText (runOut v)
 
 ----------------------------------------------------------------------
@@ -262,7 +273,7 @@ certificateSpec = describe "certificate policy" $ do
 
 vectorsMismatchSpec :: Spec
 vectorsMismatchSpec = describe "vectors that do not match the program" $ do
-  it "[cli-vectors-mismatch] testbench and sim reject swapped mac inputs" $
+  it "[cli-vectors-mismatch] testbench, sim and validate reject swapped mac inputs" $
     withTempDir $ \dir -> do
       file <- writeProgram dir "mac" macProgram
       vecs <- writeVectors dir "mac" swappedMac
@@ -270,6 +281,7 @@ vectorsMismatchSpec = describe "vectors that do not match the program" $ do
       forM_
         [ ["testbench", file, "--vectors", vecs, "-o", out]
         , ["sim", file, "--vectors", vecs]
+        , ["validate", file, "--vectors", vecs, "-o", out, "--allow-missing-tools"]
         ]
         $ \args -> do
           r <- gin args
@@ -366,6 +378,127 @@ simSpec = describe "sim" $ do
         ls -> expectationFailure ("expected two lines, got " <> show ls)
 
 ----------------------------------------------------------------------
+-- validate
+
+validateSpec :: Spec
+validateSpec = describe "validate" $ do
+  itWithTools hdlTools "[cli-validate] passes every check for every target on counter" $
+    withTempDir $ \dir -> do
+      file <- writeProgram dir "counter" counterProgram
+      vecs <- writeVectors dir "counter" counterVectors
+      env <- getEnvironment
+      cwdBefore <- sort <$> listDirectory "."
+      r <- ginWith env ["validate", file, "--vectors", vecs]
+      r `shouldExit` ExitSuccess
+      outLines r
+        `shouldBe` [ "sim-core: PASS"
+                   , "sim-normal: PASS"
+                   , "verilog-lint: PASS"
+                   , "verilog-run: PASS"
+                   , "systemverilog-lint: PASS"
+                   , "systemverilog-run: PASS"
+                   , "vhdl-lint: PASS"
+                   , "vhdl-run: PASS"
+                   ]
+      -- Without -o the generated files live only in temporary directories.
+      cwdAfter <- sort <$> listDirectory "."
+      cwdAfter `shouldBe` cwdBefore
+  itWithTools hdlTools "[cli-validate] keeps the generated files in DIR with -o" $
+    withTempDir $ \dir -> do
+      file <- writeProgram dir "mac" macProgram
+      vecs <- writeVectors dir "mac" macVectors
+      env <- getEnvironment
+      let out = dir </> "out"
+      r <- ginWith env ["validate", file, "--vectors", vecs, "-o", out, "--target", "vhdl"]
+      r `shouldExit` ExitSuccess
+      outLines r
+        `shouldBe` ["sim-core: PASS", "sim-normal: PASS", "vhdl-lint: PASS", "vhdl-run: PASS"]
+      sort <$> listDirectory out `shouldReturn` ["mac.vhd", "mac_tb.vhd"]
+  itWithTools verilogTools "[cli-validate] fails the HDL run when the vectors are wrong" $
+    withTempDir $ \dir -> do
+      file <- writeProgram dir "counter" counterProgram
+      vecs <- writeVectors dir "counter" (counterExpecting [(3, 9)])
+      env <- getEnvironment
+      r <- ginWith env ["validate", file, "--vectors", vecs, "--target", "verilog"]
+      r `shouldExit` ExitFailure 1
+      case outLines r of
+        [core, normal, lint, run] -> do
+          core `shouldStartWith'` "sim-core: FAIL cycle=3"
+          normal `shouldStartWith'` "sim-normal: FAIL cycle=3"
+          lint `shouldBe` "verilog-lint: PASS"
+          run `shouldStartWith'` "verilog-run: FAIL"
+        ls -> expectationFailure ("expected four lines, got " <> show ls)
+      runErr r `shouldContainText` "GIN-MISMATCH"
+  itWithTools (verilogTools <> ["perl"]) "[cli-validate] fails the checks whose tool is missing" $
+    withTempDir $ \dir -> do
+      file <- writeProgram dir "counter" counterProgram
+      vecs <- writeVectors dir "counter" counterVectors
+      bin <- linkTools dir ["iverilog", "vvp", "verilator", "perl"]
+      let args = ["validate", file, "--vectors", vecs, "--target", "verilog", "--target", "vhdl"]
+      r <- ginWith [("PATH", bin)] args
+      r `shouldExit` ExitFailure 1
+      outLines r
+        `shouldBe` [ "sim-core: PASS"
+                   , "sim-normal: PASS"
+                   , "verilog-lint: PASS"
+                   , "verilog-run: PASS"
+                   , "vhdl-lint: FAIL missing tool: nvc"
+                   , "vhdl-run: FAIL missing tool: nvc"
+                   ]
+      skipped <- ginWith [("PATH", bin)] (args <> ["--allow-missing-tools"])
+      skipped `shouldExit` ExitSuccess
+      drop 4 (outLines skipped)
+        `shouldBe` ["vhdl-lint: SKIP(missing tool: nvc)", "vhdl-run: SKIP(missing tool: nvc)"]
+  it "[cli-validate] skips every HDL check without tools when missing tools are allowed" $
+    withTempDir $ \dir -> do
+      file <- writeProgram dir "counter" counterProgram
+      vecs <- writeVectors dir "counter" counterVectors
+      empty <- linkTools dir []
+      let args = ["validate", file, "--vectors", vecs, "--target", "systemverilog"]
+      failed <- ginWith [("PATH", empty)] args
+      failed `shouldExit` ExitFailure 1
+      outLines failed
+        `shouldBe` [ "sim-core: PASS"
+                   , "sim-normal: PASS"
+                   , "systemverilog-lint: FAIL missing tools: verilator, iverilog"
+                   , "systemverilog-run: FAIL missing tools: iverilog, vvp"
+                   ]
+      -- No PATH at all is the same as an empty one.
+      skipped <- ginWith [] (args <> ["--allow-missing-tools"])
+      skipped `shouldExit` ExitSuccess
+      outLines skipped
+        `shouldBe` [ "sim-core: PASS"
+                   , "sim-normal: PASS"
+                   , "systemverilog-lint: SKIP(missing tools: verilator, iverilog)"
+                   , "systemverilog-run: SKIP(missing tools: iverilog, vvp)"
+                   ]
+
+timeoutSpec :: Spec
+timeoutSpec = describe "tool timeout" $
+  it "[cli-timeout] stops a tool that runs longer than --tool-timeout and reports FAIL" $
+    withTempDir $ \dir -> do
+      file <- writeProgram dir "counter" counterProgram
+      vecs <- writeVectors dir "counter" counterVectors
+      fake <- sleepingTool dir "nvc"
+      start <- getMonotonicTime
+      r <-
+        ginWith
+          [("PATH", fake <> ":/bin:/usr/bin")]
+          ["validate", file, "--vectors", vecs, "--target", "vhdl", "--tool-timeout", "1"]
+      elapsed <- subtract start <$> getMonotonicTime
+      r `shouldExit` ExitFailure 1
+      outLines r
+        `shouldBe` [ "sim-core: PASS"
+                   , "sim-normal: PASS"
+                   , "vhdl-lint: FAIL nvc timed out after 1 s"
+                   , "vhdl-run: FAIL nvc timed out after 1 s"
+                   ]
+      -- Two runs of 1 s each, plus a grace period for the killed tool to exit;
+      -- the fake would otherwise sleep 30 s per run.
+      unless (elapsed < 20) $
+        expectationFailure ("validate took " <> show elapsed <> " s")
+
+----------------------------------------------------------------------
 -- Running the CLI
 
 -- | What one CLI invocation returned and printed.
@@ -419,6 +552,10 @@ shouldContainText actual needle =
 ----------------------------------------------------------------------
 -- Fixtures
 
+hdlTools, verilogTools :: [String]
+hdlTools = verilogTools <> ["nvc"]
+verilogTools = ["iverilog", "vvp", "verilator"]
+
 writeProgram :: FilePath -> String -> Program -> IO FilePath
 writeProgram dir name p = do
   let file = dir </> (name <> ".gin.json")
@@ -444,6 +581,29 @@ netlistOf :: Program -> IO Module
 netlistOf p = case normalize p >>= buildNetlist of
   Right m -> pure m
   Left e -> fail ("fixture does not compile: " <> show e)
+
+-- | A directory holding links to the named tools, as found on this process's
+-- @PATH@, and nothing else.
+linkTools :: FilePath -> [String] -> IO FilePath
+linkTools dir tools = do
+  let bin = dir </> "tools"
+  createDirectory bin
+  forM_ tools $ \t ->
+    findExecutable t >>= \case
+      Just path -> createFileLink path (bin </> t)
+      Nothing -> expectationFailure ("tool not found: " <> t)
+  pure bin
+
+-- | A directory holding a fake tool that sleeps for 30 s.
+sleepingTool :: FilePath -> String -> IO FilePath
+sleepingTool dir name = do
+  let bin = dir </> "fake"
+      exe = bin </> name
+  createDirectory bin
+  writeFile exe "#!/bin/sh\nsleep 30\n"
+  perms <- getPermissions exe
+  setPermissions exe (setOwnerExecutable True perms)
+  pure bin
 
 withTop :: (TopEntity -> TopEntity) -> Program -> Program
 withTop f p = p {progTop = f (progTop p)}

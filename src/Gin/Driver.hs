@@ -4,6 +4,8 @@
 -- > gin compile   FILE.gin.json [--target T]... [-o DIR] [--allow-axiom NAME]...
 -- > gin testbench FILE.gin.json --vectors V.json [--target T]... [-o DIR] [--allow-axiom NAME]...
 -- > gin sim       FILE.gin.json --vectors V.json [--allow-axiom NAME]...
+-- > gin validate  FILE.gin.json --vectors V.json [--target T]... [-o DIR]
+-- >               [--allow-axiom NAME]... [--allow-missing-tools] [--tool-timeout SECONDS]
 --
 -- @T@ is @verilog@, @systemverilog@ or @vhdl@; without @--target@ every
 -- target is generated.
@@ -44,9 +46,29 @@
 --   still check the circuit against the vectors, only the localization of
 --   a disagreement is lost.
 --
--- Exit status: 0 on success, 1 when a check or compile fails
+-- [@validate@] Runs @sim@, then for each target generates the design and
+--   testbench (into @DIR@ when @-o@ is given, else into a temporary
+--   directory), copies them into a fresh private temporary directory and
+--   runs the target's lint commands and testbench there. It prints one line
+--   per check, @<check>: PASS@, @<check>: FAIL <reason>@ or
+--   @<check>: SKIP(<reason>)@, for the checks @sim-core@, @sim-normal@,
+--   @<target>-lint@ and @<target>-run@; the output of a failing tool goes
+--   to standard error. A testbench run passes by the rule in
+--   @docs/semantics.md@, applied to standard output only. A tool that is
+--   not found fails its check, or skips it with @--allow-missing-tools@.
+--
+-- Exit status: 0 on success, 1 when a check, compile or validation fails
 -- (errors are printed with 'renderError', so a certificate error starts
 -- with @certificate error:@), 2 on a usage error.
+--
+-- External tools are looked up in the directories of the @PATH@ of the
+-- environment 'runCliWith' is given (empty entries, which a shell would
+-- read as the current directory, are ignored) and spawned by absolute
+-- path, with an argument list rather than a shell command, with that
+-- environment, and in their own process group. Each run is limited to
+-- @--tool-timeout@ seconds ('defaultToolTimeoutSeconds' by default); a run
+-- that takes longer is interrupted and terminated, and its check fails. A
+-- tool that ignores both signals keeps running after gin has moved on.
 --
 -- Text that comes from input files is printed with control and other
 -- invisible characters replaced by @?@, so a file cannot drive the
@@ -56,7 +78,9 @@ module Gin.Driver
   , runCliWith
   ) where
 
-import Control.Applicative (many, optional, (<**>))
+import Control.Applicative (many, optional, (<**>), (<|>))
+import Control.Concurrent (forkIO, killThread)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, readMVar)
 import Control.Exception
   ( IOException
   , SomeAsyncException
@@ -64,26 +88,38 @@ import Control.Exception
   , bracketOnError
   , displayException
   , evaluate
+  , finally
   , fromException
   , throwIO
   , try
   )
-import Control.Monad (unless, void, when)
-import Control.Monad.Except (ExceptT, liftEither, runExceptT, throwError)
+import Control.Monad (guard, unless, void, when)
+import Control.Monad.Except (ExceptT (..), liftEither, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
-import Data.Char (GeneralCategory (..), generalCategory)
+import Data.Char (GeneralCategory (..), generalCategory, isDigit)
 import Data.Containers.ListUtils (nubOrd)
-import Data.Foldable (for_)
-import Data.Maybe (fromMaybe, isJust, listToMaybe)
+import Data.Either (fromRight)
+import Data.Foldable (for_, traverse_)
+import Data.List (find)
+import Data.Maybe (catMaybes, fromMaybe, isJust, listToMaybe)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
+import Data.Traversable (for)
 import GHC.IO.Exception (IOException (..))
 import Gin.Backend.SystemVerilog (systemVerilog)
-import Gin.Backend.Types (Backend (..), Target (..), parseTarget)
+import Gin.Backend.Types
+  ( Backend (..)
+  , Target (..)
+  , failMarker
+  , mismatchMarker
+  , parseTarget
+  , passMarker
+  , targetName
+  )
 import Gin.Backend.VHDL (vhdl)
 import Gin.Backend.Verilog (verilog)
 import Gin.Certificate (CertPolicy (..), checkCertificate, defaultPolicy)
@@ -92,7 +128,7 @@ import Gin.Core.Json (decodeProgram, decodeVectors)
 import Gin.Core.Normal (NModule)
 import Gin.Core.Syntax (Port (..), Program (..), TopEntity (..), Ty (..), Value (..))
 import Gin.Error (GinError (..), Stage (..), ginError, renderError, withContext)
-import Gin.Limits (maxInputBytes)
+import Gin.Limits (defaultToolTimeoutSeconds, maxInputBytes)
 import Gin.Netlist.Build (buildNetlist)
 import Gin.Netlist.Types (HwType (..), Ident (..), Module (..), Net (..), Output (..))
 import Gin.Normalize (checkNormal, normalize)
@@ -121,11 +157,22 @@ import Options.Applicative
   , progDesc
   , renderFailure
   , short
+  , showDefault
   , showHelpOnEmpty
   , strArgument
   , strOption
+  , switch
+  , value
   )
-import System.Directory (createDirectoryIfMissing, doesDirectoryExist, removeFile, renameFile)
+import System.Directory
+  ( copyFile
+  , createDirectoryIfMissing
+  , doesDirectoryExist
+  , findExecutablesInDirectories
+  , makeAbsolute
+  , removeFile
+  , renameFile
+  )
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
 import System.FilePath ((<.>), (</>))
@@ -139,6 +186,19 @@ import System.IO
   , stdout
   , withBinaryFile
   )
+import System.IO.Temp (withSystemTempDirectory)
+import System.Process
+  ( CreateProcess (..)
+  , ProcessHandle
+  , StdStream (..)
+  , interruptProcessGroupOf
+  , proc
+  , terminateProcess
+  , waitForProcess
+  , withCreateProcess
+  )
+import System.Timeout (timeout)
+import Text.Read (readMaybe)
 
 -- | Parse the arguments and run one command. Never calls 'exitWith';
 -- returns 'ExitSuccess', @ExitFailure 1@ for a failed check or compile,
@@ -151,9 +211,9 @@ runCli args = getEnvironment >>= \env -> runCliWith env args
 -- path with that environment, so tests can substitute or hide tools
 -- without touching the process environment.
 runCliWith :: [(String, String)] -> [String] -> IO ExitCode
-runCliWith _environment args =
+runCliWith environment args =
   case execParserPure (prefs showHelpOnEmpty) cliInfo args of
-    Success cmd -> runCommand cmd
+    Success cmd -> runCommand environment cmd
     Failure failure -> case renderFailure failure progName of
       (msg, ExitSuccess) -> ExitSuccess <$ putLine stdout (Text.pack msg)
       (msg, ExitFailure _) -> ExitFailure 2 <$ putLine stderr (Text.pack msg)
@@ -167,12 +227,16 @@ progName = "gin"
 ----------------------------------------------------------------------
 -- Command line
 
+-- | The environment external tools see.
+type Env = [(String, String)]
+
 -- | One parsed command line.
 data Command
   = CheckCmd !Inputs
   | CompileCmd !Inputs !Outputs
   | TestbenchCmd !Inputs !FilePath !Outputs
   | SimCmd !Inputs !FilePath
+  | ValidateCmd !Inputs !FilePath !Outputs !ToolOptions
 
 -- | The IR file and the axioms its certificate may use beyond
 -- 'defaultPolicy'.
@@ -188,6 +252,12 @@ data Outputs = Outputs
   , outDir :: !(Maybe FilePath)
   }
 
+-- | How @validate@ runs external tools.
+data ToolOptions = ToolOptions
+  { toolAllowMissing :: !Bool
+  , toolTimeoutSeconds :: !Int
+  }
+
 cliInfo :: ParserInfo Command
 cliInfo =
   info (commands <**> helper) $
@@ -195,7 +265,8 @@ cliInfo =
       <> header "gin - compile proof-carrying Lean 4 circuits to Verilog, SystemVerilog and VHDL"
       <> progDesc "Check, compile, simulate and validate a circuit exported by the Lean side."
       <> footer
-        "Exit status: 0 on success, 1 when a check or compile fails, 2 on a usage error."
+        "Exit status: 0 on success, 1 when a check, compile or validation fails, \
+        \2 on a usage error."
 
 commands :: Parser Command
 commands =
@@ -216,6 +287,13 @@ commands =
         "sim"
         "Run both reference simulators on the vectors and compare their outputs."
         (uncurry SimCmd <$> inputs vectorsOpt)
+      <> cmd
+        "validate"
+        "Run sim, then lint the generated HDL and run its testbench with the HDL tools."
+        ( (\(i, (v, o)) t -> ValidateCmd i v o t)
+            <$> inputs ((,) <$> vectorsOpt <*> outputs)
+            <*> toolOptions
+        )
   where
     cmd name desc p = command name (info p (progDesc desc))
 
@@ -259,6 +337,22 @@ outputs =
   where
     orCurrent dir = if null dir then "." else dir
 
+toolOptions :: Parser ToolOptions
+toolOptions =
+  ToolOptions
+    <$> switch
+      ( long "allow-missing-tools"
+          <> help "Skip, instead of failing, the checks whose tool is not on PATH"
+      )
+    <*> option
+      secondsReader
+      ( long "tool-timeout"
+          <> metavar "SECONDS"
+          <> value defaultToolTimeoutSeconds
+          <> showDefault
+          <> help "Wall-clock limit for each external tool run"
+      )
+
 targetReader :: ReadM Target
 targetReader = eitherReader $ \s ->
   maybe
@@ -266,15 +360,27 @@ targetReader = eitherReader $ \s ->
     Right
     (parseTarget (Text.pack s))
 
+-- | A whole number of seconds, at least 1 and small enough that its
+-- microseconds fit in an 'Int'.
+secondsReader :: ReadM Int
+secondsReader = eitherReader $ \s ->
+  maybe (Left ("expected a whole number of seconds from 1 to " <> show maxSeconds)) Right $ do
+    guard (not (null s) && length s <= 18 && all isDigit s)
+    n <- readMaybe s
+    guard (n >= 1 && n <= maxSeconds)
+    pure (fromInteger n)
+  where
+    maxSeconds = toInteger (maxBound :: Int) `div` 1000000
+
 ----------------------------------------------------------------------
 -- Commands
 
 -- | Stage errors abort a command; check outcomes do not.
 type Pipe = ExceptT GinError IO
 
-runCommand :: Command -> IO ExitCode
-runCommand cmd =
-  tryNonAsync (runExceptT (execute cmd)) >>= \case
+runCommand :: Env -> Command -> IO ExitCode
+runCommand environment cmd =
+  tryNonAsync (runExceptT (execute environment cmd)) >>= \case
     Right (Right True) -> pure ExitSuccess
     Right (Right False) -> pure (ExitFailure 1)
     Right (Left e) -> ExitFailure 1 <$ putLine stderr (renderError e)
@@ -283,8 +389,8 @@ runCommand cmd =
         <$ ignoreIO (putLine stderr (renderError (driverError (Text.pack (displayException ex)))))
 
 -- | Run a command; 'False' when one of its checks failed.
-execute :: Command -> Pipe Bool
-execute = \case
+execute :: Env -> Command -> Pipe Bool
+execute environment = \case
   CheckCmd ins -> True <$ loadProgram ins
   CompileCmd ins outs -> do
     prog <- loadProgram ins
@@ -303,6 +409,15 @@ execute = \case
     vecs <- loadVectors prog vecFile
     nm <- liftEither (normalize prog)
     liftIO (reportAll (simChecks prog nm vecs))
+  ValidateCmd ins vecFile outs tools -> do
+    prog <- loadProgram ins
+    vecs <- loadVectors prog vecFile
+    (nm, m) <- compileProgram prog
+    liftEither (testbenchPrecondition m vecs)
+    simOk <- liftIO (reportAll (simChecks prog nm vecs))
+    hdlOk <- for (backendsOf outs) (validateTarget environment tools m vecs (outDir outs))
+    pure (simOk && and hdlOk)
+
 outputDir :: Outputs -> FilePath
 outputDir = fromMaybe "." . outDir
 
@@ -566,6 +681,228 @@ renderValue = \case
 
 oneLine :: [Text] -> Text
 oneLine = Text.intercalate ", " . filter (not . Text.null) . fmap Text.strip
+
+----------------------------------------------------------------------
+-- validate: HDL tools
+
+-- | Generate one target's design and testbench, then lint and run them in
+-- a fresh private directory. Prints the target's two check lines.
+validateTarget :: Env -> ToolOptions -> Module -> Vectors -> Maybe FilePath -> Backend -> Pipe Bool
+validateTarget environment tools m vecs dir b = inGenerationDir $ \genDir -> do
+  writeGroup genDir files
+  ExceptT . withSystemTempDirectory "gin-validate" $ \work -> runExceptT $ do
+    copied <- liftIO . tryIO . for_ files $ \(name, _) -> copyFile (genDir </> name) (work </> name)
+    case copied of
+      Left e -> throwError (driverError ("cannot copy the generated files: " <> ioMessage e))
+      Right () -> pure ()
+    liftIO $ do
+      lint <- runCheck environment tools work (lintRuns b base)
+      reportWithOutput (check "lint") lint
+      run <- runCheck environment tools work (testbenchRuns b base (length (vecCycles vecs)))
+      reportWithOutput (check "run") run
+      pure (not (isFail (fst lint) || isFail (fst run)))
+  where
+    files = generatedFiles m (Just vecs) b
+    base = Text.unpack (unIdent (modName m))
+    check kind = targetName (backendTarget b) <> "-" <> kind
+    inGenerationDir act = case dir of
+      Just d -> act d
+      Nothing -> ExceptT (withSystemTempDirectory "gin-generated" (runExceptT . act))
+
+-- | One external tool invocation and how its result is judged.
+data ToolRun = ToolRun
+  { trTool :: !String
+  , trArgs :: ![String]
+  , trJudge :: ExitCode -> Text -> Text -> Maybe Text
+  -- ^ Exit code, standard output and standard error to a failure reason
+  -- (completing "<tool> ..."), or 'Nothing' if the run passed.
+  }
+
+-- | The lint commands for a design file.
+lintRuns :: Backend -> String -> [ToolRun]
+lintRuns b base = case backendTarget b of
+  Verilog -> [verilator "1364-2005", iverilog "-g2005"]
+  SystemVerilog -> [verilator "1800-2017", iverilog "-g2012"]
+  VHDL -> [ToolRun "nvc" ["-M", "1g", "--std=2008", "-a", design] exitedCleanly]
+  where
+    design = base <.> backendFileExt b
+    verilator lang =
+      ToolRun
+        "verilator"
+        ["--lint-only", "-Wall", "--default-language", lang, design]
+        withoutWarnings
+    iverilog gen = ToolRun "iverilog" [gen, "-o", "/dev/null", design] exitedCleanly
+
+-- | The commands that build and run the testbench; the last one prints the
+-- testbench protocol.
+testbenchRuns :: Backend -> String -> Int -> [ToolRun]
+testbenchRuns b base cycles = case backendTarget b of
+  Verilog -> icarus "-g2005"
+  SystemVerilog -> icarus "-g2012"
+  VHDL ->
+    [ ToolRun
+        "nvc"
+        ["-M", "1g", "--std=2008", "-a", design, testbench, "-e", base <> "_tb", "-r"]
+        (passRule cycles)
+    ]
+  where
+    ext = backendFileExt b
+    design = base <.> ext
+    testbench = base <> "_tb" <.> ext
+    icarus gen =
+      [ ToolRun "iverilog" [gen, "-o", "tb.vvp", design, testbench] exitedCleanly
+      , ToolRun "vvp" ["-n", "tb.vvp"] (passRule cycles)
+      ]
+
+exitedCleanly :: ExitCode -> Text -> Text -> Maybe Text
+exitedCleanly code _ _ = case code of
+  ExitSuccess -> Nothing
+  ExitFailure n
+    | n < 0 -> Just ("was stopped by signal " <> showT (negate n))
+    | otherwise -> Just ("exited with code " <> showT n)
+
+-- | Verilator exits non-zero on a warning under @-Wall@; any warning in its
+-- output fails the check as well.
+withoutWarnings :: ExitCode -> Text -> Text -> Maybe Text
+withoutWarnings code out err =
+  exitedCleanly code out err
+    <|> if any ("%Warning" `Text.isInfixOf`) [out, err] then Just "reported warnings" else Nothing
+
+-- | The testbench pass rule of @docs/semantics.md@, on standard output
+-- only: exit 0, no line containing 'failMarker' or 'mismatchMarker', and
+-- exactly one line containing 'passMarker', which reads
+-- @GIN-PASS cycles=<N>@ for the number of vector cycles.
+passRule :: Int -> ExitCode -> Text -> Text -> Maybe Text
+passRule cycles code out err =
+  listToMaybe (catMaybes [markers, exitedCleanly code out err, passLine])
+  where
+    ls = Text.lines out
+    markers =
+      fmap
+        (\l -> "printed " <> clip (Text.strip l))
+        ( find (failMarker `Text.isInfixOf`) ls
+            <|> find (mismatchMarker `Text.isInfixOf`) ls
+        )
+    passLine = case filter (passMarker `Text.isInfixOf`) ls of
+      [l]
+        | passedCycles l == Just (showT cycles) -> Nothing
+        | otherwise ->
+            Just ("printed " <> clip (Text.strip l) <> ", expected cycles=" <> showT cycles)
+      found ->
+        Just ("printed " <> showT (length found) <> " " <> passMarker <> " lines, expected one")
+    passedCycles l = case Text.breakOn passCycles l of
+      (_, rest)
+        | Text.null rest -> Nothing
+        | otherwise -> Just (Text.takeWhile isDigit (Text.drop (Text.length passCycles) rest))
+    passCycles = passMarker <> " cycles="
+
+-- | Print a check's line, then, on standard error, the output of the tool
+-- that failed it.
+reportWithOutput :: Text -> (Outcome, Maybe Text) -> IO ()
+reportWithOutput name (outcome, output) = report name outcome >> traverse_ (putLine stderr) output
+
+-- | Resolve every tool of a check, then run its commands in order in the
+-- working directory, stopping at the first that fails. Returns the outcome
+-- and the output of the tool that failed it, if it ran to the end.
+runCheck :: Env -> ToolOptions -> FilePath -> [ToolRun] -> IO (Outcome, Maybe Text)
+runCheck environment tools work runs = do
+  resolved <- traverse (\r -> (,) r <$> resolveTool environment (trTool r)) runs
+  case nubOrd [trTool r | (r, Nothing) <- resolved] of
+    [] -> go [(r, exe) | (r, Just exe) <- resolved]
+    missing -> pure (missingTools missing, Nothing)
+  where
+    missingTools names =
+      (if toolAllowMissing tools then Skip else Fail) $
+        (if length names == 1 then "missing tool: " else "missing tools: ")
+          <> Text.intercalate ", " (fmap Text.pack names)
+    seconds = toolTimeoutSeconds tools
+    go [] = pure (Pass, Nothing)
+    go ((r, exe) : rest) = do
+      result <- runTool environment work seconds exe (trArgs r)
+      let tool = Text.pack (trTool r)
+          failed why = (Fail (tool <> " " <> why), Nothing)
+      case result of
+        Finished code out err -> case trJudge r code out err of
+          Nothing -> go rest
+          Just why -> pure (Fail (tool <> " " <> why), Just (toolOutput r out err))
+        TimedOut -> pure (failed ("timed out after " <> showT seconds <> " s"))
+        NotStarted why -> pure (failed ("could not be started: " <> why))
+    toolOutput r out err =
+      Text.intercalate "\n" $
+        ("output of " <> Text.unwords (fmap Text.pack (trTool r : trArgs r)) <> ":")
+          : (excerpt out <> excerpt err)
+
+-- | At most the first 40 lines of a tool's output, each cut to 500
+-- characters, indented.
+excerpt :: Text -> [Text]
+excerpt t =
+  fmap (("  " <>) . cut) shown
+    <> ["  ... (" <> showT (length rest) <> " more lines)" | not (null rest)]
+  where
+    (shown, rest) = splitAt 40 (Text.lines t)
+    cut l = if Text.length l > 500 then Text.take 500 l <> " ..." else l
+
+-- | The first executable of that name in the directories of the
+-- environment's @PATH@, as an absolute path.
+resolveTool :: Env -> String -> IO (Maybe FilePath)
+resolveTool environment name =
+  tryIO (findExecutablesInDirectories dirs name >>= traverse makeAbsolute . listToMaybe)
+    >>= either (const (pure Nothing)) pure
+  where
+    dirs =
+      fmap Text.unpack . filter (not . Text.null) . Text.splitOn ":" . Text.pack $
+        fromMaybe "" (lookup "PATH" environment)
+
+data ToolResult
+  = Finished !ExitCode !Text !Text
+  | TimedOut
+  | NotStarted !Text
+
+-- | Run a tool with an argument list (no shell), the given environment and
+-- working directory, an empty standard input, and its own process group;
+-- collect its standard output and standard error. A run that has not
+-- finished, including closing its output, within the time limit is
+-- stopped: its process group is interrupted and the tool terminated.
+runTool :: Env -> FilePath -> Int -> FilePath -> [String] -> IO ToolResult
+runTool environment work seconds exe args =
+  either (NotStarted . ioMessage) id <$> tryIO (withCreateProcess spec supervise)
+  where
+    spec =
+      (proc exe args)
+        { cwd = Just work
+        , env = Just environment
+        , std_in = CreatePipe
+        , std_out = CreatePipe
+        , std_err = CreatePipe
+        , close_fds = True
+        , create_group = True
+        }
+    supervise (Just hin) (Just hout) (Just herr) ph = superviseTool seconds ph hin hout herr
+    supervise _ _ _ ph = NotStarted "no pipes to the process" <$ terminateProcess ph
+
+superviseTool :: Int -> ProcessHandle -> Handle -> Handle -> Handle -> IO ToolResult
+superviseTool seconds ph hin hout herr = do
+  ignoreIO (hClose hin)
+  outVar <- newEmptyMVar
+  errVar <- newEmptyMVar
+  exitVar <- newEmptyMVar
+  readers <- traverse (uncurry forkReader) [(hout, outVar), (herr, errVar)]
+  -- Waiting happens in its own thread so that the time limit never depends
+  -- on interrupting a blocked system call.
+  void (forkIO (tryIO (waitForProcess ph) >>= putMVar exitVar))
+  let collect = (,,) <$> readMVar exitVar <*> readMVar outVar <*> readMVar errVar
+  ( timeout (seconds * 1000000) collect >>= \case
+      Just (Right code, out, err) -> pure (Finished code (decodeOutput out) (decodeOutput err))
+      Just (Left e, _, _) -> pure (NotStarted (ioMessage e))
+      Nothing -> do
+        ignoreIO (interruptProcessGroupOf ph)
+        ignoreIO (terminateProcess ph)
+        TimedOut <$ timeout (2 * 1000000) (readMVar exitVar)
+    )
+    `finally` traverse_ killThread readers
+  where
+    forkReader h var = forkIO (tryIO (BS.hGetContents h) >>= putMVar var . fromRight BS.empty)
+    decodeOutput = Text.decodeUtf8Lenient
 
 ----------------------------------------------------------------------
 -- Helpers

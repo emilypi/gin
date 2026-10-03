@@ -327,6 +327,17 @@ limitsSpec = do
   it "[backend-minors] accepts a normal form with exactly maxNormalBinds binds" $
     length . modDecls <$> buildNetlist (chainModule (numbered maxNormalBinds))
       `shouldBe` Right maxNormalBinds
+  -- The suffix search tries at most one candidate more than there are
+  -- taken names, so it ends; the time limit turns a regression into a
+  -- failure rather than a hang.
+  it "[backend-minors] finds the free suffix after 100000 taken ones, within 30 s" $ do
+    let taken = Set.fromList ("x" : ["x_" <> tshow k | k <- [1 .. 100000 :: Int]])
+    finished <- timeout (30 * 1000000) (evaluate (sanitize taken "X"))
+    finished `shouldBe` Just "x_100001"
+  it "[backend-minors] finds a free suffix in a gap of a long run of taken ones, within 30 s" $ do
+    let taken = Set.fromList ("x" : ["x_" <> tshow k | k <- [1 .. 100000 :: Int], k /= 99999])
+    finished <- timeout (30 * 1000000) (evaluate (sanitize taken "x"))
+    finished `shouldBe` Just "x_99999"
   where
     numbered n = [Name ("b" <> tshow i) | i <- [1 .. n]]
 

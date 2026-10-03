@@ -40,6 +40,7 @@ import Data.Char
   , isDigit
   , toLower
   )
+import Data.List (find)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
@@ -157,9 +158,12 @@ nameBinds reserved inputs binds = snd <$> foldM step (Taken reserved Map.empty, 
       | nbName b `Map.member` env =
           Left . netlistError $
             "bind name " <> quote (unName (nbName b)) <> " is already an input or a bind"
-      | otherwise =
-          let (i, taken') = claimName taken (unName (nbName b))
-           in taken' `seq` Right (taken', Map.insert (nbName b) (Ident i, nbTy b) env)
+      | otherwise = case claimName taken (unName (nbName b)) of
+          Just (i, taken') ->
+            taken' `seq` Right (taken', Map.insert (nbName b) (Ident i, nbTy b) env)
+          Nothing ->
+            Left . netlistError $
+              "no free legal name for bind " <> quote (unName (nbName b)) <> " (too many names)"
 
 -- | @sanitize taken name@ turns @name@ into a legal identifier
 -- ('isLegalIdent') that differs, case-insensitively, from every name in
@@ -177,35 +181,39 @@ nameBinds reserved inputs binds = snd <$> foldM step (Taken reserved Map.empty, 
 --
 -- Steps 1–4 make a legal identifier of at most 56 characters, so the
 -- suffix of step 5 fits within the 64-character limit while fewer than
--- 9999999 names are taken.
+-- 9999999 names are taken. Past that no legal suffix may be free, and the
+-- name of step 4 is returned as it is.
 sanitize :: Set Text -> Text -> Text
-sanitize taken = fst . claimName (Taken (Set.map Text.toLower taken) Map.empty)
+sanitize taken name =
+  maybe (baseName name) fst (claimName (Taken (Set.map Text.toLower taken) Map.empty) name)
 
 -- | The names taken so far, lowercased, and for each base name (steps 1–4
 -- of 'sanitize') whose suffix search has run, the suffix to resume it at.
 data Taken = Taken !(Set Text) !(Map Text Int)
 
--- | 'sanitize' a name and take the result.
+-- | 'sanitize' a name and take the result, or 'Nothing' if no legal
+-- suffix is free (only possible once 9999999 names are taken).
 --
 -- Names are only ever added, so every suffix a search for a base name
 -- has passed, or returned, stays unusable, and the next search for that
 -- base resumes after it with the same result as one starting at 1.
 -- Naming n binds that share a base therefore costs O(n) lookups, not
--- O(n^2).
-claimName :: Taken -> Text -> (Text, Taken)
+-- O(n^2). A search tries at most one suffix more than there are taken
+-- names, so it always ends: at most that many of the suffixes it tries
+-- are taken, and each of them is legal while it has at most 7 digits.
+claimName :: Taken -> Text -> Maybe (Text, Taken)
 claimName (Taken names resume) name
-  | base `Set.notMember` names = (base, Taken (Set.insert base names) resume)
-  | otherwise =
-      let k = search (Map.findWithDefault 1 base resume)
-          candidate = suffixed k
-       in (candidate, Taken (Set.insert candidate names) (Map.insert base (k + 1) resume))
+  | base `Set.notMember` names = Just (base, Taken (Set.insert base names) resume)
+  | otherwise = do
+      k <- find free [start .. start + Set.size names]
+      let candidate = suffixed k
+      Just (candidate, Taken (Set.insert candidate names) (Map.insert base (k + 1) resume))
   where
     base = baseName name
+    start = Map.findWithDefault 1 base resume
+    suffixed :: Int -> Text
     suffixed k = base <> "_" <> tshow k
-    search :: Int -> Int
-    search k
-      | suffixed k `Set.notMember` names && isLegalIdent (suffixed k) = k
-      | otherwise = search (k + 1)
+    free k = suffixed k `Set.notMember` names && isLegalIdent (suffixed k)
 
 -- | Steps 1–4 of 'sanitize'.
 baseName :: Text -> Text

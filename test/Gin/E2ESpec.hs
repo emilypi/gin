@@ -1,6 +1,427 @@
+-- | End-to-end tests of the compiler pipeline, through the library API.
+--
+-- Every hand-written example circuit ("Gin.Examples"), and the counter
+-- read from @test/fixtures/ir/counter.gin.json@, goes through every stage
+-- the compiler runs: JSON decoding, type checking, the certificate
+-- policy, normalization, the netlist builder and all three backends. Each
+-- generated design must pass its backend's lint commands, and each
+-- generated testbench must pass on the circuit's vectors under the real
+-- HDL simulators (Icarus Verilog for Verilog and SystemVerilog, nvc for
+-- VHDL), by the pass rule of @docs/semantics.md@. Both reference
+-- simulators ("Gin.Sim") must reproduce the vectors.
+--
+-- Tool runs use the commands of the backend interface ("Gin.Backend.Types"),
+-- each in a private temporary directory holding @<module>.<ext>@ and
+-- @<module>_tb.<ext>@. A test whose tools are missing is pending, or
+-- fails when @GIN_REQUIRE_TOOLS=1@.
 module Gin.E2ESpec (spec) where
 
-import Test.Hspec (Spec)
+import Control.Monad (forM_, unless)
+import Data.Bifunctor (first)
+import Data.ByteString qualified as ByteString
+import Data.ByteString.Lazy qualified as LazyByteString
+import Data.Char (isDigit)
+import Data.List (nub)
+import Data.Text (Text)
+import Data.Text qualified as Text
+import Data.Text.Encoding qualified as Text
+import Gin.Backend.SystemVerilog (systemVerilog)
+import Gin.Backend.Types
+  ( Backend (..)
+  , Target (..)
+  , failMarker
+  , mismatchMarker
+  , passMarker
+  , targetName
+  )
+import Gin.Backend.VHDL (vhdl)
+import Gin.Backend.Verilog (verilog)
+import Gin.Certificate (checkCertificate, defaultPolicy)
+import Gin.Core.Check (checkProgram)
+import Gin.Core.Json (decodeProgram, decodeVectors, encodeProgram, encodeVectors)
+import Gin.Core.Normal (NModule (..))
+import Gin.Core.Syntax
+  ( Port (..)
+  , Program (..)
+  , TopEntity (..)
+  , Ty (..)
+  , Value (..)
+  )
+import Gin.Error (GinError, renderError)
+import Gin.Examples
+  ( counterProgram
+  , counterVectors
+  , detectorProgram
+  , detectorVectors
+  , macProgram
+  , macVectors
+  )
+import Gin.Netlist.Build (buildNetlist)
+import Gin.Netlist.Types
+  ( HwType (..)
+  , Ident (..)
+  , Module (..)
+  , Net (..)
+  , Output (..)
+  )
+import Gin.Normalize (checkNormal, normalize)
+import Gin.Sim (isBudgetError, simulateCore, simulateNormal)
+import Gin.TestUtil (itWithTools, runTool, withTempDir)
+import Gin.Vectors (Cycle (..), Vectors (..))
+import System.Exit (ExitCode (..))
+import System.FilePath ((</>))
+import Test.Hspec
+  ( Expectation
+  , Spec
+  , describe
+  , expectationFailure
+  , it
+  , shouldBe
+  )
 
+----------------------------------------------------------------------
+-- Spec
+
+-- | The end-to-end suite: the pass rule and the pipeline on every circuit.
 spec :: Spec
-spec = pure ()
+spec = do
+  describe "pass rule" passRuleSpec
+  describe "pipeline" $ do
+    forM_ examples $ \ex ->
+      describe (exName ex) $ do
+        it "[e2e-fixtures] decoding its JSON encoding gives the example back" $ do
+          decodeProgram (encodeProgram (exProgram ex)) `shouldBe` Right (exProgram ex)
+          decodeVectors (encodeVectors (exVectors ex)) `shouldBe` Right (exVectors ex)
+        circuitSpec (exampleCircuit ex)
+    describe "counter.gin.json" $ do
+      it "[e2e-json-fixture] decodes to the hand-written counter and its vectors" $
+        withDecoded jsonFixture $ \p vs -> do
+          p `shouldBe` counterProgram
+          vs `shouldBe` counterVectors
+      circuitSpec jsonFixture
+
+-- | The items every circuit goes through: compile, simulate, then lint and
+-- run the generated HDL of every backend.
+circuitSpec :: Circuit -> Spec
+circuitSpec c = do
+  item "decodes, type checks, passes the certificate policy, normalizes and builds a netlist" $
+    withCompiled c interfaceAgrees
+  item "both reference simulators reproduce the vectors" $
+    withCompiled c $ \p vs comp -> simulatorsReproduce p (compNormal comp) vs
+  forM_ targets $ \t -> do
+    let hdl = targetLabel t
+    itWithTools (lintTools t) (tagged ("the " <> hdl <> " design passes its lint commands")) $
+      withCompiled c $ \_ _ comp -> lintsClean t (compNetlist comp)
+    itWithTools (runTools t) (tagged ("the " <> hdl <> " testbench passes on the vectors")) $
+      withCompiled c $ \_ vs comp ->
+        runTestbench t (compNetlist comp) vs >>= shouldPass (hdl <> " testbench") (cycleCount vs)
+  where
+    tagged what = "[" <> circTag c <> "] " <> what
+    item what = it (tagged what)
+
+----------------------------------------------------------------------
+-- Circuits
+
+-- | A hand-written example with its vectors.
+data Example = Example
+  { exName :: !String
+  , exProgram :: !Program
+  , exVectors :: !Vectors
+  }
+
+examples :: [Example]
+examples = [counter, mac, detector]
+
+counter, mac, detector :: Example
+counter = Example "counter" counterProgram counterVectors
+mac = Example "mac" macProgram macVectors
+detector = Example "detector" detectorProgram detectorVectors
+
+-- | A circuit as the compiler receives it: the JSON of its program and of
+-- its vectors.
+data Circuit = Circuit
+  { circTag :: !String
+  -- ^ The tag of the items run on this circuit.
+  , circLoad :: !(IO (LazyByteString.ByteString, LazyByteString.ByteString))
+  }
+
+-- | An example, entering the pipeline as its canonical JSON encoding.
+exampleCircuit :: Example -> Circuit
+exampleCircuit ex =
+  Circuit "e2e-fixtures" (pure (encodeProgram (exProgram ex), encodeVectors (exVectors ex)))
+
+-- | The counter as checked-in JSON files.
+jsonFixture :: Circuit
+jsonFixture =
+  Circuit "e2e-json-fixture" $
+    (,) <$> readBytes ("test" </> "fixtures" </> "ir" </> "counter.gin.json")
+      <*> readBytes ("test" </> "fixtures" </> "ir" </> "counter.vectors.canonical.json")
+  where
+    readBytes path = LazyByteString.fromStrict <$> ByteString.readFile path
+
+----------------------------------------------------------------------
+-- The pipeline
+
+-- | What the compiler produces for a program.
+data Compiled = Compiled
+  { compNormal :: !NModule
+  , compNetlist :: !Module
+  }
+
+-- | Every stage after decoding, in the order the compiler runs them.
+compile :: Program -> Either GinError Compiled
+compile p = do
+  checkProgram p
+  checkCertificate defaultPolicy (progCertificate p)
+  m <- normalize p
+  checkNormal m
+  Compiled m <$> buildNetlist m
+
+-- | Continue with a stage's result, or fail with its rendered error.
+stage :: String -> Either GinError a -> (a -> Expectation) -> Expectation
+stage what result k = case result of
+  Left e -> expectationFailure (what <> " failed:\n" <> Text.unpack (renderError e))
+  Right a -> k a
+
+-- | Decode a circuit's program and vectors.
+withDecoded :: Circuit -> (Program -> Vectors -> Expectation) -> Expectation
+withDecoded c k = do
+  (programJson, vectorsJson) <- circLoad c
+  stage "decoding the program" (decodeProgram programJson) $ \p ->
+    stage "decoding the vectors" (decodeVectors vectorsJson) (k p)
+
+-- | Decode and compile a circuit.
+withCompiled :: Circuit -> (Program -> Vectors -> Compiled -> Expectation) -> Expectation
+withCompiled c k = withDecoded c $ \p vs -> stage "compiling" (compile p) (k p vs)
+
+-- | The vectors describe the program's top entity, and the netlist keeps
+-- its name and ports unchanged (they are the hardware interface), as the
+-- testbench generators require.
+interfaceAgrees :: Program -> Vectors -> Compiled -> Expectation
+interfaceAgrees p vs comp = do
+  vecTop vs `shouldBe` topName top
+  vecInputs vs `shouldBe` topInputs top
+  vecOutputs vs `shouldBe` topOutputs top
+  nmName (compNormal comp) `shouldBe` topName top
+  modName n `shouldBe` Ident (topName top)
+  Just (modInputs n) `shouldBe` traverse portNet (topInputs top)
+  Just (fmap outNet (modOutputs n)) `shouldBe` traverse portNet (topOutputs top)
+  where
+    top = progTop p
+    n = compNetlist comp
+    portNet port = Net (Ident (portName port)) <$> hwType (portTy port)
+    hwType = \case
+      TBool -> Just HBit
+      TBitVec w -> Just (HVec w)
+      _ -> Nothing
+
+----------------------------------------------------------------------
+-- Reference simulators
+
+inputRows, outputRows :: Vectors -> [[Value]]
+inputRows = fmap cycInputs . vecCycles
+outputRows = fmap cycOutputs . vecCycles
+
+cycleCount :: Vectors -> Int
+cycleCount = length . vecCycles
+
+-- | 'simulateCore' with its error rendered. An inconclusive result (the
+-- simulator exceeded a bound, 'isBudgetError') is labelled as such; the
+-- examples are far inside the bounds, so any error fails a test.
+runCore :: Program -> [[Value]] -> Either Text [[Value]]
+runCore p rows = first describeError (simulateCore p rows)
+  where
+    describeError e
+      | isBudgetError e = "inconclusive, a simulation bound was exceeded: " <> renderError e
+      | otherwise = renderError e
+
+-- | 'simulateNormal' with its error rendered.
+runNormal :: NModule -> [[Value]] -> Either Text [[Value]]
+runNormal m rows = first renderError (simulateNormal m rows)
+
+-- | Both reference simulators reproduce the expected output rows.
+simulatorsReproduce :: Program -> NModule -> Vectors -> Expectation
+simulatorsReproduce p m vs = do
+  runCore p (inputRows vs) `shouldBe` Right (outputRows vs)
+  runNormal m (inputRows vs) `shouldBe` Right (outputRows vs)
+
+----------------------------------------------------------------------
+-- HDL tools
+
+-- | Every backend.
+targets :: [Target]
+targets = [minBound .. maxBound]
+
+targetLabel :: Target -> String
+targetLabel = Text.unpack . targetName
+
+backendFor :: Target -> Backend
+backendFor = \case
+  Verilog -> verilog
+  SystemVerilog -> systemVerilog
+  VHDL -> vhdl
+
+-- | A tool invocation, run without a shell in the directory holding the
+-- generated files.
+data Command = Command
+  { cmdExe :: !String
+  , cmdArgs :: ![String]
+  }
+  deriving stock (Show)
+
+-- | The lint commands of the backend interface, for module @m@.
+lintCommands :: Target -> String -> [Command]
+lintCommands t m = case t of
+  Verilog ->
+    [ Command "verilator" ["--lint-only", "-Wall", "--default-language", "1364-2005", m <> ".v"]
+    , Command "iverilog" ["-g2005", "-o", "/dev/null", m <> ".v"]
+    ]
+  SystemVerilog ->
+    [ Command "verilator" ["--lint-only", "-Wall", "--default-language", "1800-2017", m <> ".sv"]
+    , Command "iverilog" ["-g2012", "-o", "/dev/null", m <> ".sv"]
+    ]
+  VHDL -> [Command "nvc" (nvcFlags <> ["-a", m <> ".vhd"])]
+
+-- | The run commands of the backend interface, for module @m@: the build
+-- steps, then the run whose standard output carries the testbench
+-- protocol.
+runCommands :: Target -> String -> ([Command], Command)
+runCommands t m = case t of
+  Verilog ->
+    ([Command "iverilog" ["-g2005", "-o", "tb.vvp", m <> ".v", m <> "_tb.v"]], vvp)
+  SystemVerilog ->
+    ([Command "iverilog" ["-g2012", "-o", "tb.vvp", m <> ".sv", m <> "_tb.sv"]], vvp)
+  VHDL ->
+    ([], Command "nvc" (nvcFlags <> ["-a", m <> ".vhd", m <> "_tb.vhd", "-e", m <> "_tb", "-r"]))
+  where
+    vvp = Command "vvp" ["-n", "tb.vvp"]
+
+nvcFlags :: [String]
+nvcFlags = ["-M", "1g", "--std=2008"]
+
+-- | The tools the lint and run commands need (they do not depend on the
+-- module name).
+lintTools, runTools :: Target -> [String]
+lintTools t = nub (fmap cmdExe (lintCommands t "design"))
+runTools t = nub (fmap cmdExe (build <> [run]))
+  where
+    (build, run) = runCommands t "design"
+
+type ToolResult = (ExitCode, Text, Text)
+
+moduleStem :: Module -> String
+moduleStem = Text.unpack . unIdent . modName
+
+writeUtf8 :: FilePath -> Text -> IO ()
+writeUtf8 path = ByteString.writeFile path . Text.encodeUtf8
+
+writeDesign :: FilePath -> Target -> Module -> IO ()
+writeDesign dir t m =
+  writeUtf8 (dir </> moduleStem m <> "." <> backendFileExt b) (backendRender b m)
+  where
+    b = backendFor t
+
+-- | Messages that make a command's run unclean: Verilator's warning and
+-- error lines (it also prints a statistics report), and any output at all
+-- from the other tools.
+diagnostics :: Command -> ToolResult -> [Text]
+diagnostics c (_, out, err)
+  | cmdExe c == "verilator" = filter ("%" `Text.isPrefixOf`) ls
+  | otherwise = filter (not . Text.null . Text.strip) ls
+  where
+    ls = Text.lines out <> Text.lines err
+
+-- | Run a command that must exit 0 without diagnostics.
+runClean :: FilePath -> Command -> Expectation
+runClean dir c = do
+  result@(code, _, _) <- runTool dir (cmdExe c) (cmdArgs c)
+  unless (code == ExitSuccess && null (diagnostics c result)) $
+    expectationFailure (describeRun (unwords (cmdExe c : cmdArgs c)) result)
+
+-- | The design passes every lint command of its backend.
+lintsClean :: Target -> Module -> Expectation
+lintsClean t m = withTempDir $ \dir -> do
+  writeDesign dir t m
+  mapM_ (runClean dir) (lintCommands t (moduleStem m))
+
+-- | Build the design and testbench, which must build cleanly, and run the
+-- testbench.
+runTestbench :: Target -> Module -> Vectors -> IO ToolResult
+runTestbench t m vs = withTempDir $ \dir -> do
+  writeDesign dir t m
+  writeUtf8
+    (dir </> moduleStem m <> "_tb." <> backendFileExt b)
+    (backendTestbench b m vs)
+  let (build, run) = runCommands t (moduleStem m)
+  mapM_ (runClean dir) build
+  runTool dir (cmdExe run) (cmdArgs run)
+  where
+    b = backendFor t
+
+----------------------------------------------------------------------
+-- The pass rule
+
+-- | The pass rule of @docs/semantics.md@: the simulator exits 0, exactly
+-- one line of standard output contains @GIN-PASS cycles=<n>@, and no line
+-- of standard output contains @GIN-FAIL@ or @GIN-MISMATCH@. Standard error
+-- is not inspected. The count is read as a whole number: a line with
+-- @GIN-PASS cycles=80@ does not contain @GIN-PASS cycles=8@.
+passes :: Int -> ToolResult -> Bool
+passes n (code, out, _) =
+  code == ExitSuccess
+    && length (filter (containsCount (passMarker <> " cycles=") n) ls) == 1
+    && not (any (\l -> any (`Text.isInfixOf` l) [failMarker, mismatchMarker]) ls)
+  where
+    ls = Text.lines out
+
+-- | Does the line contain @prefix@ immediately followed by the decimal @n@
+-- and then something other than a digit?
+containsCount :: Text -> Int -> Text -> Bool
+containsCount prefix n line =
+  any (followedByCount . Text.drop (Text.length needle) . snd) (Text.breakOnAll needle line)
+  where
+    needle = prefix <> Text.pack (show n)
+    followedByCount rest = maybe True (not . isDigit . fst) (Text.uncons rest)
+
+-- | The run passes by the pass rule.
+shouldPass :: String -> Int -> ToolResult -> Expectation
+shouldPass what n result =
+  unless (passes n result) $
+    expectationFailure (describeRun (what <> ": expected GIN-PASS cycles=" <> show n) result)
+
+describeRun :: String -> ToolResult -> String
+describeRun what (code, out, err) =
+  unlines
+    [ what
+    , "exit: " <> show code
+    , "stdout:"
+    , clip out
+    , "stderr:"
+    , clip err
+    ]
+  where
+    clip = Text.unpack . Text.take 4000
+
+-- | The pass rule on hand-written simulator results for an 8-cycle run.
+passRuleSpec :: Spec
+passRuleSpec =
+  forM_ cases $ \(what, result, expected) ->
+    it what $ passes 8 result `shouldBe` expected
+  where
+    stdoutOnly out = (ExitSuccess, out, "")
+    cases :: [(String, ToolResult, Bool)]
+    cases =
+      [ ("accepts exactly one pass line", stdoutOnly "GIN-PASS cycles=8\n", True)
+      , ("accepts text around the pass marker", stdoutOnly "x GIN-PASS cycles=8 done", True)
+      , ("ignores markers on standard error", (ExitSuccess, "GIN-PASS cycles=8", "GIN-FAIL"), True)
+      , ("rejects a nonzero exit", (ExitFailure 1, "GIN-PASS cycles=8\n", ""), False)
+      , ("rejects another cycle count", stdoutOnly "GIN-PASS cycles=80\n", False)
+      , ("rejects a missing pass line", stdoutOnly "", False)
+      , ("rejects two pass lines", stdoutOnly "GIN-PASS cycles=8\nGIN-PASS cycles=8\n", False)
+      ,
+        ( "rejects a mismatch line"
+        , stdoutOnly "GIN-MISMATCH cycle=0 port=a expected=0 got=1\nGIN-PASS cycles=8\n"
+        , False
+        )
+      , ("rejects a fail line", stdoutOnly "GIN-PASS cycles=8\nGIN-FAIL mismatches=0\n", False)
+      ]

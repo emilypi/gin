@@ -24,6 +24,7 @@
 module Gin.Sim
   ( simulateCore
   , simulateNormal
+  , isBudgetError
   ) where
 
 import Control.Applicative ((<|>))
@@ -105,7 +106,13 @@ import Numeric.Natural (Natural)
 -- still exceed the cycle budget if evaluating it takes far more steps
 -- than its normal form has binds: one that applies functions @2^19@
 -- times a cycle to compute the identity, which normalizes to no binds at
--- all, is stopped in cycle 0.
+-- all, is stopped in cycle 0. Ordinary helper-call overhead, constants
+-- computed once, and identity lifts can likewise exceed these bounds for
+-- programs the normalizer accepts. Exceeding a bound returns an error
+-- for which 'isBudgetError' holds: the simulation is inconclusive, not a
+-- disagreement, and callers should report it as such. Whenever
+-- 'simulateCore' returns a result, it agrees with 'simulateNormal' on
+-- the normalized program.
 simulateCore :: Program -> [[Value]] -> Either GinError [[Value]]
 simulateCore prog rows = do
   validateRows [(portName p, portTy p) | p <- topInputs (progTop prog)] rows
@@ -133,6 +140,21 @@ simulateNormal nm rows = do
 
 simError :: Text -> GinError
 simError = ginError StSim
+
+-- | Message prefix of every error raised because a simulation bound was
+-- exceeded, as opposed to an error in the program or the rows.
+budgetPrefix :: Text
+budgetPrefix = "reference simulation budget exceeded: "
+
+budgetError :: Text -> GinError
+budgetError = simError . (budgetPrefix <>)
+
+-- | Did 'simulateCore' stop because it exceeded one of its bounds
+-- (evaluation steps, network nodes, nesting depth)? Such a result is
+-- inconclusive: it says nothing about whether the program agrees with
+-- its vectors.
+isBudgetError :: GinError -> Bool
+isBudgetError e = errStage e == StSim && budgetPrefix `Text.isPrefixOf` errMessage e
 
 showT :: (Show a) => a -> Text
 showT = Text.pack . show
@@ -359,7 +381,7 @@ tick = Eval $ \sim _ -> do
   if n < limit
     then Right () <$ (writeSTRef (simSteps sim) $! n + 1)
     else
-      pure . Left . Abort . simError $
+      pure . Left . Abort . budgetError $
         (if building then "building the signal network" else "the cycle")
           <> " needs more than "
           <> showT limit
@@ -371,7 +393,7 @@ deeper :: Maybe (Active s) -> Eval s a -> Eval s a
 deeper new (Eval m) = Eval $ \sim (Here d active) ->
   if d >= maxEvalDepth
     then
-      pure . Left . Abort . simError $
+      pure . Left . Abort . budgetError $
         "evaluation nested more than "
           <> showT maxEvalDepth
           <> " values and applications deep (a recursive function that does not return?)"
@@ -655,7 +677,7 @@ newNode kind = do
   building <- (< 0) <$> currentCycle
   when building $ do
     count <- liftST (readSTRef (simNodes sim))
-    when (count >= maxNetworkNodes) . abort $
+    when (count >= maxNetworkNodes) . failWith . Abort . budgetError $
       "the signal network has more than " <> showT maxNetworkNodes <> " nodes"
     liftST (writeSTRef (simNodes sim) $! count + 1)
   i <- fresh

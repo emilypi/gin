@@ -11,7 +11,7 @@ import Gin.Core.Normal
 import Gin.Core.Syntax
 import Gin.Error (GinError (..), Stage (..), renderError)
 import Gin.Examples
-import Gin.Sim (simulateCore, simulateNormal)
+import Gin.Sim (isBudgetError, simulateCore, simulateNormal)
 import Gin.Sim.Prim (evalPrim)
 import Gin.Vectors (Cycle (..), Vectors (..), maxCycles)
 import Numeric.Natural (Natural)
@@ -1038,6 +1038,14 @@ coreLimitSpec = do
     r <- settled (simulateCore (doublingWork 40) [[b8 7]])
     r `shouldBeSimError` "the cycle needs more than 1048576 evaluation steps"
     r `shouldBeSimError` "in cycle 0"
+  it "[sim-budget] marks exceeded bounds as inconclusive and other errors as not" $ do
+    cycleBudget <- settled (simulateCore (doublingWork 18) [[b8 7]])
+    either isBudgetError (const False) cycleBudget `shouldBe` True
+    nodeCap <- settled (simulateCore (delayedBy 20 []) [[b8 1]])
+    either isBudgetError (const False) nodeCap `shouldBe` True
+    badRow <- settled (simulateCore (doublingWork 1) [[b8 7, b8 8]])
+    badRow `shouldBeSimError` ""
+    either isBudgetError (const True) badRow `shouldBe` False
   it "[sim-budget] gives every cycle the same budget, so only the expensive cycle fails" $ do
     let rows = fmap (pure . b8) [10 .. 15]
     simulateCore expensiveAtThree (take 3 rows) `shouldBe` Right (take 3 rows)

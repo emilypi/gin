@@ -9,6 +9,7 @@ module Gin.Limits
   , maxVectorBits
   , maxNormalBinds
   , defaultToolTimeoutSeconds
+  , defaultSimTimeoutSeconds
   ) where
 
 -- | Largest IR or vectors file gin reads (16 MiB).
@@ -40,3 +41,8 @@ maxNormalBinds = 65536
 -- | Default wall-clock limit for each external tool run.
 defaultToolTimeoutSeconds :: Int
 defaultToolTimeoutSeconds = 300
+
+-- | Default wall-clock limit for reference simulation in @gin sim@ and
+-- @gin validate@.
+defaultSimTimeoutSeconds :: Int
+defaultSimTimeoutSeconds = 600

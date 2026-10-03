@@ -136,6 +136,8 @@ it guards (constants in `Gin.Limits`):
 | Vector cycles                                 | 1 … 100000               |
 | Vector payload (cycles × summed port widths)  | 2^18 bits                |
 | Normal-form size                              | 65536 bindings           |
+| Normalizer evaluation steps                   | 2^24                     |
+| Reference simulation (`gin sim`, `validate`)  | 600 s wall clock (configurable); budget overruns are inconclusive |
 | External tool run                             | 300 s (configurable)     |
 
 ## Test vectors (`gin-vectors/1`)

@@ -4,7 +4,7 @@ import Control.Exception (bracket)
 import Control.Monad (forM_, unless)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
-import Data.List (sort)
+import Data.List (intercalate, sort)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
@@ -472,6 +472,65 @@ validateSpec = describe "validate" $ do
                    , "systemverilog-lint: SKIP(missing tools: verilator, iverilog)"
                    , "systemverilog-run: SKIP(missing tools: iverilog, vvp)"
                    ]
+  -- The lint tools and iverilog are fakes that succeed; the fake vvp stands
+  -- for a testbench run, and the run check must follow the pass rule of
+  -- docs/semantics.md exactly.
+  forM_ passRuleCases $ \(what, vvp, verdict) ->
+    it ("[cli-validate] judges a testbench run that " <> what) $
+      withTempDir $ \dir -> do
+        file <- writeProgram dir "counter" counterProgram
+        vecs <- writeVectors dir "counter" counterVectors
+        bin <- fakeTools dir [("verilator", "exit 0"), ("iverilog", "exit 0"), ("vvp", vvp)]
+        r <- ginWith [("PATH", bin)] ["validate", file, "--vectors", vecs, "--target", "verilog"]
+        r `shouldExit` (if verdict == "PASS" then ExitSuccess else ExitFailure 1)
+        outLines r
+          `shouldBe` [ "sim-core: PASS"
+                     , "sim-normal: PASS"
+                     , "verilog-lint: PASS"
+                     , "verilog-run: " <> verdict
+                     ]
+
+-- | What a fake @vvp@ does for counter's vectors, and the outcome of the run
+-- check: @PASS@ or @FAIL <reason>@.
+passRuleCases :: [(String, String, Text)]
+passRuleCases =
+  [ ("prints GIN-PASS with the cycle count among other output", say (progress <> [pass]), "PASS")
+  , ( "prints GIN-PASS, and GIN-MISMATCH and GIN-FAIL only on standard error"
+    , say [pass] <> warn ["GIN-MISMATCH t=0 port=count expected=0 got=1", "GIN-FAIL mismatches=1"]
+    , "PASS"
+    )
+  , ("exits 0 without printing GIN-PASS", say progress, noPass "0")
+  , ("prints no output at all", "exit 0", noPass "0")
+  , ("prints GIN-PASS twice", say [pass, pass], noPass "2")
+  , ("counts one cycle too few", say [passWith (cycles - 1)], wrongCount "GIN-PASS cycles=7")
+  , ( "counts a number that only starts with the cycle count"
+    , say [passWith (cycles * 10)]
+    , wrongCount "GIN-PASS cycles=80"
+    )
+  , ("prints GIN-PASS without a count", say ["GIN-PASS"], wrongCount "GIN-PASS")
+  , ("prints GIN-PASS and exits 1", say [pass] <> "; exit 1", "FAIL vvp exited with code 1")
+  , ( "prints GIN-PASS and is killed"
+    , say [pass] <> "; kill -9 $$"
+    , "FAIL vvp was stopped by signal 9"
+    )
+  , ( "prints GIN-PASS after a GIN-MISMATCH line"
+    , say ["GIN-MISMATCH t=3 port=count expected=2 got=9", pass]
+    , "FAIL vvp printed GIN-MISMATCH t=3 port=count expected=2 got=9"
+    )
+  , ( "prints GIN-PASS and a GIN-FAIL line"
+    , say [pass, "GIN-FAIL mismatches=1"]
+    , "FAIL vvp printed GIN-FAIL mismatches=1"
+    )
+  ]
+  where
+    cycles = length (vecCycles counterVectors)
+    passWith n = "GIN-PASS cycles=" <> show n
+    pass = passWith cycles
+    progress = ["VCD info: dumpfile tb.vcd opened for output."]
+    say ls = intercalate "; " ["echo '" <> l <> "'" | l <- ls]
+    warn ls = concat ["; echo '" <> l <> "' >&2" | l <- ls]
+    noPass n = "FAIL vvp printed " <> n <> " GIN-PASS lines, expected one"
+    wrongCount l = "FAIL vvp printed " <> l <> ", expected cycles=8"
 
 timeoutSpec :: Spec
 timeoutSpec = describe "tool timeout" $
@@ -479,7 +538,7 @@ timeoutSpec = describe "tool timeout" $
     withTempDir $ \dir -> do
       file <- writeProgram dir "counter" counterProgram
       vecs <- writeVectors dir "counter" counterVectors
-      fake <- sleepingTool dir "nvc"
+      fake <- fakeTools dir [("nvc", "sleep 30")]
       start <- getMonotonicTime
       r <-
         ginWith
@@ -594,15 +653,17 @@ linkTools dir tools = do
       Nothing -> expectationFailure ("tool not found: " <> t)
   pure bin
 
--- | A directory holding a fake tool that sleeps for 30 s.
-sleepingTool :: FilePath -> String -> IO FilePath
-sleepingTool dir name = do
+-- | A directory holding fake tools, each a @/bin/sh@ script with the given
+-- body, and nothing else.
+fakeTools :: FilePath -> [(String, String)] -> IO FilePath
+fakeTools dir tools = do
   let bin = dir </> "fake"
-      exe = bin </> name
   createDirectory bin
-  writeFile exe "#!/bin/sh\nsleep 30\n"
-  perms <- getPermissions exe
-  setPermissions exe (setOwnerExecutable True perms)
+  forM_ tools $ \(name, body) -> do
+    let exe = bin </> name
+    writeFile exe ("#!/bin/sh\n" <> body <> "\n")
+    perms <- getPermissions exe
+    setPermissions exe (setOwnerExecutable True perms)
   pure bin
 
 withTop :: (TopEntity -> TopEntity) -> Program -> Program

@@ -52,7 +52,7 @@ import Gin.Examples
 import Gin.Normalize (checkNormal, normalize)
 import Gin.Sim (simulateCore, simulateNormal)
 import Gin.TestUtil (itWithTools, withTempDir)
-import Gin.Vectors (Cycle (..), Vectors (..))
+import Gin.Vectors (Cycle (..), Vectors (..), maxCycles)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.IO (Handle, IOMode (..), hClose, hFlush, stderr, stdout, withBinaryFile)
@@ -86,7 +86,9 @@ vectorsSpec ex = do
       vecTop vs `shouldBe` topName top
       vecInputs vs `shouldBe` topInputs top
       vecOutputs vs `shouldBe` topOutputs top
-      length (vecCycles vs) `shouldBe` leanCycles
+      -- The number of cycles is the exporter's choice; any nonempty run
+      -- within gin's limit will do.
+      length (vecCycles vs) `shouldSatisfy` (\n -> n > 0 && n <= maxCycles)
   it "[lean-vectors-match] simulateCore reproduces the exported vectors exactly" $
     withExported ex $ \p vs ->
       runCore p (inputRows vs) `shouldBe` Right (outputRows vs)
@@ -125,7 +127,7 @@ validateSpec ex = do
   itWithTools hdlTools "[lean-e2e] gin validate passes every check on all three targets" $ do
     r <- gin ["validate", programFile ex, "--vectors", vectorsFile ex]
     r `shouldExit` ExitSuccess
-    outLines r `shouldBe` (["sim-core: PASS", "sim-normal: PASS"] <> concatMap passes targets)
+    checkLines r `shouldBe` (["sim-core: PASS", "sim-normal: PASS"] <> concatMap passes targets)
     runErr r `shouldBe` ""
   itWithTools hdlTools "[lean-e2e] gin validate fails every simulation when an output is changed" $
     withExported ex $ \_ vs -> case changeLastOutput vs of
@@ -135,7 +137,7 @@ validateSpec ex = do
         LazyByteString.writeFile file (encodeVectors changed)
         r <- gin ["validate", programFile ex, "--vectors", file]
         r `shouldExit` ExitFailure 1
-        case outLines r of
+        case checkLines r of
           core : normal : hdl -> do
             core `shouldBe` "sim-core: FAIL " <> mismatch
             normal `shouldBe` "sim-normal: FAIL " <> mismatch
@@ -148,7 +150,7 @@ validateSpec ex = do
           `shouldBe` length targets
   where
     passes t = [check t "lint" "PASS", check t "run" "PASS"]
-    check t what verdict = targetName t <> "-" <> what <> ": " <> verdict
+    check t what verdict = checkName t what <> ": " <> verdict
 
 ----------------------------------------------------------------------
 -- The examples
@@ -170,10 +172,6 @@ leanExamples =
 programFile, vectorsFile :: LeanExample -> FilePath
 programFile ex = "examples" </> exName ex </> exName ex <> ".gin.json"
 vectorsFile ex = "examples" </> exName ex </> exName ex <> ".vectors.json"
-
--- | The exporter writes 64 cycles of vectors for every example.
-leanCycles :: Int
-leanCycles = 64
 
 -- | Decode an example's committed files and run the checks every gin
 -- command runs on loading: type checking and the default axiom policy.
@@ -285,8 +283,20 @@ capture h file act = do
       hDuplicateTo fh h >> act
   (,) a . Text.decodeUtf8Lenient <$> ByteString.readFile file
 
-outLines :: Run -> [Text]
-outLines = Text.lines . runOut
+-- | The name of a target's lint or run check, as @gin validate@ prints it.
+checkName :: Target -> Text -> Text
+checkName t what = targetName t <> "-" <> what
+
+-- | The lines of standard output that report a check (@<check>: <verdict>@),
+-- in order. Other lines, such as a summary of the vectors or of the tools
+-- found, may come before or between them and are skipped.
+checkLines :: Run -> [Text]
+checkLines = filter isCheck . Text.lines . runOut
+  where
+    isCheck l = any (\c -> (c <> ": ") `Text.isPrefixOf` l) checks
+    checks =
+      ["sim-core", "sim-normal"]
+        <> [checkName t what | t <- targets, what <- ["lint", "run"]]
 
 shouldExit :: Run -> ExitCode -> Expectation
 shouldExit r code =

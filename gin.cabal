@@ -54,6 +54,7 @@ library
     Gin.Core.Value
     Gin.Driver
     Gin.Error
+    Gin.Hash
     Gin.Limits
     Gin.Netlist.Build
     Gin.Netlist.Types
@@ -105,6 +106,7 @@ test-suite gin-test
     Gin.E2ESpec
     Gin.Examples
     Gin.ExamplesSpec
+    Gin.HashSpec
     Gin.LeanExamplesSpec
     Gin.Netlist.BuildSpec
     Gin.NormalizeSpec

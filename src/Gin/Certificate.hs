@@ -4,6 +4,8 @@ module Gin.Certificate
   , defaultPolicy
   , alwaysRejected
   , checkCertificate
+  , certificateSpecHash
+  , specCanonicalBytes
   ) where
 
 import Data.Containers.ListUtils (nubOrd)
@@ -11,8 +13,31 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
-import Gin.Core.Syntax (Certificate (..))
+import Data.ByteString (StrictByteString)
+import Data.ByteString qualified as BS
+import Data.ByteString.Char8 qualified as BS8
+import Data.Text.Encoding qualified as Text
+import Gin.Core.Syntax (Certificate (..), SpecDef (..))
 import Gin.Error (GinError, Stage (..), ginError)
+import Gin.Hash (sha256Hex)
+
+-- | Identity of the specification a certificate claims: SHA-256 (lowercase
+-- hex) of 'specCanonicalBytes'. Axioms are not part of it. A reviewer pins
+-- this value once the theorem and its definitions are approved; any later
+-- change to the claim changes it.
+certificateSpecHash :: Certificate -> Text
+certificateSpecHash = sha256Hex . specCanonicalBytes
+
+-- | The bytes 'certificateSpecHash' digests: the tag @gin-spec/1@, the
+-- theorem name, the statement, then each definition's name and body, each
+-- field as its UTF-8 byte length in decimal, a colon, and the bytes.
+specCanonicalBytes :: Certificate -> StrictByteString
+specCanonicalBytes c =
+  BS.concat . fmap field $
+    ["gin-spec/1", certTheorem c, certStatement c]
+      <> concat [[specDefName d, specDefBody d] | d <- certSpecDefs c]
+  where
+    field t = let b = Text.encodeUtf8 t in BS8.pack (show (BS.length b)) <> ":" <> b
 
 -- | The axioms a certificate may name. A policy can only widen what is
 -- accepted up to 'alwaysRejected', which no policy admits.

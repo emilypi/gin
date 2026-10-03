@@ -74,6 +74,7 @@ spec :: Spec
 spec = do
   describe "sanitize" sanitizeSpec
   describe "bind names" bindNamesSpec
+  describe "limits" limitsSpec
   describe "lowering" loweringSpec
   describe "example circuits" examplesSpec
   describe "port names" portsSpec
@@ -314,6 +315,20 @@ searchedTwice names idents = any (> 1) (Map.fromListWith (+) suffixed)
 -- | Distinct bind names other than the input @a@, many sharing a base.
 genChainNames :: Gen [Name]
 genChainNames = uniquify (Set.singleton "a") <$> (chooseInt (0, 40) >>= (`vectorOf` genBindName))
+
+----------------------------------------------------------------------
+-- limits
+
+limitsSpec :: Spec
+limitsSpec = do
+  it "[backend-minors] rejects a normal form with one bind more than maxNormalBinds" $
+    buildNetlist (chainModule (numbered (maxNormalBinds + 1)))
+      `shouldFailMentioning` ("more than " <> tshow maxNormalBinds <> " binds")
+  it "[backend-minors] accepts a normal form with exactly maxNormalBinds binds" $
+    length . modDecls <$> buildNetlist (chainModule (numbered maxNormalBinds))
+      `shouldBe` Right maxNormalBinds
+  where
+    numbered n = [Name ("b" <> tshow i) | i <- [1 .. n]]
 
 ----------------------------------------------------------------------
 -- lowering

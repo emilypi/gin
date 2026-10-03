@@ -124,9 +124,13 @@ where
     | .fn a r => let (as, res) := splitFuns r; (a :: as, res)
     | t => ([], t)
 
-/-- Certify an entry's theorem, then translate it. -/
+/-- Certify an entry's theorem. -/
+def certifyEntry (e : Entry) : MetaM Certificate := certify e.theorem_ e.top e.defs
+
+/-- Certify an entry's theorem, then translate it, in one environment.
+`gin-export` does the two in separate imports (`Gin.Export.Main`). -/
 def exportProgram (e : Entry) : MetaM Program := do
-  let certificate ← certify e.theorem_ e.top e.defs
+  let certificate ← certifyEntry e
   let (top, defs) ← translateTop e
   return { producer, top, defs, certificate }
 

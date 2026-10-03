@@ -219,16 +219,28 @@ structure Top where
   def_ : String
   deriving BEq, Repr, Inhabited
 
+/-- A definition the theorem statement depends on, as a reviewer reads it. -/
+structure SpecDef where
+  /-- Fully qualified name. -/
+  name : String
+  /-- `name : type := value`, or `name : type` for a constant without a
+  value, rendered by `Gin.Export.Print`. -/
+  body : String
+  deriving BEq, Repr, Inhabited
+
 /-- Evidence that the implementation was proven against a specification. -/
 structure Certificate where
   /-- Fully qualified name of the refinement theorem. -/
   theorem_ : String
-  /-- The pretty-printed statement of the theorem. -/
+  /-- The statement of the theorem, rendered by `Gin.Export.Print`. -/
   statement : String
   /-- Axioms the theorem's proof depends on. -/
   axioms : List String
   /-- Axioms the exported definitions depend on. -/
   implAxioms : List String
+  /-- Every definition the statement depends on, other than the top
+  definition, the signal DSL and Lean's core library, in dependency order. -/
+  specDefinitions : List SpecDef
   deriving BEq, Repr, Inhabited
 
 /-- The tool that wrote a file. -/

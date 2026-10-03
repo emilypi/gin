@@ -121,7 +121,18 @@ def programWithPeriod (period : Nat) : Program :=
     defs := [{ name := "M.m", type := .signal "Slow" .bool,
                body := .app (.prim .sigPure (.fn .bool (.signal "Slow" .bool))) [.lit (.bool true)] }],
     certificate := { theorem_ := "M.m_correct", statement := "M.m = M.m", axioms := [],
-                     implAxioms := [] } }
+                     implAxioms := [],
+                     specDefinitions := [{ name := "M.s", body := "M.s : Nat := 0" }] } }
+
+-- [lean-specdefs] The certificate lists its fields in the order of
+-- docs/file-formats.md, specDefinitions last, each as {"name", "body"}.
+#guard match (programWithPeriod 10000).toDoc with
+  | .obj kvs => match kvs.lookup "certificate" with
+    | some cert => cert.compact ==
+      "{\"theorem\": \"M.m_correct\", \"statement\": \"M.m = M.m\", \"axioms\": [], " ++
+      "\"implAxioms\": [], \"specDefinitions\": [{\"name\": \"M.s\", \"body\": \"M.s : Nat := 0\"}]}"
+    | none => false
+  | _ => false
 
 /-- `[[…[null]…]]`, `n` arrays deep. -/
 def nested (n : Nat) : JsonDoc := n.repeat (fun d => .arr [d]) .null

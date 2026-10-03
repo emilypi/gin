@@ -83,7 +83,9 @@ def Program.toDoc (p : Program) : JsonDoc :=
       ("theorem", str p.certificate.theorem_),
       ("statement", str p.certificate.statement),
       ("axioms", arr (p.certificate.axioms.map str)),
-      ("implAxioms", arr (p.certificate.implAxioms.map str))])]
+      ("implAxioms", arr (p.certificate.implAxioms.map str)),
+      ("specDefinitions", arr (p.certificate.specDefinitions.map fun d =>
+        obj [("name", str d.name), ("body", str d.body)]))])]
 
 /-- Encode a test-vector file. -/
 def Vectors.toDoc (v : Vectors) : JsonDoc :=

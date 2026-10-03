@@ -135,6 +135,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
 import Data.Traversable (for)
+import GHC.Clock (getMonotonicTime)
 import GHC.IO.Exception (IOException (..))
 import Gin.Backend.SystemVerilog (systemVerilog)
 import Gin.Backend.Types
@@ -788,7 +789,7 @@ evaluateWithin :: Int -> Outcome -> IO (Maybe Outcome)
 evaluateWithin seconds outcome = do
   done <- newEmptyMVar
   worker <- forkIO (try (evaluate outcome) >>= putMVar done)
-  timeout (seconds * 1000000) (readMVar done) >>= \case
+  awakeTimeout seconds (readMVar done) >>= \case
     Nothing -> Nothing <$ killThread worker
     Just (Left e) -> throwIO (e :: SomeException)
     Just (Right o) -> pure (Just o)
@@ -1082,7 +1083,7 @@ superviseTool seconds group ph hin hout herr = do
   -- on interrupting a blocked system call.
   void (forkIO (tryIO (waitForProcess ph) >>= putMVar exitVar))
   let collect = (,,) <$> readMVar exitVar <*> readMVar outVar <*> readMVar errVar
-  ( timeout (seconds * 1000000) collect >>= \case
+  ( awakeTimeout seconds collect >>= \case
       Just (Right code, out, err) -> pure (Finished code (decodeOutput out) (decodeOutput err))
       Just (Left e, _, _) -> pure (NotStarted (ioMessage e))
       Nothing -> do
@@ -1098,6 +1099,30 @@ superviseTool seconds group ph hin hout herr = do
   where
     forkReader h var = forkIO (tryIO (BS.hGetContents h) >>= putMVar var . fromRight BS.empty)
     decodeOutput = Text.decodeUtf8Lenient
+
+-- | Wait for an action that only waits (such as reading an 'MVar' another
+-- thread fills) for at most the given number of seconds of time the system
+-- is awake; 'Nothing' if it has not finished by then. The clock behind
+-- 'timeout' keeps running while the machine sleeps, so after a suspend a
+-- plain 'timeout' would stop runs that have had almost no time at all.
+-- Waiting in slices of at most a second and counting each slice as no more
+-- than twice its length leaves a suspend out of the budget while still
+-- counting a busy scheduler's delays. The action may be restarted, so it
+-- must be safe to interrupt and repeat.
+awakeTimeout :: Int -> IO a -> IO (Maybe a)
+awakeTimeout seconds act = go 0
+  where
+    limit = fromIntegral seconds :: Double
+    go spent
+      | spent >= limit = pure Nothing
+      | otherwise = do
+          let slice = min 1 (limit - spent)
+          start <- getMonotonicTime
+          timeout (ceiling (slice * 1000000)) act >>= \case
+            Just a -> pure (Just a)
+            Nothing -> do
+              elapsed <- subtract start <$> getMonotonicTime
+              go (spent + max slice (min elapsed (2 * slice)))
 
 ----------------------------------------------------------------------
 -- Helpers

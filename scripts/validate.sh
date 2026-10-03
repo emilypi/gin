@@ -14,9 +14,9 @@
 #      deterministic, so any difference under examples/ or lean/ means the
 #      committed examples are stale. Uncommitted changes there fail this
 #      step too; commit the Lean change together with its export and rerun.
-#   3. gin validate on every example: both reference simulators and the
-#      Verilog, SystemVerilog and VHDL testbenches must reproduce the
-#      vectors computed in Lean.
+#   3. gin validate on every example, with at least 1024 vector cycles:
+#      both reference simulators and the Verilog, SystemVerilog and VHDL
+#      testbenches must reproduce the vectors computed in Lean.
 #   4. scripts/export-examples.sh --check-rejects: designs proved with
 #      sorry or native_decide are refused and nothing is written.
 set -euo pipefail
@@ -42,7 +42,8 @@ fi
 
 for n in "${examples[@]}"; do
   step "gin validate examples/$n"
-  cabal run -v0 gin -- validate "examples/$n/$n.gin.json" --vectors "examples/$n/$n.vectors.json"
+  cabal run -v0 gin -- validate "examples/$n/$n.gin.json" --vectors "examples/$n/$n.vectors.json" \
+    --min-cycles 1024
 done
 
 step "checking that unproven designs are refused"

@@ -55,6 +55,10 @@ for its width `w`; arithmetic wraps around.
   `rst` (synchronous, active-high), even if it has no registers.
   Registers load their initial value when `rst` is high at a rising
   edge.
+- The Lean model has no reset input: cycle 0 is the first cycle after
+  reset. Refinement theorems therefore say nothing about asserting
+  `rst` in the middle of a run, and testbenches assert it only once,
+  before cycle 0.
 
 ## Testbench protocol
 

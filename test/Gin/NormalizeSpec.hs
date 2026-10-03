@@ -18,6 +18,7 @@ import Gin.Error (GinError (..), Stage (..))
 import Gin.Examples
 import Gin.Limits (maxNormalBinds)
 import Gin.Normalize (checkNormal, normalize)
+import Gin.Sim (simulateCore, simulateNormal)
 import System.Timeout (timeout)
 import Test.Hspec
 
@@ -176,6 +177,29 @@ pairRegisterNormal =
     [ NBind "xr" (bv 8) (NReg (VBV 8 0) (AVar "x"))
     , NBind "br" TBool (NReg (VBool True) (AVar "b"))
     ]
+
+-- | Bodies for 'withBody' that return the input @x@ next to a recursive
+-- binding that depends on itself within the cycle but that no output
+-- reads.
+deadLoops :: [(String, Expr)]
+deadLoops =
+  [ ("a binding defined as itself", ELet True [Bind "d" (sig (bv 8)) (var "d")] (var "x"))
+  ,
+    ( "a combinational loop through sig.lift"
+    , ELet True [Bind "d" (sig (bv 8)) (lift [bv 8] (bv 8) (addK 1) [var "d"])] (var "x")
+    )
+  ,
+    ( "a tuple component defined as itself"
+    , ELet
+        True
+        [Bind "p" (TProd [sig (bv 8), sig (bv 8)]) (ETuple [var "x", EProj 1 (var "p")])]
+        (EProj 0 (var "p"))
+    )
+  ]
+
+-- | Rows for a program with one 8-bit input.
+rows8 :: [[Value]]
+rows8 = [[VBV 8 1], [VBV 8 255], [VBV 8 0]]
 
 -- | A program from 8-bit input @x@ to 8-bit output @y@ whose top
 -- definition has the given type and body.
@@ -643,6 +667,47 @@ spec = do
             applied = lift [bv 8] (bv 8) (var "f") [var "x"]
             body = ELet True [Bind "f" (TFun (bv 8) (bv 8)) f] applied
         normalize (withBody "recfun" body) `shouldFailWith` "function"
+      for_ deadLoops $ \(what, body) ->
+        it ("[norm-deadloop] removes " <> what <> " that no output reads") $ do
+          let p = withBody "dead" body
+          m <- normalized p
+          checkNormal m `shouldBe` Right ()
+          nmBinds m `shouldBe` []
+          nmOutputs m `shouldBe` [NOutput "y" (bv 8) (AVar "x")]
+          -- The program is the identity, and both simulators say so.
+          simulateCore p rows8 `shouldBe` Right rows8
+          simulateNormal m rows8 `shouldBe` Right rows8
+      it "[norm-deadloop] keeps a live register next to a dead loop" $ do
+        let body =
+              ELet
+                True
+                [ Bind "d" (sig (bv 8)) (lift [bv 8] (bv 8) (addK 1) [var "d"])
+                , Bind "r" (sig (bv 8)) (register (VBV 8 5) (var "x"))
+                ]
+                (var "r")
+            p = withBody "deadreg" body
+        m <- normalized p
+        fmap nbRhs (nmBinds m) `shouldBe` [NReg (VBV 8 5) (AVar "x")]
+        simulateCore p rows8 `shouldBe` Right [[VBV 8 5], [VBV 8 1], [VBV 8 255]]
+        simulateNormal m rows8 `shouldBe` simulateCore p rows8
+      it "[norm-deadloop] rejects a copy loop an output reads, as simulateCore does" $ do
+        let p = withBody "live" (ELet True [Bind "c" (sig (bv 8)) (var "c")] (var "c"))
+        normalize p `shouldFailWith` "combinational loop"
+        either (Text.isInfixOf "not productive" . errMessage) (const False) (simulateCore p rows8)
+          `shouldBe` True
+      it "[norm-deadloop] rejects a loop through the condition of an if whose branches agree" $ do
+        -- Outside the fragment normalize supports (see "Gin.Normalize"):
+        -- evaluation by need gives s the value x, since both branches are x
+        -- whatever the condition is, but the normal form would compute the
+        -- condition from s within the cycle.
+        let f =
+              ELam [("v", bv 8), ("a", bv 8)] $
+                EIf (eq8 (var "v") (lit8 0)) (var "a") (bin8 BvAdd (var "a") (lit8 0))
+            body =
+              ELet True [Bind "s" (sig (bv 8)) (lift [bv 8, bv 8] (bv 8) f [var "s", var "x"])] (var "s")
+            p = withBody "agree" body
+        normalize p `shouldFailWith` "combinational loop"
+        simulateCore p rows8 `shouldBe` Right rows8
       it "[norm-loop] handles a top entity with no inputs" $ do
         m <- normalized freeCounter
         let c = AVar "c"

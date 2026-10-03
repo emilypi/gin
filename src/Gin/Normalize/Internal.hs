@@ -13,10 +13,13 @@
 -- A recursive @let@ allocates a wire per scalar component of each binding
 -- and ties it to the binding's value with a copy.
 --
--- A final pass propagates every copy, rejects combinational loops (cycles
--- not broken by a register), removes binds no output depends on, orders the
--- rest topologically and names them after the source binders they were
--- bound to where possible.
+-- A final pass removes binds no output depends on, then propagates every
+-- copy, rejects combinational loops (cycles not broken by a register),
+-- orders the remaining binds topologically and names them after the source
+-- binders they were bound to where possible. Removing dead binds first
+-- means a loop no output depends on, such as @let rec d = d in x@, is not
+-- an error: it is never evaluated, by this normal form or by evaluation by
+-- need ("Gin.Sim").
 --
 -- Two budgets keep hostile input from exhausting time or memory. Every bind
 -- emitted while inlining counts against 'Gin.Limits.maxNormalBinds',
@@ -726,9 +729,13 @@ isCopy = \case
   RCopy _ -> True
   _ -> False
 
+-- | Build the module from the emitted binds. Binds no output depends on,
+-- through any operand, are dropped before copies are resolved and loops
+-- are looked for, so only loops the outputs depend on are errors.
 assemble :: Program -> [(Port, W)] -> St -> Either GinError NModule
 assemble prog outs st = do
-  let raw = stBinds st
+  let emitted = stBinds st
+      raw = IntMap.restrictKeys emitted (reachable emitted (fmap snd outs))
       label i =
         fromMaybe ("#" <> showT i) $
           IntMap.lookup i (stInputs st)
@@ -742,8 +749,9 @@ assemble prog outs st = do
       binds = IntMap.map substituted (IntMap.filter (not . isCopy . rbRhs) raw)
       outs' = [(p, sub w) | (p, w) <- outs]
   order <- topoOrder label binds
-  let live = reachable binds (fmap snd outs')
-      ordered = [(i, b) | i <- order, IntSet.member i live, Just b <- [IntMap.lookup i binds]]
+  -- Every bind left is still read by an output: propagating a copy only
+  -- shortens the paths from the outputs.
+  let ordered = [(i, b) | i <- order, Just b <- [IntMap.lookup i binds]]
       names = assignNames (stInputs st) (stAliases st) ordered
       nameOf i = maybe (Left (internal i)) (Right . Name) (IntMap.lookup i names)
       atom = \case

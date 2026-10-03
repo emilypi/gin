@@ -1,4 +1,27 @@
 -- | Normalization: core IR to normal form ("Gin.Core.Normal").
+--
+-- = Supported fragment
+--
+-- The normal form computes every wire in every cycle, so 'normalize'
+-- accepts a recursive @let@ only if every cycle of dependencies among the
+-- values the outputs depend on (directly, or through a register or mealy
+-- state) passes through @sig.register@ or the state of @sig.mealy@; any
+-- other cycle is rejected as a combinational loop. Values no output
+-- depends on are removed before loops are looked for, so a loop among
+-- them, such as @let rec d = d in x@, is not an error.
+--
+-- 'Gin.Sim.simulateCore' evaluates by need, so it also gives a value to
+-- some programs outside this fragment, which 'normalize' rejects:
+--
+--   * an @if@ whose condition depends on the value being computed while
+--     both branches agree on it, such as
+--     @s = lift2 (\\v a -> if v == 0 then a else a + 0) s x@, which is @x@
+--     whatever the condition is;
+--   * a loop through a branch of an @if@ that the input rows never take.
+--
+-- Translation validation does not cover such programs: they are not
+-- compiled. On every program 'normalize' accepts, the two simulators
+-- agree.
 module Gin.Normalize
   ( normalize
   , checkNormal

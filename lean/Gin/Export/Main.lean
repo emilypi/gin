@@ -1,5 +1,6 @@
 import Lean
 import Gin.Export.Encode
+import Gin.Export.Modules
 import Gin.Export.Program
 
 /-!
@@ -9,6 +10,18 @@ Imports the compiled Lean environment, exports each requested circuit in
 memory, and writes the files only once every circuit has passed every
 check, including the limits gin enforces on the files it reads, so a
 refusal never leaves partial output behind.
+
+The environment is imported twice. The first import reads the modules as
+data, without loading environment extensions: no initializer of an imported
+module runs, and no delaborator, unexpander or other code a module
+registers is available. The exporter refuses project modules that register
+IO initializers or are named like toolchain modules, then checks and
+renders every certificate in this environment; `collectAxioms` walks the
+proofs themselves here instead of trusting axiom summaries stored by the
+modules. Only then are the modules imported again with their extensions,
+which the translator needs (instances, pattern-match compilation), and the
+designs translated. Messages are printed raw (`pp.raw`), so that no
+delaborator of a design runs while an error is reported.
 -/
 
 open Lean Meta System
@@ -42,10 +55,27 @@ def parseArgs : List String → CliOptions → Except String CliOptions
     if a.startsWith "-" then .error s!"unknown option {a}"
     else parseArgs rest { o with names := a :: o.names }
 
-/-- Run a `MetaM` computation in an imported environment. -/
+/-- Run a `MetaM` computation in an imported environment, with messages
+printed raw. -/
 def runMeta {α : Type} (env : Environment) (x : MetaM α) : IO α := do
-  let (a, _, _) ← x.toIO { fileName := "gin-export", fileMap := default } { env }
+  let opts := pp.raw.set {} true
+  let (a, _, _) ← x.toIO { fileName := "gin-export", fileMap := default, options := opts } { env }
   return a
+
+/-- Refuse an environment with a project module named like a toolchain
+module (it could hide definitions from the certificate) or a project module
+that registers IO initializers (`lean/README.md`, "Trust"). -/
+def checkModules (env : Environment) : IO Unit := do
+  let libDir := (← findSysroot) / "lib" / "lean"
+  let files ← env.header.moduleNames.filter isToolchainModule |>.mapM fun m =>
+    return (m, ← findOLean m)
+  for m in shadowedCoreModules libDir files do
+    throw <| IO.userError s!"module {m} is named like a module of the Lean toolchain but was not \
+      loaded from {libDir}; refusing to export, because the certificate trusts such modules"
+  for (m, decls) in initializers env do
+    let names := ", ".intercalate (decls.toList.map toString)
+    throw <| IO.userError s!"module {m} registers IO initializers ({names}), which run code \
+      whenever the module is loaded; refusing to export it (see lean/README.md, \"Trust\")"
 
 /-- Write a file by renaming a temporary sibling into place. -/
 def writeAtomically (path : FilePath) (contents : String) : IO Unit := do
@@ -77,13 +107,24 @@ unsafe def main (table : List Entry) (defaults : List String) (args : List Strin
   let mut writing := false
   try
     initSearchPath (← findSysroot)
-    enableInitializersExecution
-    let modules := (entries.map (·.module)).toList.eraseDups.toArray
-    let env ← importModules (modules.map ({ module := · })) {} (loadExts := true)
-    let mut outputs := #[]
+    let imports := (entries.map (·.module)).toList.eraseDups.toArray.map ({ module := · })
+    -- the modules as data: no initializer runs, no extension is loaded
+    let data ← importModules imports {} (loadExts := false)
+    checkModules data
+    let mut certificates := #[]
     for e in entries do
       try
-        let prog ← runMeta env (exportProgram e)
+        certificates := certificates.push (← runMeta data (certifyEntry e))
+      catch err =>
+        throw <| IO.userError s!"{e.name}: {err}"
+    -- the modules with their extensions, for the translator
+    enableInitializersExecution
+    let env ← importModules imports {} (loadExts := true)
+    let mut outputs := #[]
+    for e in entries, certificate in certificates do
+      try
+        let (top, defs) ← runMeta env (translateTop e)
+        let prog : Program := { producer, top, defs, certificate }
         let vecs ← IO.ofExcept (exportVectors e prog.top)
         let docs := [(s!"{e.name}.gin.json", prog.toDoc), (s!"{e.name}.vectors.json", vecs.toDoc)]
         let files ← docs.mapM fun (file, doc) =>

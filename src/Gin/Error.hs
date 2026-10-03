@@ -7,10 +7,14 @@ module Gin.Error
   , ginError
   , withContext
   , renderError
+  , safeLine
+  , maxRenderedLine
   ) where
 
+import Data.Char (GeneralCategory (..), generalCategory, ord)
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Numeric (showHex)
 
 -- | The pipeline stage that produced an error.
 data Stage
@@ -41,11 +45,14 @@ withContext ctx = \case
   Left e -> Left e {errContext = errContext e <> [ctx]}
   Right a -> Right a
 
--- | One-line-per-fact rendering used by the CLI.
+-- | One-line-per-fact rendering used by the CLI. Messages and context
+-- lines may quote untrusted input, so control and format characters (and
+-- other characters that would break or disguise a line) are written as
+-- @\\u{XXXX}@, and each line is cut to 'maxRenderedLine' characters.
 renderError :: GinError -> Text
 renderError (GinError stage msg ctx) =
   Text.intercalate "\n" $
-    (stageName stage <> " error: " <> msg) : fmap ("  " <>) ctx
+    (stageName stage <> " error: " <> safeLine msg) : fmap (("  " <>) . safeLine) ctx
   where
     stageName = \case
       StDecode -> "decode"
@@ -56,3 +63,26 @@ renderError (GinError stage msg ctx) =
       StBackend -> "backend"
       StSim -> "simulation"
       StDriver -> "driver"
+
+-- | Longest rendered line, in characters, before it is cut.
+maxRenderedLine :: Int
+maxRenderedLine = 4096
+
+-- | Make untrusted text safe to print on one terminal line: escape every
+-- character in Unicode categories Cc, Cf, Zl, Zp, Cs, Co and Cn, and cut
+-- the result to 'maxRenderedLine' characters.
+safeLine :: Text -> Text
+safeLine t =
+  let escaped = Text.concatMap escape t
+   in if Text.length escaped <= maxRenderedLine
+        then escaped
+        else
+          Text.take maxRenderedLine escaped
+            <> " ... ("
+            <> Text.pack (show (Text.length escaped - maxRenderedLine))
+            <> " more characters)"
+  where
+    escape c
+      | generalCategory c `elem` [Control, Format, LineSeparator, ParagraphSeparator, Surrogate, PrivateUse, NotAssigned] =
+          "\\u{" <> Text.pack (showHex (ord c) "") <> "}"
+      | otherwise = Text.singleton c

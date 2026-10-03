@@ -161,6 +161,7 @@ genProgram = do
   defs <- listOf (Def <$> genName <*> genTy 4 <*> genExpr 12)
   certificate <-
     Certificate <$> genText <*> genText <*> listOf genText <*> listOf genText
+      <*> listOf (SpecDef <$> genText <*> genText)
   pure (Program producer top defs certificate)
 
 -- | Vectors within the payload bound (cycles times summed port widths).

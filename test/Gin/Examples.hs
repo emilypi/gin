@@ -43,6 +43,7 @@ testCertificate thm =
     , certStatement = "(hand-written test fixture)"
     , certAxioms = ["propext"]
     , certImplAxioms = []
+    , certSpecDefs = []
     }
 
 producer :: Producer

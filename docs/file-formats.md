@@ -27,7 +27,8 @@ Program := {
   "defs": [ {"name": String, "type": Type, "body": Expr} ],
   "certificate": {
     "theorem": String, "statement": String,
-    "axioms": [String], "implAxioms": [String]
+    "axioms": [String], "implAxioms": [String],
+    "specDefinitions": [ {"name": String, "body": String} ]
   }
 }
 
@@ -76,6 +77,29 @@ empty):
 Typing rules for each primitive are documented in `Gin.Core.Prim`; the
 shape required of the top-level definition is documented on
 `Gin.Core.Syntax.TopEntity`.
+
+### Certificate
+
+The certificate records what was proved, for review:
+
+- `theorem` — the fully qualified name of the refinement theorem.
+- `statement` — its type, rendered by the exporter's fixed printer:
+  fully qualified constant names and no user-defined notation,
+  unexpanders or delaborators, so the text cannot be made to differ from
+  the term the kernel checked.
+- `specDefinitions` — every definition the statement depends on
+  transitively, other than the implementation, gin's signal DSL and
+  Lean's core library, each rendered by the same printer as
+  `name : type := body`. A reviewer judges the specification from these,
+  not from its name.
+- `axioms`, `implAxioms` — the axioms the proof and the implementation
+  depend on.
+
+gin derives the specification's identity from these fields
+(`Gin.Certificate.certificateSpecHash`, SHA-256 over the theorem name,
+the statement and the definitions); `--spec-hash` checks it against a
+value a reviewer pinned. The exporter emits `specDefinitions` always;
+the decoder treats a missing field as an empty list.
 
 ### Decoding rules
 

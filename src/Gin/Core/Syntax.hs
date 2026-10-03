@@ -8,6 +8,7 @@ module Gin.Core.Syntax
   , Port (..)
   , TopEntity (..)
   , Certificate (..)
+  , SpecDef (..)
   , Producer (..)
   , Program (..)
   , lookupDef
@@ -96,10 +97,20 @@ data TopEntity = TopEntity
   }
   deriving stock (Eq, Show)
 
+-- | A definition the theorem statement depends on, rendered by the
+-- exporter's fixed printer (fully qualified names, no user notation), so a
+-- reviewer reads what the kernel checked rather than a name.
+data SpecDef = SpecDef
+  { specDefName :: !Text
+  , specDefBody :: !Text
+  }
+  deriving stock (Eq, Show)
+
 -- | Evidence, produced by the Lean exporter, that the implementation was
 -- proven against a specification. gin cannot re-check the proof; it
 -- enforces a policy on these fields ('Gin.Certificate') and carries the
--- statement into generated HDL headers for human review.
+-- statement, the specification's definitions and their hash into
+-- generated HDL headers for human review.
 data Certificate = Certificate
   { certTheorem :: !Text
   -- ^ Fully qualified name of the refinement theorem.
@@ -109,6 +120,9 @@ data Certificate = Certificate
   -- ^ Axioms the theorem's proof depends on (Lean @collectAxioms@).
   , certImplAxioms :: ![Text]
   -- ^ Axioms the implementation definitions depend on.
+  , certSpecDefs :: ![SpecDef]
+  -- ^ Every definition the statement depends on transitively, other than
+  -- the implementation and gin's DSL and Lean's core library.
   }
   deriving stock (Eq, Show)
 

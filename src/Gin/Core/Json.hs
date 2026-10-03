@@ -415,6 +415,11 @@ certificate = A.withObject "Certificate" $ \o ->
     <*> field o "statement" text
     <*> field o "axioms" (list text)
     <*> field o "implAxioms" (list text)
+    <*> (fromMaybe [] <$> optionalField o "specDefinitions" (list specDef))
+
+specDef :: A.Value -> Parser SpecDef
+specDef = A.withObject "SpecDef" $ \o ->
+  SpecDef <$> field o "name" text <*> field o "body" text
 
 ty :: A.Value -> Parser Ty
 ty = A.withObject "Type" $ \o ->
@@ -636,14 +641,19 @@ defE :: Def -> Encoding
 defE (Def n t body) =
   obj [E.pair "name" (nameE n), E.pair "type" (tyE t), E.pair "body" (exprE body)]
 
+-- | @specDefinitions@ is omitted when empty.
 certificateE :: Certificate -> Encoding
 certificateE c =
-  obj
+  obj $
     [ E.pair "theorem" (E.text (certTheorem c))
     , E.pair "statement" (E.text (certStatement c))
     , E.pair "axioms" (E.list E.text (certAxioms c))
     , E.pair "implAxioms" (E.list E.text (certImplAxioms c))
     ]
+      <> [E.pair "specDefinitions" (E.list specDefE (certSpecDefs c)) | not (null (certSpecDefs c))]
+
+specDefE :: SpecDef -> Encoding
+specDefE (SpecDef n b) = obj [E.pair "name" (E.text n), E.pair "body" (E.text b)]
 
 tyE :: Ty -> Encoding
 tyE = \case

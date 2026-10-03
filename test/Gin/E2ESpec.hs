@@ -8,7 +8,8 @@
 -- generated testbench must pass on the circuit's vectors under the real
 -- HDL simulators (Icarus Verilog for Verilog and SystemVerilog, nvc for
 -- VHDL), by the pass rule of @docs/semantics.md@. Both reference
--- simulators ("Gin.Sim") must reproduce the vectors.
+-- simulators ("Gin.Sim") must reproduce the vectors, and they must agree
+-- with each other on random input rows.
 --
 -- Tool runs use the commands of the backend interface ("Gin.Backend.Types"),
 -- each in a private temporary directory holding @<module>.<ext>@ and
@@ -21,7 +22,7 @@ import Data.Bifunctor (first)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Char (isDigit)
-import Data.List (nub)
+import Data.List (inits, nub, tails)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
@@ -46,6 +47,8 @@ import Gin.Core.Syntax
   , TopEntity (..)
   , Ty (..)
   , Value (..)
+  , validValue
+  , valueTy
   )
 import Gin.Error (GinError, renderError)
 import Gin.Examples
@@ -78,11 +81,29 @@ import Test.Hspec
   , it
   , shouldBe
   )
+import Test.QuickCheck
+  ( Gen
+  , Property
+  , arbitrary
+  , choose
+  , conjoin
+  , counterexample
+  , forAll
+  , forAllShrink
+  , frequency
+  , shrinkIntegral
+  , shrinkList
+  , sized
+  , vectorOf
+  , withMaxSuccess
+  , (===)
+  )
 
 ----------------------------------------------------------------------
 -- Spec
 
--- | The end-to-end suite: the pass rule and the pipeline on every circuit.
+-- | The end-to-end suite: the pass rule, the pipeline on every circuit and
+-- the reference simulators on random rows.
 spec :: Spec
 spec = do
   describe "pass rule" passRuleSpec
@@ -99,6 +120,15 @@ spec = do
           p `shouldBe` counterProgram
           vs `shouldBe` counterVectors
       circuitSpec jsonFixture
+  describe "reference simulators on random input rows" $ do
+    forM_ examples $ \ex -> do
+      let ports = topInputs (progTop (exProgram ex))
+      it ("[e2e-quickcheck] " <> exName ex <> ": generated rows have the input port types") $
+        withRowGen ports $ \gen ->
+          forAll gen $ \rows ->
+            all (\row -> fmap valueTy row == fmap portTy ports && all validValue row) rows
+      it ("[e2e-quickcheck] " <> exName ex <> ": simulateCore equals simulateNormal . normalize") $
+        coreAgreesWithNormal (exProgram ex)
 
 -- | The items every circuit goes through: compile, simulate, then lint and
 -- run the generated HDL of every backend.
@@ -244,6 +274,64 @@ simulatorsReproduce :: Program -> NModule -> Vectors -> Expectation
 simulatorsReproduce p m vs = do
   runCore p (inputRows vs) `shouldBe` Right (outputRows vs)
   runNormal m (inputRows vs) `shouldBe` Right (outputRows vs)
+
+----------------------------------------------------------------------
+-- Random input rows
+
+-- | On random input rows, the core IR simulator gives the same output rows
+-- as the normal-form simulator on the normalized program, one row per
+-- input row, each of the output port types.
+coreAgreesWithNormal :: Program -> Property
+coreAgreesWithNormal p = case normalize p of
+  Left e -> counterexample (Text.unpack (renderError e)) False
+  Right m ->
+    withRowGen (topInputs top) $ \gen ->
+      withMaxSuccess 300 . forAllShrink gen (shrinkList shrinkRow) $ \rows ->
+        case (runCore p rows, runNormal m rows) of
+          (Right core, Right normal) ->
+            conjoin
+              [ core === normal
+              , length core === length rows
+              , counterexample "an output row does not have the output port types" $
+                  all (\row -> fmap valueTy row == fmap portTy (topOutputs top)) core
+              ]
+          (Left e, _) -> counterexample ("simulateCore: " <> Text.unpack e) False
+          (_, Left e) -> counterexample ("simulateNormal: " <> Text.unpack e) False
+  where
+    top = progTop p
+
+-- | Run a property on a generator of input rows for these ports, or fail
+-- if a port type has no generator (ports are always scalar).
+withRowGen :: [Port] -> (Gen [[Value]] -> Property) -> Property
+withRowGen ports k = case traverse (portValue . portTy) ports of
+  Nothing -> counterexample "a port type is not scalar" False
+  Just values -> k (sized (\n -> choose (0, min 64 n)) >>= \len -> vectorOf len (sequence values))
+
+-- | Values of a scalar port type. Bit vectors are drawn uniformly, or from
+-- the edges of their range (0, 1 and all ones) so that wrap-around is
+-- exercised often.
+portValue :: Ty -> Maybe (Gen Value)
+portValue = \case
+  TBool -> Just (VBool <$> arbitrary)
+  TBitVec w ->
+    let top = 2 ^ w - 1
+     in Just (VBV w <$> frequency [(1, pure 0), (1, pure 1), (1, pure top), (5, choose (0, top))])
+  _ -> Nothing
+
+-- | Shrink one value of a row at a time, keeping its type.
+shrinkRow :: [Value] -> [[Value]]
+shrinkRow row =
+  [ before <> (smaller : after)
+  | (before, value : after) <- zip (inits row) (tails row)
+  , smaller <- shrinkValue value
+  ]
+
+shrinkValue :: Value -> [Value]
+shrinkValue = \case
+  VBool True -> [VBool False]
+  VBool False -> []
+  VBV w x -> [VBV w y | y <- shrinkIntegral x, y >= 0]
+  VTuple _ -> []
 
 ----------------------------------------------------------------------
 -- HDL tools

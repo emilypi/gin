@@ -11,6 +11,17 @@
 -- simulators ("Gin.Sim") must reproduce the vectors, and they must agree
 -- with each other on random input rows.
 --
+-- Fault injection then checks that a fault is caught at the level where
+-- it is introduced:
+--
+--   * a fault in the core IR program makes 'simulateCore' disagree with
+--     the vectors (and the compiled program carries the same fault);
+--   * a fault in the normal form makes 'simulateNormal' disagree with the
+--     vectors while 'simulateCore' still reproduces them;
+--   * a fault in the netlist makes every HDL testbench fail, with the
+--     mismatches the reference simulator predicts for the same fault,
+--     while both reference simulators still reproduce the vectors.
+--
 -- Tool runs use the commands of the backend interface ("Gin.Backend.Types"),
 -- each in a private temporary directory holding @<module>.<ext>@ and
 -- @<module>_tb.<ext>@. A test whose tools are missing is pending, or
@@ -40,9 +51,13 @@ import Gin.Backend.Verilog (verilog)
 import Gin.Certificate (checkCertificate, defaultPolicy)
 import Gin.Core.Check (checkProgram)
 import Gin.Core.Json (decodeProgram, decodeVectors, encodeProgram, encodeVectors)
-import Gin.Core.Normal (NModule (..))
+import Gin.Core.Normal (NBind (..), NModule (..), NRhs (..))
 import Gin.Core.Syntax
-  ( Port (..)
+  ( Bind (..)
+  , Def (..)
+  , Expr (..)
+  , Port (..)
+  , PrimOp (..)
   , Program (..)
   , TopEntity (..)
   , Ty (..)
@@ -61,7 +76,9 @@ import Gin.Examples
   )
 import Gin.Netlist.Build (buildNetlist)
 import Gin.Netlist.Types
-  ( HwType (..)
+  ( Decl (..)
+  , HLit (..)
+  , HwType (..)
   , Ident (..)
   , Module (..)
   , Net (..)
@@ -80,6 +97,8 @@ import Test.Hspec
   , expectationFailure
   , it
   , shouldBe
+  , shouldNotBe
+  , shouldSatisfy
   )
 import Test.QuickCheck
   ( Gen
@@ -102,8 +121,8 @@ import Test.QuickCheck
 ----------------------------------------------------------------------
 -- Spec
 
--- | The end-to-end suite: the pass rule, the pipeline on every circuit and
--- the reference simulators on random rows.
+-- | The end-to-end suite: the pass rule, the pipeline on every circuit,
+-- the reference simulators on random rows, and fault injection.
 spec :: Spec
 spec = do
   describe "pass rule" passRuleSpec
@@ -129,6 +148,15 @@ spec = do
             all (\row -> fmap valueTy row == fmap portTy ports && all validValue row) rows
       it ("[e2e-quickcheck] " <> exName ex <> ": simulateCore equals simulateNormal . normalize") $
         coreAgreesWithNormal (exProgram ex)
+  -- Each fault is injected into every example it applies to: the detector
+  -- has no bv.add and the normal form of mac has no mux.
+  describe "fault injection" $ do
+    describe "in the core IR program (bv.add becomes bv.sub)" $
+      forM_ [counter, mac] coreFaultSpec
+    describe "in the normal form (the first mux's branches swapped)" $
+      forM_ [counter, detector] normalFaultSpec
+    describe "in the netlist (the first register's reset value inverted)" $
+      forM_ examples netlistFaultSpec
 
 -- | The items every circuit goes through: compile, simulate, then lint and
 -- run the generated HDL of every backend.
@@ -148,6 +176,62 @@ circuitSpec c = do
   where
     tagged what = "[" <> circTag c <> "] " <> what
     item what = it (tagged what)
+
+-- | A program fault is caught by the core IR simulator, and normalization
+-- carries the fault into the normal form unchanged.
+coreFaultSpec :: Example -> Spec
+coreFaultSpec ex = do
+  it ("[e2e-fault-core] " <> exName ex <> ": simulateCore disagrees with the vectors") $ do
+    faulty `shouldNotBe` p
+    checkProgram faulty `shouldBe` Right ()
+    disagrees (outputRows vs) (runCore faulty (inputRows vs))
+  it ("[e2e-fault-core] " <> exName ex <> ": the compiled faulty program keeps the fault") $
+    stage "compiling the faulty program" (compile faulty) $ \comp -> do
+      disagrees (outputRows vs) (runCore faulty (inputRows vs))
+      runNormal (compNormal comp) (inputRows vs) `shouldBe` runCore faulty (inputRows vs)
+  where
+    p = exProgram ex
+    vs = exVectors ex
+    faulty = addBecomesSub p
+
+-- | A normal-form fault is caught by the normal-form simulator, while the
+-- core IR simulator, which never sees the normal form, still agrees.
+normalFaultSpec :: Example -> Spec
+normalFaultSpec ex =
+  it ("[e2e-fault-normal] " <> exName ex <> ": simulateNormal disagrees, simulateCore agrees") $
+    stage "compiling" (compile p) $ \comp -> case swapFirstMux (compNormal comp) of
+      Nothing -> expectationFailure "the normal form has no mux"
+      Just faulty -> do
+        checkNormal faulty `shouldBe` Right ()
+        runCore p (inputRows vs) `shouldBe` Right (outputRows vs)
+        disagrees (outputRows vs) (runNormal faulty (inputRows vs))
+  where
+    p = exProgram ex
+    vs = exVectors ex
+
+-- | A netlist fault is caught by every HDL testbench, while both reference
+-- simulators, which never see the netlist, still agree with the vectors.
+-- The same fault applied to the normal form predicts how many
+-- (cycle, port) mismatches each testbench must report.
+netlistFaultSpec :: Example -> Spec
+netlistFaultSpec ex = forM_ targets $ \t -> do
+  let hdl = targetLabel t
+      label = "[e2e-fault-netlist] " <> exName ex <> ": the " <> hdl <> " testbench fails"
+  itWithTools (nub (lintTools t <> runTools t)) (label <> ", the simulators agree") $
+    stage "compiling" (compile p) $ \comp -> do
+      simulatorsReproduce p (compNormal comp) vs
+      case (invertFirstReset (compNetlist comp), invertFirstInit (compNormal comp)) of
+        (Just faulty, Just faultyNormal) ->
+          stage "simulating the faulty normal form" (simulateNormal faultyNormal rows) $ \outs -> do
+            let k = mismatchCount (outputRows vs) outs
+            k `shouldSatisfy` (> 0)
+            lintsClean t faulty
+            runTestbench t faulty vs >>= shouldFailWith (hdl <> " testbench") (cycleCount vs) k
+        _ -> expectationFailure "the circuit has no register"
+  where
+    p = exProgram ex
+    vs = exVectors ex
+    rows = inputRows vs
 
 ----------------------------------------------------------------------
 -- Circuits
@@ -275,6 +359,17 @@ simulatorsReproduce p m vs = do
   runCore p (inputRows vs) `shouldBe` Right (outputRows vs)
   runNormal m (inputRows vs) `shouldBe` Right (outputRows vs)
 
+-- | A simulator returned output rows, and they differ from the expected ones.
+disagrees :: [[Value]] -> Either Text [[Value]] -> Expectation
+disagrees expected = \case
+  Left e -> expectationFailure ("expected output rows, got an error:\n" <> Text.unpack e)
+  Right actual -> actual `shouldNotBe` expected
+
+-- | Number of (cycle, port) pairs whose values differ.
+mismatchCount :: [[Value]] -> [[Value]] -> Int
+mismatchCount expected actual =
+  length (filter id (zipWith (/=) (concat expected) (concat actual)))
+
 ----------------------------------------------------------------------
 -- Random input rows
 
@@ -332,6 +427,81 @@ shrinkValue = \case
   VBool False -> []
   VBV w x -> [VBV w y | y <- shrinkIntegral x, y >= 0]
   VTuple _ -> []
+
+----------------------------------------------------------------------
+-- Faults
+
+-- | Replace every @bv.add@ by @bv.sub@ at the same type: still well typed,
+-- but a different circuit.
+addBecomesSub :: Program -> Program
+addBecomesSub p = p {progDefs = fmap mutate (progDefs p)}
+  where
+    mutate d = d {defBody = rewrite toSub (defBody d)}
+    toSub = \case
+      EPrim BvAdd ty -> EPrim BvSub ty
+      e -> e
+
+-- | Apply a function to every subexpression, innermost first.
+rewrite :: (Expr -> Expr) -> Expr -> Expr
+rewrite f = go
+  where
+    go e = f $ case e of
+      EVar _ -> e
+      EGlobal _ -> e
+      ELit _ -> e
+      EPrim _ _ -> e
+      EApp g args -> EApp (go g) (fmap go args)
+      ELam binders body -> ELam binders (go body)
+      ELet isRec binds body -> ELet isRec [b {bindExpr = go (bindExpr b)} | b <- binds] (go body)
+      ETuple es -> ETuple (fmap go es)
+      EProj i x -> EProj i (go x)
+      EIf c t x -> EIf (go c) (go t) (go x)
+
+-- | Swap the branches of the first mux, in bind order.
+swapFirstMux :: NModule -> Maybe NModule
+swapFirstMux m = case break isMux (nmBinds m) of
+  (before, NBind n ty (NMux c t e) : after) ->
+    Just m {nmBinds = before <> (NBind n ty (NMux c e t) : after)}
+  _ -> Nothing
+  where
+    isMux b = case nbRhs b of
+      NMux {} -> True
+      _ -> False
+
+-- | Invert every bit of the first register's reset value, in declaration
+-- order.
+invertFirstReset :: Module -> Maybe Module
+invertFirstReset m = case break isReg (modDecls m) of
+  (before, DReg n reset next : after) ->
+    Just m {modDecls = before <> (DReg n (invertLit reset) next : after)}
+  _ -> Nothing
+  where
+    isReg = \case
+      DReg {} -> True
+      DAssign {} -> False
+    invertLit = \case
+      HLitBit b -> HLitBit (not b)
+      HLitVec w x -> HLitVec w (2 ^ w - 1 - x)
+
+-- | The fault of 'invertFirstReset' in the normal form. The netlist builder
+-- emits at most one declaration per bind, in bind order, and keeps every
+-- register (normal-form binds are all read), so the first register of the
+-- netlist comes from the first register of the normal form.
+invertFirstInit :: NModule -> Maybe NModule
+invertFirstInit m = case break isReg (nmBinds m) of
+  (before, NBind n ty (NReg initial next) : after) ->
+    Just m {nmBinds = before <> (NBind n ty (NReg (invertValue initial) next) : after)}
+  _ -> Nothing
+  where
+    isReg b = case nbRhs b of
+      NReg {} -> True
+      _ -> False
+
+invertValue :: Value -> Value
+invertValue = \case
+  VBool b -> VBool (not b)
+  VBV w x -> VBV w (2 ^ w - 1 - x)
+  VTuple vs -> VTuple (fmap invertValue vs)
 
 ----------------------------------------------------------------------
 -- HDL tools
@@ -476,6 +646,21 @@ shouldPass :: String -> Int -> ToolResult -> Expectation
 shouldPass what n result =
   unless (passes n result) $
     expectationFailure (describeRun (what <> ": expected GIN-PASS cycles=" <> show n) result)
+
+-- | The run fails by the pass rule, reporting exactly @k@ mismatches: @k@
+-- mismatch lines, one @GIN-FAIL mismatches=<k>@ line and no pass line.
+shouldFailWith :: String -> Int -> Int -> ToolResult -> Expectation
+shouldFailWith what n k result@(_, out, _) =
+  unless ok $
+    expectationFailure (describeRun (what <> ": expected " <> show k <> " mismatches") result)
+  where
+    ls = Text.lines out
+    marked marker = filter (marker `Text.isInfixOf`) ls
+    ok =
+      not (passes n result)
+        && null (marked passMarker)
+        && length (marked mismatchMarker) == k
+        && fmap (containsCount (failMarker <> " mismatches=") k) (marked failMarker) == [True]
 
 describeRun :: String -> ToolResult -> String
 describeRun what (code, out, err) =

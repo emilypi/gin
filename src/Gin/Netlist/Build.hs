@@ -17,14 +17,15 @@
 --   declared net is read by a declaration or an output.
 --
 -- [Header] 'modHeader' puts provenance and the certificate (theorem name,
---   statement and axioms) in front of every reviewer of the generated
---   files. Every line starts with a fixed tag, so text from the IR can
---   never begin a comment and be read as a tool directive (such as
---   @verilator lint_off@), and every character in the Unicode categories
---   Cc, Cf, Zl, Zp, Cs, Co and Cn becomes @?@, so it can neither break
---   out of its line nor hide or reorder text (bidirectional overrides).
---   Lines may still contain comment delimiters such as @*/@: emit each one
---   as a line comment.
+--   statement, the definitions of the specification, its hash and the
+--   axioms) in front of every reviewer of the generated files, and says
+--   what gin did not check. Every line starts with a fixed tag, so text
+--   from the IR can never begin a comment and be read as a tool directive
+--   (such as @verilator lint_off@), and every character in the Unicode
+--   categories Cc, Cf, Zl, Zp, Cs, Co and Cn becomes @?@, so it can neither
+--   break out of its line nor hide or reorder text (bidirectional
+--   overrides). Lines may still contain comment delimiters such as @*/@:
+--   emit each one as a line comment.
 module Gin.Netlist.Build
   ( buildNetlist
   , sanitize
@@ -45,11 +46,13 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Gin.Certificate (certificateSpecHash)
 import Gin.Core.Normal (Atom (..), NBind (..), NModule (..), NOutput (..), NRhs (..))
 import Gin.Core.Syntax
   ( Certificate (..)
   , Name (..)
   , PrimOp (..)
+  , SpecDef (..)
   , Ty (..)
   , Value (..)
   , isCombinational
@@ -391,7 +394,13 @@ refs = \case
 -- Header
 
 -- | In order: provenance, the top name, the theorem, one line per line of
--- the statement, the axioms of the proof and of the implementation.
+-- the statement, one line per line of each definition of the
+-- specification (the Lean exporter renders each as @name : type :=
+-- value@, so a definition's first line starts with its name), the
+-- specification's hash ('certificateSpecHash'), the axioms of the proof
+-- and of the implementation, and two notices: gin carries the
+-- certificate but cannot re-check the proof, and only @gin validate@
+-- compares the generated HDL with the vectors exported from Lean.
 certificateHeader :: NModule -> [Text]
 certificateHeader m =
   fmap
@@ -401,8 +410,12 @@ certificateHeader m =
       , "theorem: " <> certTheorem cert
       ]
         <> fmap ("statement: " <>) (Text.lines (certStatement cert))
-        <> [ "axioms: " <> Text.intercalate ", " (certAxioms cert)
+        <> fmap ("spec: " <>) (concatMap (Text.lines . specDefBody) (certSpecDefs cert))
+        <> [ "spec hash: " <> certificateSpecHash cert
+           , "axioms: " <> Text.intercalate ", " (certAxioms cert)
            , "impl axioms: " <> Text.intercalate ", " (certImplAxioms cert)
+           , "certificate: claimed by the Lean exporter, not re-checked by gin"
+           , "validation: run gin validate with the exported vectors"
            ]
     )
   where

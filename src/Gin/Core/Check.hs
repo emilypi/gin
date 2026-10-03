@@ -48,8 +48,10 @@ import Numeric.Natural (Natural)
 -- application argument types match; an 'EIf' condition is 'TBool' and its
 -- branches agree and are neither signals nor functions; projections are
 -- in range; every 'Value' is valid ('validValue'); and the 'TopEntity'
--- rules, including scalar ports, unique port names, a legal top name, and
--- every signal in the top entity's domain.
+-- rules, including scalar ports, a legal top name, port names that are
+-- legal identifiers ('isLegalIdent'), pairwise distinct and different from
+-- @clk@, @rst@ and the top name, and every signal in the top entity's
+-- domain.
 checkProgram :: Program -> Either GinError ()
 checkProgram p = do
   let top = progTop p
@@ -85,18 +87,17 @@ inDef d = withContext ("in def " <> unName (defName d))
 
 -- | Name and port rules, checked before any definition so that a bad
 -- port is reported as such rather than through the top definition's type.
+-- The top name and the port names are the generated hardware interface,
+-- which the netlist builder never renames, so they are held to its rules
+-- here: legal identifiers, pairwise distinct, and distinct from the clock
+-- @clk@ and the reset @rst@ every module gets.
 checkPorts :: TopEntity -> Either GinError ()
 checkPorts top = withContext "in top entity" $ do
   unless (isLegalIdent (topName top)) $
-    failCheck
-      ( "illegal top name "
-          <> showT (topName top)
-          <> ": it must be a legal HDL identifier (lowercase ASCII letter first, then lowercase \
-             \letters, digits and single underscores; at most 64 characters; no gin_ prefix; \
-             \not a reserved word)"
-      )
+    failCheck ("illegal top name " <> showT (topName top) <> ": " <> identRule)
   when (null (topOutputs top)) $ failCheck "the top entity has no outputs"
-  for_ (topInputs top <> topOutputs top) $ \port ->
+  for_ (topInputs top <> topOutputs top) $ \port -> do
+    checkPortName (topName top) (portName port)
     unless (isScalar (portTy port)) $
       failCheck
         ("port " <> portName port <> " has non-scalar type " <> renderTy (portTy port))
@@ -105,6 +106,22 @@ checkPorts top = withContext "in top entity" $ do
     unique seen n
       | Set.member n seen = failCheck ("duplicate port name " <> n)
       | otherwise = Right (Set.insert n seen)
+
+-- | A port name is a legal identifier other than the clock, the reset and
+-- the top name. Legal identifiers are lowercase, so comparing them exactly
+-- is comparing them case-insensitively.
+checkPortName :: Text -> Text -> Either GinError ()
+checkPortName top n
+  | not (isLegalIdent n) = failCheck ("illegal port name " <> showT n <> ": " <> identRule)
+  | n == "clk" = failCheck "port name clk is reserved for the clock every module gets"
+  | n == "rst" = failCheck "port name rst is reserved for the reset every module gets"
+  | n == top = failCheck ("port name " <> n <> " equals the top name")
+  | otherwise = Right ()
+
+identRule :: Text
+identRule =
+  "it must be a legal HDL identifier (lowercase ASCII letter first, then lowercase letters, \
+  \digits and single underscores; at most 64 characters; no gin_ prefix; not a reserved word)"
 
 -- | The top definition's type must be
 -- @Signal d i1 -> .. -> Signal d ik -> Signal d o@ with @o@ the single

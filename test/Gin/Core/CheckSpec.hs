@@ -89,6 +89,29 @@ constantTop ins outs o =
 threeOutputs :: [Port]
 threeOutputs = [Port "a" TBool, Port "b" TBool, Port "c" (bv 8)]
 
+-- | Port names that are not legal HDL identifiers: wrong case or
+-- characters, empty, a leading digit, double or trailing underscores, the
+-- backends' prefix, reserved words of the target languages, too long, and
+-- characters that would break an output line.
+illegalPortNames :: [Text]
+illegalPortNames =
+  [ "Count"
+  , ""
+  , "9lives"
+  , "a__b"
+  , "x_"
+  , "gin_x"
+  , "wire"
+  , "now"
+  , "in"
+  , "signal"
+  , "a b"
+  , Text.replicate 65 "a"
+  , "x\n"
+  , "x\r"
+  , "x\x202E"
+  ]
+
 -- | A correctly instantiated type for every primitive.
 wellTypedPrims :: [(PrimOp, Ty)]
 wellTypedPrims =
@@ -536,6 +559,42 @@ spec = do
       it ("[check-rules] rejects the illegal top name " <> show name) $
         rejectedWith "top name" $
           checkProgram (withTop (\t -> t{topName = name}) counterProgram)
+    for_ illegalPortNames $ \name -> do
+      it ("[check-ports] rejects the illegal input port name " <> show name) $
+        rejectedWith "illegal port name" $
+          checkProgram (constantTop [Port name (bv 8)] [Port "q" TBool] TBool)
+      it ("[check-ports] rejects the illegal output port name " <> show name) $
+        rejectedWith "illegal port name" $
+          checkProgram (constantTop [Port "x" (bv 8)] [Port name TBool] TBool)
+    for_ [("clk", "clock"), ("rst", "reset")] $ \(name, what) -> do
+      it ("[check-ports] rejects an input port named " <> show name) $
+        rejectedWith ("port name " <> name <> " is reserved for the " <> what) $
+          checkProgram (constantTop [Port name TBool] [Port "q" TBool] TBool)
+      it ("[check-ports] rejects an output port named " <> show name) $
+        rejectedWith ("port name " <> name <> " is reserved for the " <> what) $
+          checkProgram (constantTop [Port "x" (bv 8)] [Port name TBool] TBool)
+    it "[check-ports] rejects an input port named like the top entity" $
+      rejectedWith "port name consts equals the top name" $
+        checkProgram (constantTop [Port "consts" (bv 8)] [Port "q" TBool] TBool)
+    it "[check-ports] rejects an output port named like the top entity" $
+      rejectedWith "port name counter equals the top name" $
+        checkProgram (withTop (\t -> t{topOutputs = [Port "counter" (bv 8)]}) counterProgram)
+    it "[check-ports] accepts port names that only contain clk, rst or the top name" $
+      checkProgram
+        ( constantTop
+            [Port "clk_en" TBool, Port "rst_n" TBool, Port "consts_in" (bv 8)]
+            [Port "clock" TBool, Port "reset" TBool, Port "consts1" (bv 8)]
+            (TProd [TBool, TProd [TBool, bv 8]])
+        )
+        `shouldBe` Right ()
+    it "[check-ports] reports a port name with control characters escaped, in the top entity" $
+      case checkProgram (constantTop [Port "x\nsim-core: PASS\ESC[2J" (bv 8)] [Port "q" TBool] TBool) of
+        Left e -> do
+          errStage e `shouldBe` StCheck
+          errContext e `shouldBe` ["in top entity"]
+          Text.unpack (errMessage e) `shouldContain` "illegal port name"
+          errMessage e `shouldSatisfy` Text.all (\c -> c /= '\n' && c /= '\ESC')
+        Right () -> expectationFailure "expected a type error"
     it "[check-rules] rejects an input and an output with the same name" $
       rejectedWith "duplicate port name en" $
         checkProgram (constantTop [Port "en" (bv 8)] [Port "en" TBool] TBool)

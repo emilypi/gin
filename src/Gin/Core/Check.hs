@@ -90,11 +90,15 @@ inDef d = withContext ("in def " <> unName (defName d))
 -- The top name and the port names are the generated hardware interface,
 -- which the netlist builder never renames, so they are held to its rules
 -- here: legal identifiers, pairwise distinct, and distinct from the clock
--- @clk@ and the reset @rst@ every module gets.
+-- @clk@ and the reset @rst@ every module gets (the top name included).
 checkPorts :: TopEntity -> Either GinError ()
 checkPorts top = withContext "in top entity" $ do
   unless (isLegalIdent (topName top)) $
     failCheck ("illegal top name " <> showT (topName top) <> ": " <> identRule)
+  when (topName top == "clk") $
+    failCheck "top name clk is reserved for the clock every module gets"
+  when (topName top == "rst") $
+    failCheck "top name rst is reserved for the reset every module gets"
   when (null (topOutputs top)) $ failCheck "the top entity has no outputs"
   for_ (topInputs top <> topOutputs top) $ \port -> do
     checkPortName (topName top) (portName port)

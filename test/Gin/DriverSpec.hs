@@ -96,6 +96,20 @@ exitCodeSpec = describe "exit codes" $ do
           r `shouldExit` ExitFailure 1
           runErr r `shouldStartWith'` prefix
           runOut r `shouldBe` ""
+  it "[check-ports] check and compile both reject a top entity named clk or rst" $
+    withTempDir $ \dir ->
+      forM_ ["clk", "rst"] $ \name -> do
+        let p = counterProgram{progTop = (progTop counterProgram){topName = name}}
+        file <- writeProgram dir (Text.unpack name) p
+        c <- gin ["check", file]
+        c `shouldExit` ExitFailure 1
+        runErr c `shouldStartWith'` "type error: "
+        runErr c `shouldContainText` ("top name " <> name <> " is reserved")
+        let out = dir </> ("out-" <> Text.unpack name)
+        k <- gin ["compile", file, "-o", out, "--target", "verilog"]
+        k `shouldExit` ExitFailure 1
+        runErr k `shouldStartWith'` "type error: "
+        doesDirectoryExist out `shouldReturn` False
   it "[cli-exit-codes] returns 1 for an input file over the size limit" $
     withTempDir $ \dir -> do
       file <- writeRaw dir "huge.gin.json" (Text.replicate (maxInputBytes + 1) " ")

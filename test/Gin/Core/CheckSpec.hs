@@ -573,6 +573,10 @@ spec = do
       it ("[check-ports] rejects an output port named " <> show name) $
         rejectedWith ("port name " <> name <> " is reserved for the " <> what) $
           checkProgram (constantTop [Port "x" (bv 8)] [Port name TBool] TBool)
+    for_ [("clk", "clock"), ("rst", "reset")] $ \(name, what) ->
+      it ("[check-ports] rejects a top entity named " <> show name) $
+        rejectedWith ("top name " <> name <> " is reserved for the " <> what) $
+          checkProgram (withTop (\t -> t{topName = name}) counterProgram)
     it "[check-ports] rejects an input port named like the top entity" $
       rejectedWith "port name consts equals the top name" $
         checkProgram (constantTop [Port "consts" (bv 8)] [Port "q" TBool] TBool)

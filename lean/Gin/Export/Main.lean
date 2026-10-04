@@ -95,8 +95,10 @@ def runMeta {α : Type} (env : Environment) (x : MetaM α) : IO α := do
   return a
 
 /-- Refuse an environment with a project module named like a toolchain
-module (it could hide definitions from the certificate) or a project module
-that registers IO initializers (`lean/README.md`, "Trust"). -/
+module (it could hide definitions from the certificate), a project module
+that registers IO initializers, or one outside the exporter that declares
+`unsafe`, `@[extern]` or `@[implemented_by]` code (`linkedCodeOverrides`),
+all of which may run when `gin-export` starts (`lean/README.md`, "Trust"). -/
 def checkModules (env : Environment) : IO Unit := do
   let libDir := (← findSysroot) / "lib" / "lean"
   let files ← env.header.moduleNames.filter isToolchainModule |>.mapM fun m =>
@@ -108,6 +110,10 @@ def checkModules (env : Environment) : IO Unit := do
     let names := ", ".intercalate (decls.toList.map toString)
     throw <| IO.userError s!"module {m} registers IO initializers ({names}), which run code \
       whenever the module is loaded; refusing to export it (see lean/README.md, \"Trust\")"
+  for (m, reasons) in linkedCodeOverrides env do
+    throw <| IO.userError s!"module {m} declares code that may run arbitrary IO when a program \
+      linking it starts: {"; ".intercalate reasons.toList}; refusing to export it (see \
+      lean/README.md, \"Trust\")"
 
 /-- Refuse a circuit that loads a reject fixture module (`lean/GinReject`)
 unless it is a reject fixture itself: the reject fixtures contain

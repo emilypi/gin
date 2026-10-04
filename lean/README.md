@@ -76,7 +76,15 @@ What a reviewer reads in a certificate is what the kernel checked:
   and the theorem shape are checked and the certificate is rendered. It
   refuses any project module that registers an IO initializer
   (`initialize`, `builtin_initialize`, `@[init]`), among the modules the
-  circuits load and those `gin-export` links.
+  circuits load and those `gin-export` links. It also refuses every
+  constant of those modules, whether a design uses it or not, that is
+  `unsafe`, `partial`, `@[extern]` or `@[implemented_by]`: Lean evaluates
+  the closed terms of every linked module when a program starts, and such
+  a term could run IO, through `unsafeIO` or foreign code
+  (`GinReject/BadUnsafeIO.lean`, `GinReject/BadExtern.lean`). Only the
+  exporter's own modules (`exporterModules` in
+  `Gin/Export/Compiled.lean`) are exempt; they are part of the trusted
+  base.
 - Vectors come from the compiled code of a design, the IR and the
   certificate from its definitions. Both tools refuse a design whose
   compiled code may differ from its definitions: a project constant it

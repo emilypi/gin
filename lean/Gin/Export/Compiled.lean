@@ -29,6 +29,19 @@ The translator itself must not run code of a design either. Lean's
 running the compiled code of `c`, so `nativeReductions` finds the
 constants a design reaches that refer to them, and the exporter refuses
 the design before translating it.
+
+Linked code can do more than compute wrong vectors. When `gin-export`
+starts, Lean evaluates every closed term (a definition without arguments)
+of every module linked into it, whether or not anything uses it, and an
+`unsafe` one (through `unsafeIO`) or one that calls foreign code
+(`@[extern]`) can do any IO, such as writing a forged certificate.
+`linkedCodeOverrides` finds every project constant, reachable or not, that
+is `unsafe`, `partial` (compiled from its `_unsafe_rec` twin, not from its
+definition), `@[extern]` or `@[implemented_by]`, in
+every loaded module except the exporter's own (`exporterModules`), and
+`gin-check-export` refuses them all. Code that has none of them cannot run
+IO when evaluated, other than through initializers, which are refused
+separately (`initializers`).
 -/
 
 open Lean
@@ -97,6 +110,50 @@ def compiledOverrides (env : Environment) (roots : Array Name) : Array String :=
     for (thm, f) in csimps do
       if reached.contains f then
         out := out.push s!"the @[csimp] theorem {thm} replaces {f} in compiled code"
+  return out
+
+/-- The modules of the exporter itself, which use `unsafe` and `partial`
+definitions and are part of the trusted base (`lean/README.md`, "Trust").
+Listed one by one, so a new module, even under `Gin.Export`, is checked
+like any other until it is added here. `Gin.Export.Entries` and
+`Gin.Export.Table` name and link designs and are checked. -/
+def exporterModules : List Name :=
+  [`GinExport, `GinCheckExport, `Gin.Export.Certificate, `Gin.Export.Compiled,
+    `Gin.Export.Encode, `Gin.Export.Ir, `Gin.Export.JsonDoc, `Gin.Export.Main,
+    `Gin.Export.Modules, `Gin.Export.Print, `Gin.Export.Program, `Gin.Export.Reserved,
+    `Gin.Export.Translate, `Gin.Export.Vectors]
+
+/-- Every constant of the loaded project modules (outside the toolchain and
+`exporterModules`) whose code may run arbitrary IO when a program that
+links it starts, with why, grouped by module in import order: `unsafe`
+definitions, `partial` definitions, `@[extern]` constants and
+`@[implemented_by]` constants. Reads the constants and the attribute
+entries the modules exported, so it works on an environment imported
+without loading its extensions. -/
+def linkedCodeOverrides (env : Environment) : Array (Name × Array String) := Id.run do
+  let mut out := #[]
+  for h : i in [0:env.header.moduleNames.size] do
+    let m := env.header.moduleNames[i]
+    if isToolchainModule m || exporterModules.contains m then continue
+    let idx : ModuleIdx := i
+    let mut reasons : Array String := #[]
+    if let some d := env.header.moduleData[i]? then
+      for ci in d.constants do
+        if ci.isUnsafe then
+          reasons := reasons.push s!"{ci.name} is unsafe"
+        -- a `partial` definition is an opaque constant compiled from its
+        -- `_unsafe_rec` twin (a recursive definition has a twin too, but is
+        -- not opaque, and its twin follows its equations)
+        if ci matches .opaqueInfo _ then
+          if d.constNames.contains (ci.name ++ `_unsafe_rec) then
+            reasons := reasons.push s!"{ci.name} is partial"
+    let implBy := Compiler.implementedByAttr.ext
+    for (c, f) in implBy.getModuleEntries env idx ++ implBy.getModuleIREntries env idx do
+      reasons := reasons.push s!"{c} is implemented by {f}"
+    for (c, _) in externAttr.ext.getModuleEntries env idx ++ externAttr.ext.getModuleIREntries env idx do
+      reasons := reasons.push s!"{c} calls foreign code (@[extern])"
+    unless reasons.isEmpty do
+      out := out.push (m, reasons.toList.eraseDups.toArray)
   return out
 
 /-- The constants that Lean's reduction evaluates by running compiled

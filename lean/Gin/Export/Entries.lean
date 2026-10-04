@@ -101,6 +101,16 @@ def entries : List Entry := [
     theorem_ := `BadReduceBool.bad_correct
     inputs := ["en"], outputs := ["count"]
     vectors := none, fixture := true },
+  { name := "bad_unsafe_io", module := `GinReject.BadUnsafeIO
+    top := `BadUnsafeIO.bad, defs := [`BadUnsafeIO.bad]
+    theorem_ := `BadUnsafeIO.bad_correct
+    inputs := ["en"], outputs := ["count"]
+    vectors := none, fixture := true },
+  { name := "bad_extern", module := `GinReject.BadExtern
+    top := `BadExtern.bad, defs := [`BadExtern.bad]
+    theorem_ := `BadExtern.bad_correct
+    inputs := ["en"], outputs := ["count"]
+    vectors := none, fixture := true },
   -- loads a module with an initializer that gin-export-hooked links
   { name := "hooked", module := `GinReject.Hooked
     top := `Hooked.bad, defs := [`Hooked.bad]

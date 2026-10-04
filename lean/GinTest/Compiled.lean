@@ -1,4 +1,5 @@
 import Gin.Export.Program
+import GinTest.Fixture.LinkedCode
 import GinTest.Fixture.NativeReduction
 import GinTest.Fixture.Overrides
 import GinTest.Util
@@ -64,5 +65,20 @@ run_meta do
   unless found `viaReduceBool == #[(`GinTest.Fixture.NativeReduction.boolDomain, ``Lean.reduceBool)]
       && found `viaReduceNat == #[(`GinTest.Fixture.NativeReduction.natDomain, ``Lean.reduceNat)] do
     throwError "nativeReductions on the imported fixture: {found `viaReduceBool}, {found `viaReduceNat}"
+
+-- every unsafe, partial, extern and implemented_by constant of a
+-- project module is found, used by a design or not, as `gin-check-export`
+-- reads the modules; the exporter's own modules are not checked
+run_meta do
+  let env ← importModules #[{ module := `GinTest.Fixture.LinkedCode }, { module := `GinExport }] {}
+    (loadExts := false)
+  let found := linkedCodeOverrides env
+  let expected := #[(`GinTest.Fixture.LinkedCode, #[
+    "GinTest.Fixture.LinkedCode.viaUnsafeIO is unsafe",
+    "GinTest.Fixture.LinkedCode.viaPartial is partial",
+    "GinTest.Fixture.LinkedCode.viaImplementedBy is implemented by GinTest.Fixture.LinkedCode.other",
+    "GinTest.Fixture.LinkedCode.foreign calls foreign code (@[extern])"])]
+  unless found == expected do
+    throwError "linkedCodeOverrides on the imported fixture: {found}"
 
 end GinTest.Compiled

@@ -20,10 +20,11 @@
 # not part of the default build, and checks that each one is refused for its
 # own reason: an axiom (sorryAx, a ._native. axiom), a kernel replay failure
 # (of the design's module, or of an unchecked module it imports), a theorem
-# without the refinement shape, a module initializer, compiled code that is
-# not the definition (@[implemented_by]), a translation that would run
-# compiled code (Lean.reduceBool), or a design that is not a reject fixture
-# but loads one. The
+# without the refinement shape, a module initializer, a module with code
+# that may run IO when gin-export starts (@[implemented_by], an unsafe
+# closed term, foreign code), a translation that would run compiled code
+# (Lean.reduceBool), or a design that is not a reject fixture but loads
+# one. The
 # unexpander fixture is not refused; its check module verifies that the
 # certificate shows the real specification. Nothing under examples/ may
 # change.
@@ -268,7 +269,12 @@ check_rejects() {
     "a module initializer"
   check_linked_initializer
   check_reject GinReject.BadImplementedBy bad_implemented_by \
-    "BadImplementedBy.inc is marked @[implemented_by]" "compiled code that is not the definition"
+    "BadImplementedBy.inc is implemented by BadImplementedBy.incOther" \
+    "compiled code that is not the definition"
+  check_reject GinReject.BadUnsafeIO bad_unsafe_io "BadUnsafeIO.cached is unsafe" \
+    "an unsafe closed term, which would run when gin-export starts"
+  check_reject GinReject.BadExtern bad_extern "BadExtern.foreign calls foreign code (@[extern])" \
+    "foreign code called by a closed term, which would run when gin-export starts"
   check_reject GinReject.BadReduceBool bad_reduce_bool \
     "BadReduceBool.hooked refers to Lean.reduceBool" "a translation that would run compiled code"
   # [lean-printer] not refused: the certificate names specR and lists its body

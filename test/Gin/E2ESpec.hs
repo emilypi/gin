@@ -1,15 +1,16 @@
 -- | End-to-end tests of the compiler pipeline, through the library API.
 --
--- Every hand-written example circuit ("Gin.Examples"), and the counter
--- read from @test/fixtures/ir/counter.gin.json@, goes through every stage
--- the compiler runs: JSON decoding, type checking, the certificate
--- policy, normalization, the netlist builder and all three backends. Each
--- generated design must pass its backend's lint commands, and each
--- generated testbench must pass on the circuit's vectors under the real
--- HDL simulators (Icarus Verilog for Verilog and SystemVerilog, nvc for
--- VHDL), by the pass rule of @docs/semantics.md@. Both reference
--- simulators ("Gin.Sim") must reproduce the vectors, and they must agree
--- with each other on random input rows.
+-- Every hand-written example circuit ("Gin.Examples"), the counter read
+-- from @test/fixtures/ir/counter.gin.json@, and a circuit with no inputs,
+-- two outputs of widths 1 and 4096 and state that starts from nonzero
+-- values go through every stage the compiler runs: JSON decoding, type
+-- checking, the certificate policy, normalization, the netlist builder and
+-- all three backends. Each generated design must pass its backend's lint
+-- commands, and each generated testbench must pass on the circuit's
+-- vectors under the real HDL simulators (Icarus Verilog for Verilog and
+-- SystemVerilog, nvc for VHDL), by the pass rule of @docs/semantics.md@.
+-- Both reference simulators ("Gin.Sim") must reproduce the vectors, and
+-- they must agree with each other on random input rows.
 --
 -- Fault injection then checks that a fault is caught at the level where
 -- it is introduced:
@@ -18,17 +19,22 @@
 --     the vectors (and the compiled program carries the same fault);
 --   * a fault in the normal form makes 'simulateNormal' disagree with the
 --     vectors while 'simulateCore' still reproduces them;
---   * a fault in the netlist makes every HDL testbench fail, with the
---     mismatches the reference simulator predicts for the same fault,
---     while both reference simulators still reproduce the vectors.
+--   * a fault in the netlist makes every HDL testbench fail, reporting
+--     exactly the (cycle, port) mismatches that 'simulateNormal' predicts
+--     for the same fault in the normal form, while both reference
+--     simulators still reproduce the vectors.
 --
--- Tool runs use the commands of the backend interface ("Gin.Backend.Types"),
--- each in a private temporary directory holding @<module>.<ext>@ and
--- @<module>_tb.<ext>@. A test whose tools are missing is pending, or
--- fails when @GIN_REQUIRE_TOOLS=1@.
+-- One fault, zeroing every initial value, is injected at each of these
+-- levels into the circuit whose state starts from nonzero values; the
+-- examples all start from zero, so it would go unnoticed there.
+--
+-- Tool runs use the lint and run commands of @gin validate@
+-- ("Gin.Driver"), judged as it judges them, each in a private temporary
+-- directory holding @<module>.<ext>@ and @<module>_tb.<ext>@. A test whose
+-- tools are missing is pending, or fails when @GIN_REQUIRE_TOOLS=1@.
 module Gin.E2ESpec (spec) where
 
-import Control.Monad (forM_, unless)
+import Control.Monad (forM_, guard, unless)
 import Data.Bifunctor (first)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
@@ -54,7 +60,9 @@ import Gin.Core.Json (decodeProgram, decodeVectors, encodeProgram, encodeVectors
 import Gin.Core.Normal (NBind (..), NModule (..), NRhs (..))
 import Gin.Core.Syntax
   ( Bind (..)
+  , Certificate (..)
   , Def (..)
+  , Domain (..)
   , Expr (..)
   , Port (..)
   , PrimOp (..)
@@ -62,6 +70,7 @@ import Gin.Core.Syntax
   , TopEntity (..)
   , Ty (..)
   , Value (..)
+  , tFuns
   , validValue
   , valueTy
   )
@@ -88,6 +97,7 @@ import Gin.Normalize (checkNormal, normalize)
 import Gin.Sim (isBudgetError, simulateCore, simulateNormal)
 import Gin.TestUtil (itWithTools, runTool, withTempDir)
 import Gin.Vectors (Cycle (..), Vectors (..))
+import Numeric.Natural (Natural)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import Test.Hspec
@@ -98,7 +108,6 @@ import Test.Hspec
   , it
   , shouldBe
   , shouldNotBe
-  , shouldSatisfy
   )
 import Test.QuickCheck
   ( Gen
@@ -117,6 +126,7 @@ import Test.QuickCheck
   , withMaxSuccess
   , (===)
   )
+import Text.Read (readMaybe)
 
 ----------------------------------------------------------------------
 -- Spec
@@ -126,10 +136,11 @@ import Test.QuickCheck
 spec :: Spec
 spec = do
   describe "pass rule" passRuleSpec
+  describe "testbench mismatch lines" mismatchLinesSpec
   describe "pipeline" $ do
-    forM_ examples $ \ex ->
+    forM_ circuits $ \ex ->
       describe (exName ex) $ do
-        it "[e2e-fixtures] decoding its JSON encoding gives the example back" $ do
+        it ("[" <> exTag ex <> "] decoding its JSON encoding gives the circuit back") $ do
           decodeProgram (encodeProgram (exProgram ex)) `shouldBe` Right (exProgram ex)
           decodeVectors (encodeVectors (exVectors ex)) `shouldBe` Right (exVectors ex)
         circuitSpec (exampleCircuit ex)
@@ -140,7 +151,7 @@ spec = do
           vs `shouldBe` counterVectors
       circuitSpec jsonFixture
   describe "reference simulators on random input rows" $ do
-    forM_ examples $ \ex -> do
+    forM_ circuits $ \ex -> do
       let ports = topInputs (progTop (exProgram ex))
       it ("[e2e-quickcheck] " <> exName ex <> ": generated rows have the input port types") $
         withRowGen ports $ \gen ->
@@ -148,15 +159,20 @@ spec = do
             all (\row -> fmap valueTy row == fmap portTy ports && all validValue row) rows
       it ("[e2e-quickcheck] " <> exName ex <> ": simulateCore equals simulateNormal . normalize") $
         coreAgreesWithNormal (exProgram ex)
-  -- Each fault is injected into every example it applies to: the detector
+  -- Each fault is injected into every circuit it applies to: the detector
   -- has no bv.add and the normal form of mac has no mux.
   describe "fault injection" $ do
     describe "in the core IR program (bv.add becomes bv.sub)" $
-      forM_ [counter, mac] coreFaultSpec
+      forM_ [counter, mac, wide] (coreFaultSpec "e2e-fault-core" addBecomesSub)
     describe "in the normal form (the first mux's branches swapped)" $
-      forM_ [counter, detector] normalFaultSpec
-    describe "in the netlist (the first register's reset value inverted)" $
-      forM_ examples netlistFaultSpec
+      forM_ [counter, detector, wide] (normalFaultSpec "e2e-fault-normal" swapFirstMux)
+    describe "in the netlist (every register's reset value inverted)" $
+      forM_ circuits (netlistFaultSpec resetsInverted)
+    -- The examples all start from zero, so only this circuit can show it.
+    describe "at every level (every initial value zeroed)" $ do
+      coreFaultSpec "e2e-nonzero-init" initsZeroedProgram wide
+      normalFaultSpec "e2e-nonzero-init" initsZeroedNormal wide
+      netlistFaultSpec resetsZeroed wide
 
 -- | The items every circuit goes through: compile, simulate, then lint and
 -- run the generated HDL of every backend.
@@ -179,28 +195,28 @@ circuitSpec c = do
 
 -- | A program fault is caught by the core IR simulator, and normalization
 -- carries the fault into the normal form unchanged.
-coreFaultSpec :: Example -> Spec
-coreFaultSpec ex = do
-  it ("[e2e-fault-core] " <> exName ex <> ": simulateCore disagrees with the vectors") $ do
+coreFaultSpec :: String -> (Program -> Program) -> Example -> Spec
+coreFaultSpec tag fault ex = do
+  it ("[" <> tag <> "] " <> exName ex <> ": simulateCore disagrees with the vectors") $ do
     faulty `shouldNotBe` p
     checkProgram faulty `shouldBe` Right ()
     disagrees (outputRows vs) (runCore faulty (inputRows vs))
-  it ("[e2e-fault-core] " <> exName ex <> ": the compiled faulty program keeps the fault") $
+  it ("[" <> tag <> "] " <> exName ex <> ": the compiled faulty program keeps the fault") $
     stage "compiling the faulty program" (compile faulty) $ \comp -> do
       disagrees (outputRows vs) (runCore faulty (inputRows vs))
       runNormal (compNormal comp) (inputRows vs) `shouldBe` runCore faulty (inputRows vs)
   where
     p = exProgram ex
     vs = exVectors ex
-    faulty = addBecomesSub p
+    faulty = fault p
 
 -- | A normal-form fault is caught by the normal-form simulator, while the
 -- core IR simulator, which never sees the normal form, still agrees.
-normalFaultSpec :: Example -> Spec
-normalFaultSpec ex =
-  it ("[e2e-fault-normal] " <> exName ex <> ": simulateNormal disagrees, simulateCore agrees") $
-    stage "compiling" (compile p) $ \comp -> case swapFirstMux (compNormal comp) of
-      Nothing -> expectationFailure "the normal form has no mux"
+normalFaultSpec :: String -> (NModule -> Maybe NModule) -> Example -> Spec
+normalFaultSpec tag fault ex =
+  it ("[" <> tag <> "] " <> exName ex <> ": simulateNormal disagrees, simulateCore agrees") $
+    stage "compiling" (compile p) $ \comp -> case fault (compNormal comp) of
+      Nothing -> expectationFailure "the fault does not apply to this normal form"
       Just faulty -> do
         checkNormal faulty `shouldBe` Right ()
         runCore p (inputRows vs) `shouldBe` Right (outputRows vs)
@@ -209,24 +225,41 @@ normalFaultSpec ex =
     p = exProgram ex
     vs = exVectors ex
 
+-- | A fault in the netlist, and the same fault in the normal form.
+data Fault = Fault
+  { faultTag :: !String
+  -- ^ The tag of the items that inject it.
+  , faultNetlist :: Module -> Maybe Module
+  , faultNormal :: NModule -> Maybe NModule
+  }
+
 -- | A netlist fault is caught by every HDL testbench, while both reference
 -- simulators, which never see the netlist, still agree with the vectors.
--- The same fault applied to the normal form predicts how many
--- (cycle, port) mismatches each testbench must report.
-netlistFaultSpec :: Example -> Spec
-netlistFaultSpec ex = forM_ targets $ \t -> do
+-- Each testbench must report exactly the (cycle, port) mismatches that
+-- 'simulateNormal' predicts for the same fault in the normal form, in
+-- cycle order and port order within a cycle.
+netlistFaultSpec :: Fault -> Example -> Spec
+netlistFaultSpec fault ex = forM_ targets $ \t -> do
   let hdl = targetLabel t
-      label = "[e2e-fault-netlist] " <> exName ex <> ": the " <> hdl <> " testbench fails"
+      label =
+        "["
+          <> faultTag fault
+          <> "] [e2e-mismatch-set] "
+          <> exName ex
+          <> ": the "
+          <> hdl
+          <> " testbench reports the predicted mismatches"
   itWithTools (nub (lintTools t <> runTools t)) (label <> ", the simulators agree") $
     stage "compiling" (compile p) $ \comp -> do
       simulatorsReproduce p (compNormal comp) vs
-      case (invertFirstReset (compNetlist comp), invertFirstInit (compNormal comp)) of
+      case (faultNetlist fault (compNetlist comp), faultNormal fault (compNormal comp)) of
         (Just faulty, Just faultyNormal) ->
           stage "simulating the faulty normal form" (simulateNormal faultyNormal rows) $ \outs -> do
-            let k = mismatchCount (outputRows vs) outs
-            k `shouldSatisfy` (> 0)
+            let predicted = mismatches (vecOutputs vs) (outputRows vs) outs
+            predicted `shouldNotBe` []
             lintsClean t faulty
-            runTestbench t faulty vs >>= shouldFailWith (hdl <> " testbench") (cycleCount vs) k
+            runTestbench t faulty vs
+              >>= shouldFailWith (hdl <> " testbench") (cycleCount vs) predicted
         _ -> expectationFailure "the circuit has no register"
   where
     p = exProgram ex
@@ -236,20 +269,101 @@ netlistFaultSpec ex = forM_ targets $ \t -> do
 ----------------------------------------------------------------------
 -- Circuits
 
--- | A hand-written example with its vectors.
+-- | A hand-written circuit with its vectors.
 data Example = Example
   { exName :: !String
+  , exTag :: !String
+  -- ^ The tag of the pipeline items run on it.
   , exProgram :: !Program
   , exVectors :: !Vectors
   }
 
-examples :: [Example]
-examples = [counter, mac, detector]
+-- | Every hand-written circuit.
+circuits :: [Example]
+circuits = [counter, mac, detector, wide]
 
 counter, mac, detector :: Example
-counter = Example "counter" counterProgram counterVectors
-mac = Example "mac" macProgram macVectors
-detector = Example "detector" detectorProgram detectorVectors
+counter = Example "counter" "e2e-fixtures" counterProgram counterVectors
+mac = Example "mac" "e2e-fixtures" macProgram macVectors
+detector = Example "detector" "e2e-fixtures" detectorProgram detectorVectors
+
+-- | A circuit with no inputs, two outputs of the edge widths (a Bool and
+-- a 4096-bit vector) and state that starts from nonzero values: a flag
+-- that starts true and toggles every cycle, and an accumulator that starts
+-- near the top of its range and adds one of two constants, chosen by the
+-- flag, every cycle (so it wraps around). The outputs are the state.
+--
+-- The examples all start from zero, so a stage that dropped initial values
+-- would go unnoticed on them.
+wide :: Example
+wide = Example "wide" "e2e-nonzero-init" wideProgram wideVectors
+
+wideWidth :: Natural
+wideWidth = 4096
+
+-- | The initial flag and accumulator.
+wideInit :: (Bool, Integer)
+wideInit = (True, 2 ^ wideWidth - 3)
+
+-- | What the accumulator adds when the flag is true, and when it is false.
+wideStepTrue, wideStepFalse :: Integer
+wideStepTrue = 1
+wideStepFalse = 2 ^ (wideWidth - 1) + 5
+
+wideProgram :: Program
+wideProgram =
+  Program
+    { progProducer = progProducer counterProgram
+    , progTop =
+        TopEntity
+          { topName = "wide"
+          , topDomain = topDomain (progTop counterProgram)
+          , topInputs = []
+          , topOutputs = [Port "flag" TBool, Port "acc" accTy]
+          , topDef = "Wide.wide"
+          }
+    , progDefs = [Def "Wide.wide" (sig stateTy) body]
+    , progCertificate = (progCertificate counterProgram) {certTheorem = "Wide.wide_correct"}
+    }
+  where
+    accTy = TBitVec wideWidth
+    stateTy = TProd [TBool, accTy]
+    sig = TSignal (domainName (topDomain (progTop counterProgram)))
+    prim op args res = EPrim op (tFuns args res)
+    stepTy = tFuns [stateTy, TBool] (TProd [stateTy, stateTy])
+    initial = let (flag0, acc0) = wideInit in VTuple [VBool flag0, VBV wideWidth acc0]
+    -- The machine needs an input signal; a constant one stands in.
+    body =
+      EApp
+        (prim (SigMealy initial) [stepTy, sig TBool] (sig stateTy))
+        [step, EApp (prim SigPure [TBool] (sig TBool)) [ELit (VBool True)]]
+    step =
+      ELam [("st", stateTy), ("unused", TBool)] $
+        ELet
+          False
+          [Bind "f" TBool (EProj 0 (EVar "st")), Bind "a" accTy (EProj 1 (EVar "st"))]
+          ( ETuple
+              [ ETuple
+                  [ EApp (prim BoolNot [TBool] TBool) [EVar "f"]
+                  , EIf (EVar "f") (add wideStepTrue) (add wideStepFalse)
+                  ]
+              , ETuple [EVar "f", EVar "a"]
+              ]
+          )
+    add k = EApp (prim BvAdd [accTy, accTy] accTy) [EVar "a", ELit (VBV wideWidth k)]
+
+-- | The vectors of 'wide', from the recurrence its documentation states.
+wideVectors :: Vectors
+wideVectors =
+  Vectors
+    { vecTop = "wide"
+    , vecInputs = []
+    , vecOutputs = [Port "flag" TBool, Port "acc" (TBitVec wideWidth)]
+    , vecCycles = fmap row (take 12 (iterate next wideInit))
+    }
+  where
+    next (f, a) = (not f, (a + if f then wideStepTrue else wideStepFalse) `mod` 2 ^ wideWidth)
+    row (f, a) = Cycle [] [VBool f, VBV wideWidth a]
 
 -- | A circuit as the compiler receives it: the JSON of its program and of
 -- its vectors.
@@ -262,7 +376,7 @@ data Circuit = Circuit
 -- | An example, entering the pipeline as its canonical JSON encoding.
 exampleCircuit :: Example -> Circuit
 exampleCircuit ex =
-  Circuit "e2e-fixtures" (pure (encodeProgram (exProgram ex), encodeVectors (exVectors ex)))
+  Circuit (exTag ex) (pure (encodeProgram (exProgram ex), encodeVectors (exVectors ex)))
 
 -- | The counter as checked-in JSON files.
 jsonFixture :: Circuit
@@ -365,11 +479,6 @@ disagrees expected = \case
   Left e -> expectationFailure ("expected output rows, got an error:\n" <> Text.unpack e)
   Right actual -> actual `shouldNotBe` expected
 
--- | Number of (cycle, port) pairs whose values differ.
-mismatchCount :: [[Value]] -> [[Value]] -> Int
-mismatchCount expected actual =
-  length (filter id (zipWith (/=) (concat expected) (concat actual)))
-
 ----------------------------------------------------------------------
 -- Random input rows
 
@@ -468,40 +577,84 @@ swapFirstMux m = case break isMux (nmBinds m) of
       NMux {} -> True
       _ -> False
 
--- | Invert every bit of the first register's reset value, in declaration
--- order.
-invertFirstReset :: Module -> Maybe Module
-invertFirstReset m = case break isReg (modDecls m) of
-  (before, DReg n reset next : after) ->
-    Just m {modDecls = before <> (DReg n (invertLit reset) next : after)}
-  _ -> Nothing
+-- | Replace the initial value of every register and Mealy machine with
+-- zero (all bits clear) at the same type: still well typed, but a
+-- different circuit unless every initial value was already zero.
+initsZeroedProgram :: Program -> Program
+initsZeroedProgram p = p {progDefs = fmap mutate (progDefs p)}
   where
-    isReg = \case
-      DReg {} -> True
-      DAssign {} -> False
+    mutate d = d {defBody = rewrite toZero (defBody d)}
+    toZero = \case
+      EPrim (SigRegister v) ty -> EPrim (SigRegister (zeroValue v)) ty
+      EPrim (SigMealy v) ty -> EPrim (SigMealy (zeroValue v)) ty
+      e -> e
+
+-- | 'initsZeroedProgram' in the normal form.
+initsZeroedNormal :: NModule -> Maybe NModule
+initsZeroedNormal = mapInits zeroValue
+
+-- | Every register's reset value inverted (every bit flipped), in the
+-- netlist and in the normal form.
+resetsInverted :: Fault
+resetsInverted = Fault "e2e-fault-netlist" (mapResets invertLit) (mapInits invertValue)
+  where
     invertLit = \case
       HLitBit b -> HLitBit (not b)
       HLitVec w x -> HLitVec w (2 ^ w - 1 - x)
 
--- | The fault of 'invertFirstReset' in the normal form. The netlist builder
--- emits at most one declaration per bind, in bind order, and keeps every
--- register (normal-form binds are all read), so the first register of the
--- netlist comes from the first register of the normal form.
-invertFirstInit :: NModule -> Maybe NModule
-invertFirstInit m = case break isReg (nmBinds m) of
-  (before, NBind n ty (NReg initial next) : after) ->
-    Just m {nmBinds = before <> (NBind n ty (NReg (invertValue initial) next) : after)}
-  _ -> Nothing
+-- | Every register's reset value zeroed, in the netlist and in the normal
+-- form.
+resetsZeroed :: Fault
+resetsZeroed = Fault "e2e-nonzero-init" (mapResets zeroLit) initsZeroedNormal
+  where
+    zeroLit = \case
+      HLitBit _ -> HLitBit False
+      HLitVec w _ -> HLitVec w 0
+
+-- | Apply a function to every register's reset value, or 'Nothing' if the
+-- netlist has no register.
+--
+-- A fault applied to every register means the same in the netlist and in
+-- the normal form: the netlist builder emits at most one declaration per
+-- bind, and drops only declarations that nothing it emits reads, whose
+-- values no output can depend on.
+mapResets :: (HLit -> HLit) -> Module -> Maybe Module
+mapResets f m
+  | any isReg (modDecls m) = Just m {modDecls = fmap mutate (modDecls m)}
+  | otherwise = Nothing
+  where
+    isReg = \case
+      DReg {} -> True
+      DAssign {} -> False
+    mutate = \case
+      DReg n reset next -> DReg n (f reset) next
+      d -> d
+
+-- | Apply a function to every register's initial value, or 'Nothing' if
+-- the normal form has no register.
+mapInits :: (Value -> Value) -> NModule -> Maybe NModule
+mapInits f m
+  | any isReg (nmBinds m) = Just m {nmBinds = fmap mutate (nmBinds m)}
+  | otherwise = Nothing
   where
     isReg b = case nbRhs b of
       NReg {} -> True
       _ -> False
+    mutate b = case nbRhs b of
+      NReg initial next -> b {nbRhs = NReg (f initial) next}
+      _ -> b
 
 invertValue :: Value -> Value
 invertValue = \case
   VBool b -> VBool (not b)
   VBV w x -> VBV w (2 ^ w - 1 - x)
   VTuple vs -> VTuple (fmap invertValue vs)
+
+zeroValue :: Value -> Value
+zeroValue = \case
+  VBool _ -> VBool False
+  VBV w _ -> VBV w 0
+  VTuple vs -> VTuple (fmap zeroValue vs)
 
 ----------------------------------------------------------------------
 -- HDL tools
@@ -527,7 +680,7 @@ data Command = Command
   }
   deriving stock (Show)
 
--- | The lint commands of the backend interface, for module @m@.
+-- | The lint commands of @gin validate@ ("Gin.Driver"), for module @m@.
 lintCommands :: Target -> String -> [Command]
 lintCommands t m = case t of
   Verilog ->
@@ -540,9 +693,9 @@ lintCommands t m = case t of
     ]
   VHDL -> [Command "nvc" (nvcFlags <> ["-a", m <> ".vhd"])]
 
--- | The run commands of the backend interface, for module @m@: the build
--- steps, then the run whose standard output carries the testbench
--- protocol.
+-- | The run commands of @gin validate@ ("Gin.Driver"), for module @m@:
+-- the build steps, then the run whose standard output carries the
+-- testbench protocol.
 runCommands :: Target -> String -> ([Command], Command)
 runCommands t m = case t of
   Verilog ->
@@ -579,21 +732,20 @@ writeDesign dir t m =
   where
     b = backendFor t
 
--- | Messages that make a command's run unclean: Verilator's warning and
--- error lines (it also prints a statistics report), and any output at all
--- from the other tools.
-diagnostics :: Command -> ToolResult -> [Text]
-diagnostics c (_, out, err)
-  | cmdExe c == "verilator" = filter ("%" `Text.isPrefixOf`) ls
-  | otherwise = filter (not . Text.null . Text.strip) ls
-  where
-    ls = Text.lines out <> Text.lines err
+-- | Does a lint or build command pass, as @gin validate@ judges it? Every
+-- command must exit 0, and Verilator must also print no warning (under
+-- @-Wall@ it exits non-zero on one anyway). Other output, such as
+-- Verilator's statistics report, is allowed.
+cleanRun :: Command -> ToolResult -> Bool
+cleanRun c (code, out, err) =
+  code == ExitSuccess
+    && not (cmdExe c == "verilator" && any ("%Warning" `Text.isInfixOf`) [out, err])
 
--- | Run a command that must exit 0 without diagnostics.
+-- | Run a lint or build command that must pass.
 runClean :: FilePath -> Command -> Expectation
 runClean dir c = do
-  result@(code, _, _) <- runTool dir (cmdExe c) (cmdArgs c)
-  unless (code == ExitSuccess && null (diagnostics c result)) $
+  result <- runTool dir (cmdExe c) (cmdArgs c)
+  unless (cleanRun c result) $
     expectationFailure (describeRun (unwords (cmdExe c : cmdArgs c)) result)
 
 -- | The design passes every lint command of its backend.
@@ -647,20 +799,67 @@ shouldPass what n result =
   unless (passes n result) $
     expectationFailure (describeRun (what <> ": expected GIN-PASS cycles=" <> show n) result)
 
--- | The run fails by the pass rule, reporting exactly @k@ mismatches: @k@
--- mismatch lines, one @GIN-FAIL mismatches=<k>@ line and no pass line.
-shouldFailWith :: String -> Int -> Int -> ToolResult -> Expectation
-shouldFailWith what n k result@(_, out, _) =
+-- | The run fails by the pass rule, reporting exactly the expected
+-- (cycle, port) mismatches, in order: one mismatch line for each, one
+-- @GIN-FAIL mismatches=<k>@ line for their number @k@, and no pass line.
+shouldFailWith :: String -> Int -> [(Int, Text)] -> ToolResult -> Expectation
+shouldFailWith what n expected result@(_, out, _) =
   unless ok $
-    expectationFailure (describeRun (what <> ": expected " <> show k <> " mismatches") result)
+    expectationFailure
+      (describeRun (what <> ": expected the mismatches " <> show expected) result)
   where
     ls = Text.lines out
     marked marker = filter (marker `Text.isInfixOf`) ls
+    k = length expected
     ok =
       not (passes n result)
         && null (marked passMarker)
-        && length (marked mismatchMarker) == k
+        && traverse mismatchLine (marked mismatchMarker) == Just expected
         && fmap (containsCount (failMarker <> " mismatches=") k) (marked failMarker) == [True]
+
+-- | The (cycle, port) pairs at which the actual output rows differ from
+-- the expected ones, in cycle order and port order within a cycle.
+mismatches :: [Port] -> [[Value]] -> [[Value]] -> [(Int, Text)]
+mismatches ports expected actual =
+  [ (t, portName port)
+  | (t, want, got) <- zip3 [0 ..] expected actual
+  , (port, x, y) <- zip3 ports want got
+  , x /= y
+  ]
+
+-- | The cycle and port of a testbench's mismatch line,
+-- @GIN-MISMATCH cycle=<t> port=<name> expected=<v> got=<v>@ (the values
+-- are not read), or 'Nothing' if the line is not one.
+mismatchLine :: Text -> Maybe (Int, Text)
+mismatchLine line = case Text.words (snd (Text.breakOn mismatchMarker line)) of
+  marker : cycleField : portField : _
+    | marker == mismatchMarker -> do
+        digits <- Text.stripPrefix "cycle=" cycleField
+        port <- Text.stripPrefix "port=" portField
+        guard (not (Text.null digits) && Text.all isDigit digits && not (Text.null port))
+        cycleNo <- readMaybe (Text.unpack digits)
+        pure (cycleNo, port)
+  _ -> Nothing
+
+-- | Reading the mismatch lines the testbenches print.
+mismatchLinesSpec :: Spec
+mismatchLinesSpec =
+  forM_ cases $ \(what, line, expected) ->
+    it ("[e2e-mismatch-set] " <> what) $ mismatchLine line `shouldBe` expected
+  where
+    cases :: [(String, Text, Maybe (Int, Text))]
+    cases =
+      [ ("reads a Verilog line", "GIN-MISMATCH cycle=3 port=acc expected=1 got=0", Just (3, "acc"))
+      , ("reads a VHDL line", "GIN-MISMATCH cycle=12 port=flag expected=1 got=0", Just (12, "flag"))
+      , ("reads a line with text before the marker", "# GIN-MISMATCH cycle=0 port=x", Just (0, "x"))
+      , ("reads an expected none", "GIN-MISMATCH cycle=7 port=y expected=none", Just (7, "y"))
+      , ("rejects a line without the marker", "cycle=3 port=acc expected=1 got=0", Nothing)
+      , ("rejects a missing port", "GIN-MISMATCH cycle=3 expected=1 got=0", Nothing)
+      , ("rejects an empty port", "GIN-MISMATCH cycle=3 port= expected=1 got=0", Nothing)
+      , ("rejects a cycle that is not a number", "GIN-MISMATCH cycle=x3 port=a", Nothing)
+      , ("rejects a negative cycle", "GIN-MISMATCH cycle=-1 port=a", Nothing)
+      , ("rejects fields out of order", "GIN-MISMATCH port=a cycle=3", Nothing)
+      ]
 
 describeRun :: String -> ToolResult -> String
 describeRun what (code, out, err) =

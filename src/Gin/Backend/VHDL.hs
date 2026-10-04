@@ -55,6 +55,7 @@ module Gin.Backend.VHDL
   ) where
 
 import Data.Bits (shiftR)
+import Data.IntMap.Strict qualified as IntMap
 import Data.IntSet qualified as IntSet
 import Data.List (intercalate, sortOn)
 import Data.Map.Strict qualified as Map
@@ -145,8 +146,10 @@ architecture m =
              , ORef i <- exprOperands e
              , Map.lookup i groupOf /= Just g
              ]
-    budget = variableBudget `div` max 1 (length groups)
-    processes = [combinational external budget as | (_, as) <- groups]
+    -- the elements each process needs to hold every net it computes
+    needs = [sum [fromIntegral (hwWidth (netType n)) | (n, _) <- as] | (_, as) <- groups]
+    budgets = shareByNeed variableBudget needs
+    processes = zipWith (combinational external) budgets (fmap snd groups)
     -- registers, and the combinational nets a process assigns to a signal
     assigned = Set.unions (fmap snd processes)
     signals =
@@ -182,25 +185,30 @@ architecture m =
 -- so a path enters each process at most once, and within a process of
 -- window @d@ it makes a signal read only for a step of at least @d@
 -- positions, at most @999 \`div\` d@ times. A netlist of @c@ combinational
--- nets has @P = ceiling (c / 1000)@ processes, and as no net is wider than
--- 4096 bits ('Gin.Core.Type.maxWidth'), a process's window is its whole
--- length or at least @variableBudget \`div\` P \`div\` 4096@. The largest
--- normal form ('Gin.Limits.maxNormalBinds') has 65536 nets, so @P <= 66@,
--- every window is at least 31, and
+-- nets has @P = ceiling (c / 1000)@ processes. Each gets at least the
+-- lesser of its need and @variableBudget \`div\` P@ elements
+-- ('shareByNeed'), and as no net is wider than 4096 bits
+-- ('Gin.Core.Type.maxWidth'), a process's window is its whole length or at
+-- least @variableBudget \`div\` P \`div\` 4096@. The largest normal form
+-- ('Gin.Limits.maxNormalBinds') has 65536 nets, so @P <= 66@, every window
+-- is at least 31, and
 --
 -- > h <= (P - 1) + (999 `div` 31) * P <= 65 + 32 * 66 = 2177
 --
 -- whatever the depth, width and shape of the logic.
 --
 -- Simulation time is not bounded this way: each signal read inside a
--- process runs the whole process again one delta cycle later. A process
--- whose nets have at most its share of 'variableBudget' bits in all (with
--- 66 processes, 1000 nets of up to 127 bits) reads only variables, but
--- wide logic read beyond the window along long paths can exceed the 300 s
--- tool limit. Measured with the run command: 31 interleaved chains of 2113
--- nets of 4096 bits (65534 nets in 66 processes of window 31, so every
--- chain step is a signal read and the longest path makes 2113) settle within
--- the delta limit but take 400 s for 4 cycles; the same shape with 16
+-- process runs the whole process again one delta cycle later. Only a
+-- process given less than its need makes such reads, and that happens
+-- only when the combinational nets of the whole design have more than
+-- 'variableBudget' bits: a design whose nets fit reads every net its own
+-- process computes from a variable, however its width is spread over the
+-- processes. Wider designs whose logic is read beyond the window along long
+-- paths can exceed the 300 s tool limit. Measured with the run command: 31
+-- interleaved chains of 2113 nets of 4096 bits (65534 nets in 66 processes
+-- of window 31, so every chain step is a signal read and the longest path
+-- makes 2113) settle within the delta limit but take 400 s to 700 s for 4
+-- cycles, depending on the load of the machine; the same shape with 16
 -- chains of 8-bit nets reads only variables and takes 4 s.
 processSize :: Int
 processSize = 1000
@@ -209,14 +217,35 @@ processSize = 1000
 -- variables of all combinational processes hold together: 8 MiB, half of
 -- nvc's 16 MiB simulation heap, which keeps every process's variables for
 -- the whole run (signals live outside it). The rest is left for the
--- testbench's vector table and the temporaries of operators. Each of the
--- @P@ processes gets an equal share, @variableBudget \`div\` P@, which
--- bounds its 'window'. (Measured with the run command, one 4096-bit
--- variable per net: 4001 nets, 16.4 MB of variables, still start; 4100
--- fail at initialisation with out of memory. A chain of 65535 nets of 4096
--- bits fills the budget, 66 processes of 31 variables, and passes.)
+-- testbench's vector table and the temporaries of operators. The
+-- processes share it by need ('shareByNeed'), and a process's share bounds
+-- its 'window'. (Measured with the run command, one 4096-bit variable per
+-- net: 4001 nets, 16.4 MB of variables, still start; 4100 fail at
+-- initialisation with out of memory. A chain of 65535 nets of 4096 bits
+-- fills the budget, 66 processes of 31 variables, and passes.)
 variableBudget :: Int
 variableBudget = 2 ^ (23 :: Int)
+
+-- | Split @total@ elements between processes needing the given numbers,
+-- smallest need first: each gets its need or an equal share of what is
+-- still left, whichever is less. The shares, in the order of the needs, add
+-- up to at most @total@, and each is at least the lesser of its need and
+-- @total \`div\` P@ for @P@ processes, as a need below its share leaves
+-- more for the rest. When the needs add up to at most @total@, every
+-- process gets its need.
+--
+-- An equal share for every process would leave a process holding many wide
+-- nets a short window even when the other processes need little: measured
+-- with the run command, 2017 nets of 4096 bits next to a chain of 63000
+-- 8-bit nets ran 2000 cycles in 63 s with every net in a variable and in
+-- 788 s with equal shares, reading most wide nets through their signals.
+shareByNeed :: Int -> [Int] -> [Int]
+shareByNeed total needs = IntMap.elems (snd (foldl' give (total, IntMap.empty) ordered))
+  where
+    ordered = zip [length needs, length needs - 1 ..] (sortOn snd (zip [0 ..] needs))
+    give (remaining, shares) (left, (i, need)) =
+      let share = min need (remaining `div` left)
+       in (remaining - share, IntMap.insert i share shares)
 
 -- | The window @d@ of a process given its share @budget@ of
 -- 'variableBudget': the largest @d@ such that its @d@ widest nets together

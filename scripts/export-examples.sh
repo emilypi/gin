@@ -43,9 +43,32 @@ module_roots() {
   ' lean/lakefile.toml | tr -d '"' | grep -vx GinReject
 }
 
+# The words of gin's reservedWords in src/Gin/Netlist/Types.hs, one per
+# line, sorted: the string literals of its definition (up to the first blank
+# line), with Haskell string gaps removed.
+haskell_reserved_words() {
+  sed -n '/^reservedWords =/,/^$/p' src/Gin/Netlist/Types.hs | grep -v '^ *--' | tr '\n' ' ' |
+    sed 's/\\ *\\//g' | grep -o '"[^"]*"' | tr -d '"' | tr -s ' ' '\n' | sed '/^$/d' | sort -u
+}
+
+# [lean-reserved-words] the exporter refuses exactly the identifiers gin
+# reserves: Gin.Export.reservedWords, evaluated by Lean, is the same set as
+# gin's list. Needs the Lean package built.
+check_reserved_words() {
+  local hs lean
+  printf '%s\n' 'import Gin.Export.Reserved' \
+    'def main : IO Unit := for w in Gin.Export.reservedWords.toList do IO.println w' \
+    > "$tmp/reserved.lean"
+  hs=$(haskell_reserved_words)
+  lean=$(cd lean && lake env lean --run "$tmp/reserved.lean" | sort -u)
+  [ -n "$hs" ] || die "no reserved words found in src/Gin/Netlist/Types.hs"
+  [ "$hs" = "$lean" ] || die "lean/Gin/Export/Reserved.lean and src/Gin/Netlist/Types.hs reserve different words:"$'\n'"$(diff <(echo "$hs") <(echo "$lean"))"
+}
+
 export_examples() {
   local roots
   lake -d lean build --wfail
+  check_reserved_words
   # [lean-kernel-replay] every module root except the reject fixtures
   roots=($(module_roots))
   [ "${#roots[@]}" -gt 0 ] || die "no module roots found in lean/lakefile.toml"

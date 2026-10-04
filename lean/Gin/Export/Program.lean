@@ -1,5 +1,6 @@
 import Lean
 import Gin.Export.Certificate
+import Gin.Export.Reserved
 import Gin.Export.Translate
 import Gin.Export.Vectors
 
@@ -55,13 +56,15 @@ def producer : Producer := { tool := "gin-export", leanVersion := Lean.versionSt
 
 /-- A legal hardware identifier: lower-case ASCII letter first, then
 lower-case letters, digits and single underscores, not ending in `_`, at
-most 64 characters, no `gin_` prefix. Generated modules also reserve the
-port names `clk` and `rst`. HDL keywords are rejected later by gin. -/
+most 64 characters, no `gin_` prefix, and not one of gin's
+`reservedWords` (HDL keywords and names the tools reject). Generated modules
+also reserve the port names `clk` and `rst`. -/
 def isLegalIdent (s : String) : Bool :=
   match s.toList with
   | c :: rest =>
     c.isLower && rest.all (fun x => x.isLower || x.isDigit || x == '_') && s.length ≤ 64
       && (s.splitOn "__").length == 1 && !s.endsWith "_" && !s.startsWith "gin_"
+      && !reservedWords.contains s
   | [] => false
 
 /-- The clock domain of every `Signal` occurring in `ty`. -/

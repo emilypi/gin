@@ -86,6 +86,9 @@ run_meta do
 #guard !isLegalIdent "" && !isLegalIdent "Counter" && !isLegalIdent "1a" && !isLegalIdent "a__b"
 #guard !isLegalIdent "a_" && !isLegalIdent "gin_x" && !isLegalIdent "a-b"
 #guard !isLegalIdent (String.ofList (List.replicate 65 'a')) && isLegalIdent (String.ofList (List.replicate 64 'a'))
+-- Words gin reserves, one from each section of its list, are refused.
+#guard ["module", "logic", "signal", "std_logic", "bool", "xor_eq", "reg"].all (!isLegalIdent ·)
+#guard reservedWords.size == 445
 
 -- Output products are split along the right-nested spine.
 #guard splitOutputs 1 (.prod [.bool, .bool]) == some [.prod [.bool, .bool]]
@@ -99,6 +102,9 @@ run_meta do
   let base ← GinTest.Examples.entry "counter"
   expectError (translateTop { base with name := "Counter" }) ["top name", "Counter"]
   expectError (translateTop { base with inputs := ["clk"] }) ["clk"]
+  expectError (translateTop { base with name := "module" }) ["top name", "\"module\""]
+  expectError (translateTop { base with inputs := ["signal"] }) ["port name", "\"signal\""]
+  expectError (translateTop { base with outputs := ["wire"] }) ["port name", "\"wire\""]
   expectError (translateTop { base with outputs := ["en"] }) ["not pairwise distinct"]
   expectError (translateTop { base with inputs := [] }) ["takes 1 signals but 0 input names"]
   expectError (translateTop { base with outputs := ["a", "b"] }) ["does not have 2 output components"]

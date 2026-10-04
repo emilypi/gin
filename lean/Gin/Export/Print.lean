@@ -9,18 +9,45 @@ printer, not by Lean's pretty printer: the pretty printer consults
 delaborators, unexpanders and notation that any imported module can declare,
 so a design could make the printed statement differ from the term the kernel
 checked. (An `app_unexpander` can, for instance, print a call of `specR` as
-`Counter.spec`.) This printer reads only the term itself and the types of
-the constants it mentions; nothing in the environment can change its output.
+`Counter.spec`.) This printer reads only the term itself and the types and
+values of the constants it mentions; nothing in the environment can change
+its output.
+
+## Names
+
+Two different names never print the same text, and every printed name is
+ASCII, so that a name cannot pass for another one that looks alike
+(`spe\u{3F2}`, with a Greek lunate sigma, for `spec`). `Name.toString` gives
+neither guarantee: it turns escaping off for inaccessible names and names
+with macro scopes, so the root constant `«A.spec✝»` and the constant
+`spec✝` in namespace `A` both print `A.spec✝`.
+
+* A name component is printed bare if it is a plain ASCII identifier
+  (`[A-Za-z_][A-Za-z0-9_']*`) and not one of `keywords`; otherwise it is
+  printed `«…»`, with every character other than an ASCII letter, digit, `_`
+  or `'` written `\u{XXXX}` (so `.`, `«`, `\` and every non-ASCII character
+  are escaped). A numeric component is printed in decimal; a string
+  component that consists of digits is not a plain identifier, so it is
+  printed `«…»`. Components are joined with `.`.
+* A component that contains `»` is refused, and so are names with macro
+  scopes and inaccessible names (a component containing `✝` or equal to
+  `_inaccessible`) of constants and universe parameters: such names are not
+  written by hand, and their meaning depends on the hygiene the printer
+  does not show.
+* A bound variable's name has its macro scopes erased and is printed as one
+  component (a multi-component binder name has its `.`s escaped), so that it
+  cannot read as a constant or a projection.
 
 ## Rules
 
-* Constants are printed with their full names (escaped with `«»` where
-  needed). Universe arguments are printed, as `c.{u, v}`, unless they are
-  all `0`.
+* Constants are printed with their full names. Universe arguments are
+  printed, as `c.{u, v}`, unless they are all `0`.
 * Applications print every argument, including implicit and instance
-  arguments. A constant whose applied binders include an implicit,
-  strict-implicit or instance binder is written `@c`, so that the text
-  denotes the same application.
+  arguments. An applied constant or variable is written `@c` unless its type,
+  with definitions unfolded as needed, is seen to take explicit binders for
+  all the arguments; so the text denotes the same application even when the
+  binders are hidden behind a definition (`g : F` with
+  `F := {n : Nat} → Nat → Nat`).
 * `@Eq α a b` is printed `a = b` (the type `α` is not shown).
 * A non-dependent explicit `∀` is printed `α → β`, and is right-associative;
   every other `∀` is printed `∀ (x : α), β`, with `{x : α}`, `⦃x : α⦄` and
@@ -36,7 +63,9 @@ the constants it mentions; nothing in the environment can change its output.
   printed `e.i`, with `i` counted from 1.
 * Bound variables keep their names, except that a name already bound in an
   enclosing scope, or equal to a constant of the term or a prefix of one,
-  gets the least suffix `_k` (`k ≥ 1`) that makes it fresh.
+  gets the least suffix `_k` (`k ≥ 1`) that makes it fresh. After printing,
+  `expr` and `decl` check again that no bound variable prints like a
+  constant of the term or a prefix of one.
 * An argument that is not an atom is parenthesised; so are the operands of
   `=` that are not applications or atoms, the left operand of `→` that is an
   arrow or a binder, and any binder that is not at the end of the enclosing
@@ -46,6 +75,84 @@ the constants it mentions; nothing in the environment can change its output.
 open Lean
 
 namespace Gin.Export.Print
+
+/-! ## Names -/
+
+/-- Words that a plain identifier must not be, because the printed term or
+Lean source gives them another meaning. -/
+def keywords : Std.HashSet String := Std.HashSet.ofList
+  ["_", "Prop", "Sort", "Type", "abbrev", "at", "axiom", "by", "calc", "class", "def", "deriving",
+   "do", "else", "end", "example", "exists", "forall", "from", "fun", "have", "if", "import", "in",
+   "inductive", "instance", "let", "match", "mut", "namespace", "nat_lit", "noncomputable",
+   "opaque", "open", "partial", "private", "protected", "return", "section", "show", "sorry",
+   "structure", "suffices", "then", "theorem", "universe", "unsafe", "variable", "where", "with"]
+
+/-- May `c` appear in a printed component without escaping? -/
+def plainChar (c : Char) : Bool := c.isAlphanum || c == '_' || c == '\''
+
+/-- Is `s` a plain ASCII identifier, `[A-Za-z_][A-Za-z0-9_']*`, and not a
+keyword? -/
+def isPlainIdent (s : String) : Bool :=
+  match s.toList with
+  | c :: cs => (c.isAlpha || c == '_') && cs.all plainChar && !keywords.contains s
+  | [] => false
+
+/-- `\u{XXXX}`: the code point of `c` in upper-case hexadecimal, at least
+four digits. -/
+def unicodeEscape (c : Char) : String :=
+  let hex := String.ofList ((Nat.toDigits 16 c.toNat).map Char.toUpper)
+  "\\u{" ++ "".pushn '0' (4 - hex.length) ++ hex ++ "}"
+
+/-- A name component: bare if it is a plain identifier, otherwise `«…»` with
+every character that is not `plainChar` escaped. A component containing `»`
+is refused. -/
+def component (s : String) : Except String String := do
+  if s.contains '»' then throw s!"the name component {s.quote} contains »"
+  if isPlainIdent s then return s
+  return "«" ++ s.foldl (fun acc c => if plainChar c then acc.push c else acc ++ unicodeEscape c) ""
+    ++ "»"
+
+/-- The printed form of a constant's or universe parameter's name (see the
+module documentation). Refuses anonymous names, names with macro scopes and
+inaccessible names. -/
+def name (n : Name) : Except String String := do
+  if n.isAnonymous then throw "an anonymous name"
+  if n.hasMacroScopes then throw s!"the name {n} has macro scopes"
+  let rec go : Name → Except String (List String)
+    | .anonymous => pure []
+    | .num p k => return (← go p) ++ [toString k]
+    | .str p s => do
+      if s.contains '✝' || s == "_inaccessible" then
+        throw s!"the name {n} is inaccessible"
+      return (← go p) ++ [← component s]
+  return ".".intercalate (← go n)
+
+/-- The text of a bound variable's name, before escaping: macro scopes
+erased, components joined with `.`; `x` for an anonymous name. -/
+def binderText (n : Name) : String :=
+  let n := n.eraseMacroScopes
+  if n.isAnonymous then "x" else
+  ".".intercalate (n.components.map fun
+    | .str _ s => s
+    | .num _ k => toString k
+    | .anonymous => "")
+
+/-- The first text that occurs twice in `names`, if any. -/
+def firstDuplicate? (names : List String) : Option String := Id.run do
+  let mut seen : Std.HashSet String := {}
+  for n in names do
+    if seen.contains n then return some n
+    seen := seen.insert n
+  return none
+
+/-- Refuse a printed term in which a bound variable prints like a constant
+of the term or a prefix of one. -/
+def checkBound (reserved : Std.HashSet String) (bound : Array String) : Except String Unit :=
+  match bound.find? reserved.contains with
+  | some x => throw s!"the bound variable {x} prints like a constant of the term"
+  | none => pure ()
+
+/-! ## Terms -/
 
 /-- Precedence of printed text: what may appear where without parentheses. -/
 inductive Prec where
@@ -83,13 +190,24 @@ def Doc.paren (d : Doc) (p : Prec) : String :=
 
 /-- Read-only context of the printer. -/
 structure Ctx where
-  /-- Where the types of constants are looked up, to decide on `@`. -/
+  /-- Where the types and values of constants are looked up, to decide on
+  `@`. -/
   env : Environment
   /-- The bound variables, innermost first: printed name and type. -/
   locals : List (String × Expr) := []
   /-- Names a bound variable must not take: every constant of the printed
-  term, and every prefix of one. -/
+  term, and every prefix of one, as printed. -/
   reserved : Std.HashSet String := {}
+
+/-- The printer's monad: it records every bound variable's printed name and
+can refuse a name. -/
+abbrev M := StateT (Array String) (Except String)
+
+/-- Lift a refusal into the printer. -/
+def liftName (x : Except String String) : M String :=
+  match x with
+  | .ok s => pure s
+  | .error e => throw e
 
 /-- `(l, k)` such that the level is `l` plus `k` successors, `l` not a
 successor. -/
@@ -100,46 +218,66 @@ def peelSucc : Level → Nat → Level × Nat
 mutual
 
 /-- A level, as `0`, `u`, `u+1`, `max u v` or `imax u v`. -/
-partial def level (l : Level) : String :=
+partial def level (l : Level) : Except String String :=
   match l with
-  | .zero => "0"
-  | .param n => n.toString
-  | .mvar _ => "?u"
-  | .max a b => s!"max {levelArg a} {levelArg b}"
-  | .imax a b => s!"imax {levelArg a} {levelArg b}"
+  | .zero => pure "0"
+  | .param n => name n
+  | .mvar _ => pure "?u"
+  | .max a b => return s!"max {← levelArg a} {← levelArg b}"
+  | .imax a b => return s!"imax {← levelArg a} {← levelArg b}"
   | .succ _ =>
     match peelSucc l 0 with
-    | (.zero, k) => toString k
-    | (base, k) => s!"{levelArg base}+{k}"
+    | (.zero, k) => pure (toString k)
+    | (base, k) => return s!"{← levelArg base}+{k}"
 
 /-- A level as an operand of `max`, `imax`, `+`, `Type` or `Sort`. -/
-partial def levelArg (l : Level) : String :=
+partial def levelArg (l : Level) : Except String String :=
   match l with
-  | .max .. | .imax .. => "(" ++ level l ++ ")"
-  | .succ _ => if (peelSucc l 0).1 == .zero then level l else "(" ++ level l ++ ")"
+  | .max .. | .imax .. => return "(" ++ (← level l) ++ ")"
+  | .succ _ => do
+    let s ← level l
+    return if (peelSucc l 0).1 == .zero then s else "(" ++ s ++ ")"
   | _ => level l
 
 end
 
 /-- A sort: `Prop`, `Type`, `Type u` or `Sort u`. -/
-def sort (u : Level) : Doc :=
+def sort (u : Level) : Except String Doc :=
   match u with
-  | .zero => ⟨"Prop", .atom⟩
-  | .succ .zero => ⟨"Type", .atom⟩
-  | .succ l => ⟨"Type " ++ levelArg l, .app⟩
-  | l => ⟨"Sort " ++ levelArg l, .app⟩
+  | .zero => pure ⟨"Prop", .atom⟩
+  | .succ .zero => pure ⟨"Type", .atom⟩
+  | .succ l => return ⟨"Type " ++ (← levelArg l), .app⟩
+  | l => return ⟨"Sort " ++ (← levelArg l), .app⟩
 
 /-- A constant with its universe arguments (omitted when all are `0`). -/
-def constName (c : Name) (us : List Level) : String :=
-  if us.all (· == .zero) then c.toString
-  else c.toString ++ ".{" ++ ", ".intercalate (us.map level) ++ "}"
+def constName (c : Name) (us : List Level) : Except String String := do
+  let n ← name c
+  if us.all (· == .zero) then return n
+  return n ++ ".{" ++ ", ".intercalate (← us.mapM level) ++ "}"
 
-/-- Does `ty` have a non-explicit binder among its first `n` binders? Only
-syntactic `∀`s are inspected; arguments past them are explicit. -/
-def hasImplicitBinder (ty : Expr) (n : Nat) : Bool :=
-  match n, ty.consumeMData with
-  | k + 1, .forallE _ _ b bi => !bi.isExplicit || hasImplicitBinder b k
-  | _, _ => false
+/-- Is a function of type `ty` applied to `args` possibly given a
+non-explicit argument? The type is walked binder by binder, instantiating
+each with its argument; when it is not a `∀` while arguments remain, its
+head definition is unfolded. If neither works the answer is `true`, so that
+`@` is printed whenever explicit binders are not seen. -/
+partial def needsAt (env : Environment) (ty : Expr) (args : Array Expr) (i : Nat := 0)
+    (fuel : Nat := 256) : Bool :=
+  if i ≥ args.size then false else
+  match fuel with
+  | 0 => true
+  | fuel + 1 =>
+    match ty.consumeMData.headBeta with
+    | .forallE _ _ b bi => !bi.isExplicit || needsAt env (b.instantiate1 args[i]!) args (i + 1) fuel
+    | .letE _ _ v b _ => needsAt env (b.instantiate1 v) args i fuel
+    | t =>
+      match t.getAppFn.consumeMData with
+      | .const c us =>
+        match env.find? c with
+        | some ci@(.defnInfo _) =>
+          if ci.levelParams.length != us.length then true else
+          needsAt env ((ci.instantiateValueLevelParams! us).beta t.getAppArgs) args i fuel
+        | _ => true
+      | _ => true
 
 /-- `n` if `e` is a raw natural-number literal. -/
 def rawNat? (e : Expr) : Option Nat :=
@@ -177,18 +315,19 @@ def bvNumeral? (e : Expr) : Option (Expr × Nat) := do
   guard (rawNat? inst.appArg! == some n)
   return (ty.appArg!, n)
 
-/-- A fresh printed name for a binder named `n`. -/
-def freshName (ctx : Ctx) (n : Name) : String :=
-  let n := n.eraseMacroScopes
-  let base := if n.isAnonymous then "x" else n.toString
+/-- A fresh printed name for a binder named `n`, recorded as bound. -/
+def freshName (ctx : Ctx) (n : Name) : M String := do
+  let base := binderText n
   let taken (s : String) := ctx.reserved.contains s || ctx.locals.any (·.1 == s)
-  if !taken base then base else Id.run do
-    let mut k := 1
-    -- terminates: only finitely many names are taken
-    for _ in [0:ctx.locals.length + ctx.reserved.size + 1] do
-      if !taken s!"{base}_{k}" then break
-      k := k + 1
-    return s!"{base}_{k}"
+  let mut x ← liftName (component base)
+  let mut k := 1
+  -- terminates: only finitely many names are taken
+  for _ in [0:ctx.locals.length + ctx.reserved.size + 1] do
+    if !taken x then break
+    x ← liftName (component s!"{base}_{k}")
+    k := k + 1
+  modify (·.push x)
+  return x
 
 /-- Enter a binder. -/
 def Ctx.bind (ctx : Ctx) (name : String) (ty : Expr) : Ctx :=
@@ -204,111 +343,131 @@ def brackets : BinderInfo → String × String
 mutual
 
 /-- Print a term. -/
-partial def doc (ctx : Ctx) (e : Expr) : Doc :=
+partial def doc (ctx : Ctx) (e : Expr) : M Doc := do
   match e with
   | .mdata _ e => doc ctx e
-  | .bvar i => ⟨(ctx.locals[i]?.map (·.1)).getD s!"#{i}", .atom⟩
-  | .fvar fv => ⟨s!"?fvar.{fv.name}", .atom⟩
-  | .mvar mv => ⟨s!"?mvar.{mv.name}", .atom⟩
-  | .sort u => sort u
-  | .const c us => ⟨constName c us, .atom⟩
-  | .lit (.natVal n) => ⟨s!"nat_lit {n}", .app⟩
-  | .lit (.strVal s) => ⟨s.quote, .atom⟩
-  | .proj _ i s => ⟨(doc ctx s).paren .atom ++ "." ++ toString (i + 1), .atom⟩
+  | .bvar i => return ⟨(ctx.locals[i]?.map (·.1)).getD s!"#{i}", .atom⟩
+  | .fvar fv => return ⟨s!"?fvar.{fv.name}", .atom⟩
+  | .mvar mv => return ⟨s!"?mvar.{mv.name}", .atom⟩
+  | .sort u => liftDoc (sort u)
+  | .const c us => return ⟨← liftName (constName c us), .atom⟩
+  | .lit (.natVal n) => return ⟨s!"nat_lit {n}", .app⟩
+  | .lit (.strVal s) => return ⟨s.quote, .atom⟩
+  | .proj _ i s => return ⟨(← doc ctx s).paren .atom ++ "." ++ toString (i + 1), .atom⟩
   | .app .. => app ctx e
   | .lam .. => lam ctx e #[]
   | .forallE .. => pi ctx e
   | .letE n t v b nondep =>
-    let x := freshName ctx n
+    let x ← freshName ctx n
     let kw := if nondep then "have" else "let"
-    ⟨s!"{kw} {x} : {(doc ctx t).text} := {(doc ctx v).text}; {(doc (ctx.bind x t) b).text}", .binder⟩
+    return ⟨s!"{kw} {x} : {(← doc ctx t).text} := {(← doc ctx v).text}; \
+      {(← doc (ctx.bind x t) b).text}", .binder⟩
+
+/-- Lift a printed sort into the printer. -/
+partial def liftDoc (x : Except String Doc) : M Doc :=
+  match x with
+  | .ok d => pure d
+  | .error e => throw e
 
 /-- Print an application. -/
-partial def app (ctx : Ctx) (e : Expr) : Doc :=
-  if let some n := natNumeral? e then ⟨toString n, .atom⟩ else
-  if let some (w, n) := bvNumeral? e then ⟨s!"({n} : BitVec {(doc ctx w).paren .atom})", .atom⟩ else
+partial def app (ctx : Ctx) (e : Expr) : M Doc := do
+  if let some n := natNumeral? e then return ⟨toString n, .atom⟩
+  if let some (w, n) := bvNumeral? e then
+    return ⟨s!"({n} : BitVec {(← doc ctx w).paren .atom})", .atom⟩
   let fn := e.getAppFn.consumeMData
   let args := e.getAppArgs
   if fn.isConstOf ``Eq && args.size == 3 then
-    ⟨(doc ctx args[1]!).paren .app ++ " = " ++ (doc ctx args[2]!).paren .app, .eq⟩
-  else
-    let head := match fn with
-      | .const c us =>
-        let atSign := match ctx.env.find? c with
-          | some ci => if hasImplicitBinder ci.type args.size then "@" else ""
-          | none => ""
-        atSign ++ constName c us
-      | .bvar i =>
-        match ctx.locals[i]? with
-        | some (x, ty) => (if hasImplicitBinder ty args.size then "@" else "") ++ x
-        | none => s!"#{i}"
-      | _ => (doc ctx fn).paren .atom
-    ⟨" ".intercalate (head :: args.toList.map fun a => (doc ctx a).paren .atom), .app⟩
+    return ⟨(← doc ctx args[1]!).paren .app ++ " = " ++ (← doc ctx args[2]!).paren .app, .eq⟩
+  let head ← match fn with
+    | .const c us => do
+      let atSign := match ctx.env.find? c with
+        | some ci => if needsAt ctx.env ci.type args then "@" else ""
+        | none => "@"
+      pure (atSign ++ (← liftName (constName c us)))
+    | .bvar i =>
+      match ctx.locals[i]? with
+      | some (x, ty) => pure ((if needsAt ctx.env ty args then "@" else "") ++ x)
+      | none => pure s!"#{i}"
+    | _ => do pure ((← doc ctx fn).paren .atom)
+  let args ← args.toList.mapM fun a => return (← doc ctx a).paren .atom
+  return ⟨" ".intercalate (head :: args), .app⟩
 
 /-- Print a block of lambdas. -/
-partial def lam (ctx : Ctx) (e : Expr) (binders : Array String) : Doc :=
+partial def lam (ctx : Ctx) (e : Expr) (binders : Array String) : M Doc := do
   match e with
   | .lam n t b bi =>
-    let x := freshName ctx n
+    let x ← freshName ctx n
     let (o, c) := brackets bi
-    lam (ctx.bind x t) b (binders.push s!"{o}{x} : {(doc ctx t).text}{c}")
+    lam (ctx.bind x t) b (binders.push s!"{o}{x} : {(← doc ctx t).text}{c}")
   | .mdata _ e => lam ctx e binders
-  | body => ⟨"fun " ++ " ".intercalate binders.toList ++ " => " ++ (doc ctx body).text, .binder⟩
+  | body => return ⟨"fun " ++ " ".intercalate binders.toList ++ " => " ++ (← doc ctx body).text, .binder⟩
 
 /-- Print a `∀`: an arrow if it is non-dependent and explicit, otherwise a
 block of binders. -/
-partial def pi (ctx : Ctx) (e : Expr) : Doc :=
+partial def pi (ctx : Ctx) (e : Expr) : M Doc := do
   match e with
   | .forallE _ t b .default =>
     if b.hasLooseBVar 0 then piBlock ctx e #[] else
-    ⟨(doc ctx t).paren .eq ++ " → " ++ (doc (ctx.bind "_" t) b).text, .arrow⟩
+    return ⟨(← doc ctx t).paren .eq ++ " → " ++ (← doc (ctx.bind "_" t) b).text, .arrow⟩
   | _ => piBlock ctx e #[]
 
 /-- Print consecutive dependent or non-explicit binders as one `∀`. -/
-partial def piBlock (ctx : Ctx) (e : Expr) (binders : Array String) : Doc :=
+partial def piBlock (ctx : Ctx) (e : Expr) (binders : Array String) : M Doc := do
   match e with
   | .forallE n t b bi =>
     if bi.isExplicit && !b.hasLooseBVar 0 && !binders.isEmpty then
       finish ctx e binders
     else
-      let x := freshName ctx n
+      let x ← freshName ctx n
       let (o, c) := brackets bi
-      piBlock (ctx.bind x t) b (binders.push s!"{o}{x} : {(doc ctx t).text}{c}")
+      piBlock (ctx.bind x t) b (binders.push s!"{o}{x} : {(← doc ctx t).text}{c}")
   | .mdata _ e => piBlock ctx e binders
   | body => finish ctx body binders
 
 /-- Close a block of `∀` binders. -/
-partial def finish (ctx : Ctx) (body : Expr) (binders : Array String) : Doc :=
-  ⟨"∀ " ++ " ".intercalate binders.toList ++ ", " ++ (doc ctx body).text, .binder⟩
+partial def finish (ctx : Ctx) (body : Expr) (binders : Array String) : M Doc := do
+  return ⟨"∀ " ++ " ".intercalate binders.toList ++ ", " ++ (← doc ctx body).text, .binder⟩
 
 end
 
-/-- Every constant of `es` and every prefix of one, as strings. -/
-def reservedNames (es : List Expr) : Std.HashSet String := Id.run do
+/-- Every constant of `es` and every prefix of one, as printed. -/
+def reservedNames (es : List Expr) : Except String (Std.HashSet String) := do
   let mut s : Std.HashSet String := {}
   for e in es do
     for c in e.getUsedConstants do
       let mut n := c
       while !n.isAnonymous do
-        s := s.insert n.toString
+        s := s.insert (← name n)
         n := n.getPrefix
   return s
 
+/-- Print the terms `es` in a context whose reserved names are those of
+`es` and `extra`; refuse if a bound variable prints like a reserved name. -/
+def run (env : Environment) (es : List Expr) (extra : List Expr := []) :
+    Except String (List String) := do
+  let reserved ← reservedNames (es ++ extra)
+  let ctx : Ctx := { env, reserved }
+  let (texts, bound) ← (es.mapM fun e => return (← doc ctx e).text).run #[]
+  checkBound reserved bound
+  return texts
+
 /-- Print a closed term. -/
-def expr (env : Environment) (e : Expr) : String :=
-  (doc { env, reserved := reservedNames [e] } e).text
+def expr (env : Environment) (e : Expr) : Except String String := do
+  let texts ← run env [e]
+  return texts.headD ""
 
 /-- Print a declaration as `name : type := value`, or `name : type` for a
 declaration without a value. Universe parameters are written
 `name.{u, v}`. -/
 def decl (env : Environment) (n : Name) (levelParams : List Name) (type : Expr)
-    (value : Option Expr) : String :=
-  let ctx : Ctx := { env, reserved := reservedNames (type :: value.toList) }
-  let name := if levelParams.isEmpty then n.toString
-    else n.toString ++ ".{" ++ ", ".intercalate (levelParams.map toString) ++ "}"
-  let head := name ++ " : " ++ (doc ctx type).text
-  match value with
-  | some v => head ++ " := " ++ (doc ctx v).text
-  | none => head
+    (value : Option Expr) : Except String String := do
+  let texts ← run env (type :: value.toList)
+  let mut head ← name n
+  unless levelParams.isEmpty do
+    head := head ++ ".{" ++ ", ".intercalate (← levelParams.mapM name) ++ "}"
+  match texts with
+  | [ty, v] => return head ++ " : " ++ ty ++ " := " ++ v
+  | ty :: _ => return head ++ " : " ++ ty
+  | [] => return head
 
 end Gin.Export.Print

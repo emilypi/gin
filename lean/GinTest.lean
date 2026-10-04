@@ -3,6 +3,7 @@ import GinTest.FixtureReplay
 import GinTest.Json
 import GinTest.Certificate
 import GinTest.Print
+import GinTest.Names
 import GinTest.Vectors
 import GinTest.Translate
 import GinTest.Unsupported

@@ -169,7 +169,7 @@ run_meta do
 -- not listed.
 open GinTest.Certificate in
 run_meta do
-  let defs := Gin.Export.specDefinitions (← Lean.getEnv)
+  let defs ← Gin.Export.specDefinitions (← Lean.getEnv)
     (Lean.mkAppN (.const ``diamond []) #[.const ``Nat []]) ``Counter.counter
   let names := defs.map (·.name)
   let expected := ["GinTest.Certificate.Byte", "GinTest.Certificate.Mode",
@@ -187,14 +187,14 @@ run_meta do
       "GinTest.Certificate.base : Nat → Nat := fun (n : Nat) => @HMod.hMod Nat Nat Nat (@instHMod Nat Nat.instMod) n 256" do
     throwError "base shown as {body "GinTest.Certificate.base"}"
   -- deterministic: the same closure, computed again, in the same order
-  let again := Gin.Export.specDefinitions (← Lean.getEnv)
+  let again ← Gin.Export.specDefinitions (← Lean.getEnv)
     (Lean.mkAppN (.const ``diamond []) #[.const ``Nat []]) ``Counter.counter
   unless again == defs do throwError "the order is not deterministic"
 
 -- [lean-specdefs] A statement whose specification is a DSL or core constant
 -- lists nothing; the top definition itself is never listed.
 run_meta do
-  let defs := Gin.Export.specDefinitions (← Lean.getEnv)
+  let defs ← Gin.Export.specDefinitions (← Lean.getEnv)
     (Lean.mkAppN (.const ``Counter.counter []) #[.const ``Gin.lift [], .const ``List.range []])
     ``Counter.counter
   unless defs.isEmpty do throwError "listed {defs.map (·.name)}"

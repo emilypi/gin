@@ -13,14 +13,26 @@ open Lean Meta Gin
 
 namespace GinTest.Print
 
+/-- The printed text, or an error with the printer's refusal. -/
+def ofExceptString (x : Except String String) : MetaM String :=
+  match x with
+  | .ok s => pure s
+  | .error e => throwError "the printer refused: {e}"
+
+/-- Fail unless `actual` prints as `expected`. -/
+def expectPrinted (actual : Except String String) (expected : String) : MetaM Unit := do
+  let actual ← ofExceptString actual
+  unless actual == expected do
+    throwError "printed{indentD actual}\nexpected{indentD expected}"
+
 /-- The printed type of the constant `n`. -/
 def typeOf (n : Name) : MetaM String := do
-  return Gin.Export.Print.expr (← getEnv) (← getConstInfo n).type
+  ofExceptString (Gin.Export.Print.expr (← getEnv) (← getConstInfo n).type)
 
 /-- The printed declaration of the constant `n`. -/
 def declOf (n : Name) : MetaM String := do
   let ci ← getConstInfo n
-  return Gin.Export.Print.decl (← getEnv) n ci.levelParams ci.type ci.value?
+  ofExceptString (Gin.Export.Print.decl (← getEnv) n ci.levelParams ci.type ci.value?)
 
 /-- Fail unless `actual` is `expected`. -/
 def expectText (actual expected : String) : MetaM Unit :=
@@ -103,8 +115,8 @@ run_meta do
 -- brackets; applications with such arguments are written with `@`.
 run_meta do
   expectText (← declOf ``binders)
-    ("GinTest.Print.binders : ∀ {α : Type} [_inst : Inhabited.{1} α] ⦃_x : α⦄, (α → α) → α → α := " ++
-   "fun {α : Type} [_inst : Inhabited.{1} α] ⦃_x : α⦄ (f : α → α) (a : α) => f a")
+    ("GinTest.Print.binders : ∀ {«\\u{03B1}» : Type} [_inst : Inhabited.{1} «\\u{03B1}»] ⦃_x : «\\u{03B1}»⦄, («\\u{03B1}» → «\\u{03B1}») → «\\u{03B1}» → «\\u{03B1}» := " ++
+   "fun {«\\u{03B1}» : Type} [_inst : Inhabited.{1} «\\u{03B1}»] ⦃_x : «\\u{03B1}»⦄ (f : «\\u{03B1}» → «\\u{03B1}») (a : «\\u{03B1}») => f a")
 
 -- [lean-printer] Numerals: a bare number is a `Nat`; bit-vector numerals carry
 -- their type, as written (300 is not reduced); other numerals are printed in
@@ -159,29 +171,29 @@ open Gin.Export.Print in
 run_meta do
   let env ← getEnv
   let u := Level.param `u
-  expectText (expr env (.sort .zero)) "Prop"
-  expectText (expr env (.sort (.succ .zero))) "Type"
-  expectText (expr env (.sort (.succ u))) "Type u"
-  expectText (expr env (.sort (.max u (.succ (.succ .zero))))) "Sort (max u 2)"
-  expectText (expr env (.sort (.succ (.max u (.param `v))))) "Type (max u v)"
-  expectText (expr env (.sort (.succ (.succ u)))) "Type (u+1)"
-  expectText (expr env (mkNatLit 7)) "7"
-  expectText (expr env (mkRawNatLit 7)) "nat_lit 7"
-  expectText (expr env (mkApp (.const ``Nat.succ []) (mkRawNatLit 7))) "Nat.succ (nat_lit 7)"
+  expectPrinted (expr env (.sort .zero)) "Prop"
+  expectPrinted (expr env (.sort (.succ .zero))) "Type"
+  expectPrinted (expr env (.sort (.succ u))) "Type u"
+  expectPrinted (expr env (.sort (.max u (.succ (.succ .zero))))) "Sort (max u 2)"
+  expectPrinted (expr env (.sort (.succ (.max u (.param `v))))) "Type (max u v)"
+  expectPrinted (expr env (.sort (.succ (.succ u)))) "Type (u+1)"
+  expectPrinted (expr env (mkNatLit 7)) "7"
+  expectPrinted (expr env (mkRawNatLit 7)) "nat_lit 7"
+  expectPrinted (expr env (mkApp (.const ``Nat.succ []) (mkRawNatLit 7))) "Nat.succ (nat_lit 7)"
   let pairTy := mkApp2 (.const ``Prod [1, 1]) (.const ``Nat []) (.const ``Bool [])
-  expectText (expr env (.lam `p pairTy (.proj ``Prod 1 (.bvar 0)) .default))
+  expectPrinted (expr env (.lam `p pairTy (.proj ``Prod 1 (.bvar 0)) .default))
     "fun (p : Prod.{1, 1} Nat Bool) => p.2"
-  expectText (expr env (.lam `f (← mkArrow (.const ``Nat []) (.const ``Nat []))
+  expectPrinted (expr env (.lam `f (← mkArrow (.const ``Nat []) (.const ``Nat []))
       (.proj ``Prod 0 (mkApp (.bvar 0) (mkNatLit 1))) .default))
     "fun (f : Nat → Nat) => (f 1).1"
-  expectText (expr env (.bvar 3)) "#3"
-  expectText (expr env (.letE `a (.const ``Nat []) (mkNatLit 1) (.bvar 0) false))
+  expectPrinted (expr env (.bvar 3)) "#3"
+  expectPrinted (expr env (.letE `a (.const ``Nat []) (mkNatLit 1) (.bvar 0) false))
     "let a : Nat := 1; a"
   -- an anonymous binder is named `x`
-  expectText (expr env (.lam .anonymous (.const ``Nat []) (.bvar 0) .default)) "fun (x : Nat) => x"
+  expectPrinted (expr env (.lam .anonymous (.const ``Nat []) (.bvar 0) .default)) "fun (x : Nat) => x"
   -- a dependent arrow after a non-dependent one starts a new `∀`
   expectText (← typeOf ``congrArg)
-    ("∀ {α : Sort u} {β : Sort v} {a₁ : α} {a₂ : α} (f : α → β), a₁ = a₂ → f a₁ = f a₂")
+    ("∀ {«\\u{03B1}» : Sort u} {«\\u{03B2}» : Sort v} {«a\\u{2081}» : «\\u{03B1}»} {«a\\u{2082}» : «\\u{03B1}»} (f : «\\u{03B1}» → «\\u{03B2}»), «a\\u{2081}» = «a\\u{2082}» → f «a\\u{2081}» = f «a\\u{2082}»")
 
 -- [lean-printer] The printer is a pure function of the term: the same input
 -- gives the same text, with or without `pp` options set.

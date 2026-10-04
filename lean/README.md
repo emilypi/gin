@@ -49,6 +49,10 @@ What a reviewer reads in a certificate is what the kernel checked:
   are rendered by the exporter's own printer (`Gin/Export/Print.lean`),
   which prints fully qualified names and explicit applications and never
   consults notation, delaborators or unexpanders declared by a design.
+  Names are printed in ASCII and never two alike: a component that is not
+  a plain identifier is written `«…»` with `\u{XXXX}` escapes, and names
+  with macro scopes, inaccessible names (`✝`) and duplicate definition
+  names are refused (`GinTest/Names.lean`).
 - The export script replays every module of the package through the
   kernel with `leanchecker` (every module root under `lean/` except
   `GinReject`), so declarations added under `debug.skipKernelTC` are

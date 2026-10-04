@@ -53,6 +53,14 @@ module `Gin.Signal`) and at Lean's core library (modules under `Init`,
   `collectAxioms` on the refinement theorem reaches them.
 * An axiom in the closure is shown as `name : type`; any axiom outside the
   allowed three has already been refused.
+
+Every name in the certificate (the theorem, the axioms, the constants and
+binders of the statement and of the definitions, and the `name` of each
+definition) is printed by `Print.name`, which never gives two names the
+same text and prints only ASCII. The export is refused if a name cannot be
+printed that way (a name with macro scopes, an inaccessible name, a
+component containing `»`), if two definitions print the same name, or if a
+bound variable prints like a constant of its term.
 -/
 
 open Lean Meta
@@ -146,13 +154,31 @@ def dependencyOrder (env : Environment) (nodes : Array Name) : Array Name := Id.
     remaining := remaining.filter (· != next)
   return out
 
+/-- Lift a printer refusal into `MetaM`. -/
+def printed {α : Type} (what : String) (x : Except String α) : MetaM α :=
+  match x with
+  | .ok a => pure a
+  | .error e => throwError "cannot print {what} unambiguously: {e}; refusing to export"
+
+/-- Refuse a certificate in which two specification definitions print the
+same name. -/
+def checkDistinctNames (names : List String) : Except String Unit :=
+  match Print.firstDuplicate? names with
+  | some n => throw s!"two specification definitions print the same name {n}"
+  | none => pure ()
+
 /-- The specification definitions of a statement, rendered. -/
-def specDefinitions (env : Environment) (statement : Lean.Expr) (top : Name) : List SpecDef :=
+def specDefinitions (env : Environment) (statement : Lean.Expr) (top : Name) :
+    MetaM (List SpecDef) := do
   let nodes := specClosure env statement.getUsedConstants (· == top)
-  (dependencyOrder env nodes).toList.filterMap fun c =>
-    env.find? c |>.map fun ci =>
-      { name := c.toString
-        body := Print.decl env c ci.levelParams ci.type (ci.value? (allowOpaque := true)) }
+  let defs ← (dependencyOrder env nodes).toList.filterMapM fun c => do
+    let some ci := env.find? c | return none
+    return some {
+      name := ← printed s!"the name of {c}" (Print.name c)
+      body := ← printed s!"the definition of {c}"
+        (Print.decl env c ci.levelParams ci.type (ci.value? (allowOpaque := true))) }
+  printed "the specification definitions" (checkDistinctNames (defs.map (·.name)))
+  return defs
 
 /-- Does `c` refer to `target`, directly or through the definitions it
 depends on (see `specClosure`)? -/
@@ -210,11 +236,12 @@ def certify (thm top : Name) (defs : List Name) : MetaM Certificate := do
     impl := impl ++ (← checkedAxioms "definition" d)
   discard <| checkShape thm top ci.type
   let implAxioms := (impl.qsort (·.toString < ·.toString)).toList.eraseDups
+  let names (ns : List Name) := printed "the axioms" (ns.mapM Print.name)
   return {
-    theorem_ := thm.toString
-    statement := Print.expr env ci.type
-    axioms := axs.toList.map (·.toString)
-    implAxioms := implAxioms.map (·.toString)
-    specDefinitions := specDefinitions env ci.type top }
+    theorem_ := ← printed s!"the name of {thm}" (Print.name thm)
+    statement := ← printed s!"the statement of {thm}" (Print.expr env ci.type)
+    axioms := ← names axs.toList
+    implAxioms := ← names implAxioms
+    specDefinitions := ← specDefinitions env ci.type top }
 
 end Gin.Export

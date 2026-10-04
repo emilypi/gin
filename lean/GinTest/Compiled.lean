@@ -70,7 +70,7 @@ run_meta do
 -- project module is found, used by a design or not, as `gin-check-export`
 -- reads the modules; the exporter's own modules are not checked
 run_meta do
-  let env ← importModules #[{ module := `GinTest.Fixture.LinkedCode }, { module := `GinExport }] {}
+  let env ← importModules #[{ module := `GinTest.Fixture.LinkedCode }, { module := `Gin.Export.Main }] {}
     (loadExts := false)
   let found := linkedCodeOverrides env
   let expected := #[(`GinTest.Fixture.LinkedCode, #[

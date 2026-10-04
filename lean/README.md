@@ -9,7 +9,8 @@ core IR and test vectors that the Haskell side of gin compiles to HDL
 | `Gin/Signal.lean`        | The DSL: `Signal`, `register`, `mealy`, `lift`…                 |
 | `Gin/Examples/`          | `counter`, `detector`, `mac` with refinement theorems           |
 | `Gin/Export/`            | Translator, certificate policy, vectors, export table, CLI      |
-| `GinExport.lean`         | Root of the `gin-export` executable                             |
+| `GinCheckExport.lean`    | Root of `gin-check-export`, the checks; links no design         |
+| `GinExport.lean`         | Root of `gin-export`, which links the designs                   |
 | `GinTest/`               | Tests, run by `lake build`                                      |
 | `GinReject/`             | Designs the exporter must refuse, not built by default          |
 
@@ -36,9 +37,9 @@ them together with the Lean change that produced them.
    definitions `spec` depends on.
    Only `propext`, `Classical.choice` and `Quot.sound` may appear in the
    proof: no `sorry`, `native_decide` or `bv_decide`.
-3. Add an entry to `Gin/Export/Table.lean` with the hardware name, port
-   names, the definitions to emit, a vector source and a seed, and list it
-   in `defaultExports`.
+3. Add an entry to `Gin/Export/Entries.lean` with the hardware name, port
+   names, the definitions to emit and a seed, and list it in
+   `defaultExports`; add its vector source to `Gin/Export/Table.lean`.
 4. Run `scripts/export-examples.sh`.
 
 ## Trust
@@ -55,18 +56,28 @@ What a reviewer reads in a certificate is what the kernel checked:
   names are refused (`GinTest/Names.lean`).
 - The export script replays through the kernel, with `leanchecker`,
   exactly the modules the export loads outside the Lean toolchain
-  (`lake exe gin-export --list-modules NAME...`), whatever their names,
+  and the modules `gin-export` links
+  (`lake exe gin-check-export --list-modules NAME...`), whatever their names,
   so declarations added under `debug.skipKernelTC` are caught in any
   module a design imports. `leanchecker` runs on a search path holding
   only those modules' `.olean` files, so a stale `.olean` left by a
   deleted source is neither replayed nor imported.
 - A circuit that loads a module under `GinReject` is refused unless its
   table entry is marked as a reject fixture.
-- The exporter imports the environment first without its extensions, so
-  no code of a design runs while the certificate is checked, and refuses
-  any project module that registers an IO initializer (`initialize`,
-  `builtin_initialize`, `@[init]`): such code would run inside the
-  exporter.
+- The checks run in `gin-check-export`, which links only the exporter
+  and the DSL, no design, and imports the environment without its
+  extensions, so no code of a design runs while the modules, the axioms
+  and the theorem shape are checked and the certificate is rendered. It
+  refuses any project module that registers an IO initializer
+  (`initialize`, `builtin_initialize`, `@[init]`), among the modules the
+  circuits load and those `gin-export` links.
+- `gin-export` links the designs to compute vectors, and the
+  initializers of linked modules run as soon as it starts, before any of
+  its own checks; such code could write forged files. The export script
+  therefore runs `gin-check-export` first and never starts `gin-export`
+  when it fails (`GinReject/Hooked.lean`). `gin-export` repeats the checks,
+  but they cannot stop an initializer that has already run: run it only
+  through the script.
 
 `lake build` itself runs code from the sources it builds: `#eval`,
 `run_cmd`, macros and elaborators execute at build time with the
@@ -75,8 +86,9 @@ a sandbox (a container or VM without your credentials).
 
 ## Caveats
 
-- Run the exporter only through `lake exe gin-export`; the bare binary has
-  no Lean search path.
+- Run the exporter only through `scripts/export-examples.sh`, which runs
+  `lake exe gin-check-export` before `lake exe gin-export`; the bare
+  binaries have no Lean search path.
 - Test vectors come from running the compiled Lean definitions on seeded
   inputs, never from the exported IR. The IR evaluator in
   `GinTest/IrEval.lean` exists only to test the translator.

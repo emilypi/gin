@@ -1,5 +1,5 @@
 name = "gin"
-defaultTargets = ["Gin", "GinTest", "gin-export"]
+defaultTargets = ["Gin", "GinTest", "gin-check-export", "gin-export"]
 
 [leanOptions]
 autoImplicit = false
@@ -20,10 +20,24 @@ name = "GinTest"
 [[lean_lib]]
 name = "GinReject"
 
+# Checks the modules, initializers, axioms and theorem shape of an export
+# without linking or running any design; scripts/export-examples.sh runs it
+# before gin-export.
+[[lean_exe]]
+name = "gin-check-export"
+root = "GinCheckExport"
+
 # Writes examples/<name>/<name>.gin.json and <name>.vectors.json; see
 # scripts/export-examples.sh. `supportInterpreter` is required to import an
 # environment with its extensions loaded.
 [[lean_exe]]
 name = "gin-export"
 root = "GinExport"
+supportInterpreter = true
+
+# Reject fixture, not a default target: gin-export with a design whose
+# module declares an `initialize` linked in (GinReject/Hooked.lean).
+[[lean_exe]]
+name = "gin-export-hooked"
+root = "GinReject.HookedExport"
 supportInterpreter = true

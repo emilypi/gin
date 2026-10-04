@@ -20,8 +20,9 @@ such modules so that the exporter can refuse them.
 Building a design runs its code: `#eval` and macros run during `lake build`,
 and the `initialize` declarations of every module linked into `gin-export`
 run when it starts. `initializers` lists the IO initializers that project
-modules register, so that the exporter can refuse to export a design that
-has any (see `lean/README.md`, "Trust").
+modules register, so that `gin-check-export`, which links no design, can
+refuse a design that has any before `gin-export` starts (see
+`lean/README.md`, "Trust").
 -/
 
 open Lean

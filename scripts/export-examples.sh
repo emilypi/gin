@@ -6,12 +6,15 @@
 #
 # Run from the repository root. The export builds the Lean package with
 # warnings as errors (which runs the Lean tests), replays every module the
-# exported circuits load (gin-export --list-modules) through the kernel with
-# leanchecker (catching declarations that were added without kernel
-# checking, e.g. under debug.skipKernelTC), and then writes
+# exported circuits and the exporter load (gin-check-export --list-modules)
+# through the kernel with leanchecker (catching declarations that were added
+# without kernel checking, e.g. under debug.skipKernelTC), and then writes
 # examples/<name>/<name>.gin.json and <name>.vectors.json for each example.
-# A second export into a temporary directory must reproduce the files byte
-# for byte.
+# Every export runs gin-check-export first and stops if it fails:
+# gin-export links the designs, whose initializers run as soon as it starts,
+# so it never starts for circuits the checker, which links no design,
+# refuses. A second export into a temporary directory must reproduce the
+# files byte for byte.
 #
 # --check-rejects builds the reject fixtures under lean/GinReject, which are
 # not part of the default build, and checks that each one is refused for its
@@ -68,9 +71,35 @@ replay() {
 }
 
 # The modules outside the Lean toolchain that exporting the named circuits
-# loads, one per line, after the exporter's module checks.
+# loads, and those gin-export links, one per line, after the checks of
+# gin-check-export.
 loaded_modules() {
-  lake -d lean exe gin-export --list-modules "$@"
+  lake -d lean exe gin-check-export --list-modules "$@"
+}
+
+# export_with EXE ROOT OUT NAME...: export the named circuits into OUT with
+# the exporter EXE, whose root module is ROOT, only after gin-check-export
+# has accepted them and the modules of ROOT. The checker links no design and
+# runs none of their code; EXE runs the initializers of every design it
+# links as soon as it starts, so it must not start before the checks pass.
+export_with() {
+  local exe=$1 root=$2 out=$3
+  shift 3
+  lake -d lean exe gin-check-export --exporter "$root" "$@" >/dev/null || return 1
+  lake -d lean exe "$exe" --out "$out" "$@"
+}
+
+# env_export_with VAR=VALUE EXE ROOT OUT NAME...: export_with, with VAR set
+# in the environment of both tools.
+env_export_with() {
+  (export "${1?}" && shift && export_with "$@")
+}
+
+# export_to OUT NAME...: export_with the shipped gin-export.
+export_to() {
+  local out=$1
+  shift
+  export_with gin-export GinExport "$out" "$@"
 }
 
 # The words of gin's reservedWords in src/Gin/Netlist/Types.hs, one per
@@ -95,17 +124,33 @@ check_reserved_words() {
   [ "$hs" = "$lean" ] || die "lean/Gin/Export/Reserved.lean and src/Gin/Netlist/Types.hs reserve different words:"$'\n'"$(diff <(echo "$hs") <(echo "$lean"))"
 }
 
+# [lean-check-no-design] gin-check-export links no design: outside the Lean
+# toolchain, its root module imports only the exporter (Gin.Export.*) and the
+# DSL (Gin.Signal). Needs the Lean package built.
+check_checker_closure() {
+  local mods bad
+  printf '%s\n' 'import Lean' 'open Lean in' 'def main : IO Unit := do' \
+    '  initSearchPath (← findSysroot)' \
+    '  let env ← importModules #[{ module := `GinCheckExport }] {} (loadExts := false)' \
+    '  for m in env.header.moduleNames do IO.println m' > "$tmp/closure.lean"
+  mods=$(cd lean && lake env lean --run "$tmp/closure.lean") || die "cannot read the modules of GinCheckExport"
+  grep -qx GinCheckExport <<<"$mods" || die "GinCheckExport is not among its own modules"
+  bad=$(grep -Ev '^(Init|Std|Lean|Lake)(\.|$)|^Gin\.Export\.|^Gin\.Signal$|^GinCheckExport$' <<<"$mods" || true)
+  [ -z "$bad" ] || die "gin-check-export links modules other than the exporter and the DSL:"$'\n'"$bad"
+}
+
 export_examples() {
   local mods
   lake -d lean build --wfail
   check_reserved_words
+  check_checker_closure
   # [lean-kernel-replay] exactly the modules the export loads
-  mods=($(loaded_modules "${examples[@]}")) || die "gin-export --list-modules ${examples[*]} failed"
-  [ "${#mods[@]}" -gt 0 ] || die "gin-export --list-modules ${examples[*]} listed no modules"
+  mods=($(loaded_modules "${examples[@]}")) || die "gin-check-export --list-modules ${examples[*]} failed"
+  [ "${#mods[@]}" -gt 0 ] || die "gin-check-export --list-modules ${examples[*]} listed no modules"
   replay "$tmp/replay" "${mods[@]}"
-  lake -d lean exe gin-export --out examples "${examples[@]}"
+  export_to examples "${examples[@]}" || die "the export of ${examples[*]} failed"
   # [lean-determinism] a second export reproduces every file byte for byte
-  lake -d lean exe gin-export --out "$tmp" "${examples[@]}" >/dev/null
+  export_to "$tmp" "${examples[@]}" >/dev/null || die "the second export of ${examples[*]} failed"
   for n in "${examples[@]}"; do
     diff -r "$tmp/$n" "examples/$n" >/dev/null || die "the export of $n is not deterministic"
   done
@@ -123,18 +168,50 @@ build_fixture() {
   out=$(lake -d lean build "$1" 2>&1) || die "$1 does not build:"$'\n'"$out"
 }
 
-# check_reject MODULE NAME TEXT REASON: MODULE builds, and exporting NAME
-# fails with a message that contains TEXT (outside the trailing list of
-# allowed axioms).
-check_reject() {
-  local module=$1 name=$2 text=$3 reason=$4 out
-  build_fixture "$module"
-  if out=$(lake -d lean exe gin-export "$name" 2>&1); then
-    die "gin-export $name succeeded; it must refuse $reason"
+# expect_refusal TOOL NAME TEXT REASON COMMAND...: COMMAND fails with a
+# message that contains TEXT (outside the trailing list of allowed axioms).
+expect_refusal() {
+  local tool=$1 name=$2 text=$3 reason=$4 out
+  shift 4
+  if out=$("$@" 2>&1); then
+    die "$tool $name succeeded; it must refuse $reason"
   fi
   grep -F -- "$text" <<<"${out//Allowed axioms: */}" >/dev/null ||
-    die "gin-export $name failed without naming $text:"$'\n'"$out"
+    die "$tool $name failed without naming $text:"$'\n'"$out"
+}
+
+# check_reject MODULE NAME TEXT REASON: MODULE builds, and exporting NAME
+# fails with a message that contains TEXT: the export pipeline stops at
+# gin-check-export, and gin-export, run directly, refuses NAME too.
+check_reject() {
+  local module=$1 name=$2 text=$3 reason=$4
+  build_fixture "$module"
+  expect_refusal "the export of" "$name" "$text" "$reason" export_to "$tmp/reject" "$name"
+  expect_refusal gin-export "$name" "$text" "$reason" lake -d lean exe gin-export --out "$tmp/reject" "$name"
   echo "export-examples: $name refused ($reason)"
+}
+
+# The initializer of GinReject.Hooked, a module that gin-export-hooked links,
+# runs as soon as gin-export-hooked starts (it writes GIN_HOOK_MARKER), but
+# the export pipeline refuses the circuit in gin-check-export, before
+# gin-export-hooked starts: the marker is not written.
+check_linked_initializer() {
+  local marker=$tmp/hook-ran out
+  # built before GIN_HOOK_MARKER is set: building runs the initializer too
+  out=$(lake -d lean build gin-export-hooked 2>&1) || die "gin-export-hooked does not build:"$'\n'"$out"
+  GIN_HOOK_MARKER=$marker lake -d lean exe gin-export-hooked --help >/dev/null
+  [ -f "$marker" ] || die "the initializer of GinReject.Hooked did not run when gin-export-hooked started"
+  rm -f "$marker"
+  expect_refusal "the export of" hooked "module GinReject.Hooked registers IO initializers" \
+    "a module initializer linked into the exporter" \
+    env_export_with "GIN_HOOK_MARKER=$marker" gin-export-hooked GinReject.HookedExport "$tmp/reject" hooked
+  [ ! -f "$marker" ] || die "gin-export-hooked started (its initializer ran) although gin-check-export refused hooked"
+  # the modules the exporter links are checked even when no requested
+  # circuit loads them
+  expect_refusal gin-check-export GinReject.HookedExport "module GinReject.Hooked registers IO initializers" \
+    "a module initializer linked into the exporter" \
+    lake -d lean exe gin-check-export --exporter GinReject.HookedExport counter
+  echo "export-examples: hooked refused before gin-export-hooked started (a linked module initializer)"
 }
 
 # check_kernel_reject MODULE NAME BAD: MODULE builds, and the kernel replay
@@ -143,7 +220,7 @@ check_kernel_reject() {
   local module=$1 name=$2 bad=$3 out
   local -a mods
   build_fixture "$module"
-  mods=($(loaded_modules "$name")) || die "gin-export --list-modules $name failed"
+  mods=($(loaded_modules "$name")) || die "gin-check-export --list-modules $name failed"
   if out=$(replay "$tmp/replay-$name" "${mods[@]}" 2>&1); then
     die "leanchecker accepted ${mods[*]}; it must fail on the unchecked declaration in $bad"
   fi
@@ -160,7 +237,7 @@ check_stale_olean() {
   local -a mods
   build_fixture GinReject.BadKernel
   cp lean/.lake/build/lib/lean/GinReject/BadKernel.olean "$stale"
-  mods=($(loaded_modules counter)) || die "gin-export --list-modules counter failed"
+  mods=($(loaded_modules counter)) || die "gin-check-export --list-modules counter failed"
   out=$(replay "$tmp/replay-stale" "${mods[@]}" 2>&1) ||
     die "a stale .olean ($stale) broke the kernel replay of ${mods[*]}:"$'\n'"$out"
   rm -f "$stale"
@@ -185,6 +262,7 @@ check_rejects() {
   done
   check_reject GinReject.BadInit bad_init "module GinReject.BadInit registers IO initializers" \
     "a module initializer"
+  check_linked_initializer
   # [lean-printer] not refused: the certificate names specR and lists its body
   build_fixture GinReject.BadUnexpander
   build_fixture GinReject.UnexpanderCheck

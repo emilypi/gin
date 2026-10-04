@@ -10,7 +10,7 @@ Not part of the default build. Written like a shipped example (namespace
 checked in a separate module. `collectAxioms` sees no axiom, and the
 module itself replays cleanly; only replaying every module the export
 loads catches it. `scripts/export-examples.sh --check-rejects` checks that
-the kernel replay of the modules listed by `gin-export --list-modules
+the kernel replay of the modules listed by `gin-check-export --list-modules
 bad_import` fails on `GinReject.Unchecked`, and that the same design, not
 marked as a reject fixture (`forged`), is refused for loading `GinReject`
 modules.

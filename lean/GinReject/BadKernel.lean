@@ -10,7 +10,7 @@ a meta command adds a "proof" of `False` that way, and the refinement
 theorem is derived from it. `collectAxioms` sees no axiom at all, so only
 replaying the module through the kernel (`leanchecker`) catches it;
 `scripts/export-examples.sh --check-rejects` checks that the kernel replay
-of the modules `gin-export --list-modules bad_kernel` lists fails and names
+of the modules `gin-check-export --list-modules bad_kernel` lists fails and names
 this module. It lives outside the `Gin` namespace and the `Gin` module tree
 on purpose: the replay covers every module an export loads, whatever its
 name.

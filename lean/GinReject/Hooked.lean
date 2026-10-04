@@ -1,26 +1,30 @@
 import Gin.Signal
 
 /-!
-# Reject fixture: a design module that runs code when loaded
+# Reject fixture: an initializer in a module the exporter links
 
 Not part of the default build. The design and its proof are sound, but
-the module declares an `initialize`, which runs whenever the module is
-loaded. `gin-check-export`, which reads the module as data and links no
-design, must refuse it, naming it, and so must `gin-export`, which repeats
-the check. This module is not linked into `gin-export`, so its initializer
-would run only if the module were imported with its extensions, which
-neither tool does before the check; `GinReject/Hooked.lean` covers an
-initializer in a module `gin-export` links, which runs when it starts.
-`scripts/export-examples.sh --check-rejects` checks the refusals and that
-nothing is written.
+the module declares an `initialize` that writes a marker file (the path in
+`GIN_HOOK_MARKER`, when set), and the executable `gin-export-hooked`
+(`GinReject/HookedExport.lean`) is `gin-export` with this design linked
+in to compute its vectors. A linked `initialize` runs when the executable
+starts, before any check of `gin-export`; it could write forged files and
+exit. `scripts/export-examples.sh --check-rejects` checks that the
+initializer does run when `gin-export-hooked` starts, and that the export
+pipeline, which runs `gin-check-export` (which links no design) first,
+refuses the circuit without starting `gin-export-hooked`: the marker is
+not written.
 -/
 
 open Gin
 
-namespace BadInit
+namespace Hooked
 
-/-- Runs whenever the module is loaded. -/
-initialize loaded : IO.Ref Bool ← IO.mkRef true
+/-- Runs whenever the module is loaded, and when an executable that links it
+starts. -/
+initialize do
+  if let some path ← IO.getEnv "GIN_HOOK_MARKER" then
+    IO.FS.writeFile path "the initializer of GinReject.Hooked ran\n"
 
 /-- The enable counter of `Gin.Examples.Counter`. -/
 def bad (en : Signal System Bool) : Signal System (BitVec 8) :=
@@ -45,4 +49,4 @@ theorem bad_correct : ∀ en t, bad en t = spec en t := by
   intro en t
   simp only [bad, spec, mealy_apply, state_eq]
 
-end BadInit
+end Hooked

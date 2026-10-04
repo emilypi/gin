@@ -154,8 +154,9 @@ def importsOf (entries : Array Entry) (linked : Array Name := #[]) : Array Impor
 /-- The checks that need no code of a design: import the modules of
 `entries` and `linked` as data (no initializer runs, no extension is
 loaded), refuse shadowed toolchain modules and IO initializers, refuse a
-circuit that is not a reject fixture but loads one, and check and render
-every certificate. Returns the data environment and the certificates. -/
+circuit that is not a reject fixture but loads one, refuse a circuit whose
+compiled code may differ from its definitions (`checkCompiledCode`), and
+check and render every certificate. Returns the data environment and the certificates. -/
 def gate (entries : Array Entry) (linked : Array Name := #[]) :
     IO (Environment × Array Certificate) := do
   initSearchPath (← findSysroot)
@@ -166,7 +167,9 @@ def gate (entries : Array Entry) (linked : Array Name := #[]) :
   let mut certificates := #[]
   for e in entries do
     try
-      certificates := certificates.push (← runMeta data (certifyEntry e))
+      certificates := certificates.push (← runMeta data do
+        checkCompiledCode e.defs.toArray
+        certifyEntry e)
     catch err =>
       throw <| IO.userError s!"{e.name}: {err}"
   return (data, certificates)

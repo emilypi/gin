@@ -1,5 +1,6 @@
 import Lean
 import Gin.Export.Certificate
+import Gin.Export.Compiled
 import Gin.Export.Reserved
 import Gin.Export.Translate
 import Gin.Export.Vectors
@@ -105,6 +106,7 @@ def translateTop (e : Entry) : MetaM (Top × List Def) := do
       throwError "port name {repr p} is not a legal hardware identifier (clk and rst are reserved)"
   unless ports.eraseDups.length == ports.length do
     throwError "port names {ports} are not pairwise distinct"
+  checkCompiledCode e.defs.toArray
   let exported := e.defs.foldl NameSet.insert {}
   let defs ← e.defs.mapM (translateDef · exported)
   let some topDef := defs.find? (·.name == e.top.toString) | unreachable!

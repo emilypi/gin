@@ -20,8 +20,9 @@
 # not part of the default build, and checks that each one is refused for its
 # own reason: an axiom (sorryAx, a ._native. axiom), a kernel replay failure
 # (of the design's module, or of an unchecked module it imports), a theorem
-# without the refinement shape, a module initializer, or a design that is not
-# a reject fixture but loads one. The
+# without the refinement shape, a module initializer, compiled code that is
+# not the definition (@[implemented_by]), or a design that is not a reject
+# fixture but loads one. The
 # unexpander fixture is not refused; its check module verifies that the
 # certificate shows the real specification. Nothing under examples/ may
 # change.
@@ -181,11 +182,13 @@ expect_refusal() {
 }
 
 # check_reject MODULE NAME TEXT REASON: MODULE builds, and exporting NAME
-# fails with a message that contains TEXT: the export pipeline stops at
-# gin-check-export, and gin-export, run directly, refuses NAME too.
+# fails with a message that contains TEXT: gin-check-export refuses NAME, so
+# the export pipeline stops there, and gin-export, run directly, refuses NAME
+# too.
 check_reject() {
   local module=$1 name=$2 text=$3 reason=$4
   build_fixture "$module"
+  expect_refusal gin-check-export "$name" "$text" "$reason" lake -d lean exe gin-check-export "$name"
   expect_refusal "the export of" "$name" "$text" "$reason" export_to "$tmp/reject" "$name"
   expect_refusal gin-export "$name" "$text" "$reason" lake -d lean exe gin-export --out "$tmp/reject" "$name"
   echo "export-examples: $name refused ($reason)"
@@ -263,6 +266,8 @@ check_rejects() {
   check_reject GinReject.BadInit bad_init "module GinReject.BadInit registers IO initializers" \
     "a module initializer"
   check_linked_initializer
+  check_reject GinReject.BadImplementedBy bad_implemented_by \
+    "BadImplementedBy.inc is marked @[implemented_by]" "compiled code that is not the definition"
   # [lean-printer] not refused: the certificate names specR and lists its body
   build_fixture GinReject.BadUnexpander
   build_fixture GinReject.UnexpanderCheck

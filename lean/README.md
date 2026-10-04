@@ -71,6 +71,13 @@ What a reviewer reads in a certificate is what the kernel checked:
   refuses any project module that registers an IO initializer
   (`initialize`, `builtin_initialize`, `@[init]`), among the modules the
   circuits load and those `gin-export` links.
+- Vectors come from the compiled code of a design, the IR and the
+  certificate from its definitions. Both tools refuse a design whose
+  compiled code may differ from its definitions: a project constant it
+  runs that is `@[implemented_by]` or `@[extern]`, or a project `@[csimp]`
+  theorem that rewrites any constant it may reach, core library included
+  (`Gin/Export/Compiled.lean`, `GinTest/Compiled.lean`,
+  `GinReject/BadImplementedBy.lean`).
 - `gin-export` links the designs to compute vectors, and the
   initializers of linked modules run as soon as it starts, before any of
   its own checks; such code could write forged files. The export script

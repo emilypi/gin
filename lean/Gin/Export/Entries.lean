@@ -91,6 +91,11 @@ def entries : List Entry := [
     theorem_ := `Gin.Examples.Forged.counter_correct
     inputs := ["en"], outputs := ["count"]
     vectors := none },
+  { name := "bad_implemented_by", module := `GinReject.BadImplementedBy
+    top := `BadImplementedBy.bad, defs := [`BadImplementedBy.bad]
+    theorem_ := `BadImplementedBy.bad_correct
+    inputs := ["en"], outputs := ["count"]
+    vectors := none, fixture := true },
   -- loads a module with an initializer that gin-export-hooked links
   { name := "hooked", module := `GinReject.Hooked
     top := `Hooked.bad, defs := [`Hooked.bad]

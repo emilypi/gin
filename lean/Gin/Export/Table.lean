@@ -8,10 +8,10 @@ The circuits `gin-export` knows about. Port names are given here explicitly
 rather than taken from Lean binder names: they are part of the generated
 hardware interface.
 
-The two reject fixtures are listed so the refusal path can be exercised
-(`scripts/export-examples.sh --check-rejects`); their modules are not part
-of the default build and they have no vector source, so they can never be
-written.
+The reject fixtures (`GinReject`) are listed so the refusal paths can be
+exercised (`scripts/export-examples.sh --check-rejects`); their modules are
+not part of the default build and they have no vector source, so they can
+never be written.
 -/
 
 namespace Gin.Export
@@ -33,14 +33,39 @@ def table : List Entry := [
     theorem_ := ``Mac.mac_correct
     inputs := ["x", "y"], outputs := ["acc"]
     vectors := some (.of2 Mac.mac), seed := 2 },
-  { name := "bad", module := `Gin.Examples.Bad
+  { name := "bad", module := `GinReject.Bad
     top := `Bad.bad, defs := [`Bad.bad]
     theorem_ := `Bad.bad_correct
     inputs := ["en"], outputs := ["count"]
     vectors := none },
-  { name := "bad_native", module := `Gin.Examples.BadNative
+  { name := "bad_native", module := `GinReject.BadNative
     top := `BadNative.bad, defs := [`BadNative.bad]
     theorem_ := `BadNative.bad_correct
+    inputs := ["en"], outputs := ["count"]
+    vectors := none },
+  { name := "bad_init", module := `GinReject.BadInit
+    top := `BadInit.bad, defs := [`BadInit.bad]
+    theorem_ := `BadInit.bad_correct
+    inputs := ["en"], outputs := ["count"]
+    vectors := none },
+  { name := "bad_tautology", module := `GinReject.BadShape
+    top := `BadShape.bad, defs := [`BadShape.bad]
+    theorem_ := `BadShape.tautology
+    inputs := ["en"], outputs := ["count"]
+    vectors := none },
+  { name := "bad_at_zero", module := `GinReject.BadShape
+    top := `BadShape.bad, defs := [`BadShape.bad]
+    theorem_ := `BadShape.at_zero
+    inputs := ["en"], outputs := ["count"]
+    vectors := none },
+  { name := "bad_calls_impl", module := `GinReject.BadShape
+    top := `BadShape.bad, defs := [`BadShape.bad]
+    theorem_ := `BadShape.calls_impl
+    inputs := ["en"], outputs := ["count"]
+    vectors := none },
+  { name := "bad_or_true", module := `GinReject.BadShape
+    top := `BadShape.bad, defs := [`BadShape.bad]
+    theorem_ := `BadShape.or_true
     inputs := ["en"], outputs := ["count"]
     vectors := none }]
 

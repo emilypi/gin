@@ -65,8 +65,8 @@ check_rejects() {
   # [lean-rejects] both fixtures build, are refused naming the axiom, and
   # nothing under examples/ changes
   snapshot "$tmp/before"
-  check_reject Gin.Examples.Bad bad sorryAx
-  check_reject Gin.Examples.BadNative bad_native ._native.
+  check_reject GinReject.Bad bad sorryAx
+  check_reject GinReject.BadNative bad_native ._native.
   snapshot "$tmp/after"
   diff -r "$tmp/before" "$tmp/after" >/dev/null || die "a refused export changed examples/"
   echo "export-examples: rejects ok"

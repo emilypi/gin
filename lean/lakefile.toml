@@ -5,10 +5,7 @@ defaultTargets = ["Gin", "GinTest", "gin-export"]
 autoImplicit = false
 relaxedAutoImplicit = false
 
-# The circuit DSL, the shipped examples and the exporter. The reject
-# fixtures `Gin.Examples.Bad` and `Gin.Examples.BadNative` belong to this
-# library but no default target imports them, so they are built only on
-# request (scripts/export-examples.sh --check-rejects).
+# The circuit DSL, the shipped examples and the exporter.
 [[lean_lib]]
 name = "Gin"
 leanOptions = { linter.missingDocs = true }
@@ -16,6 +13,13 @@ leanOptions = { linter.missingDocs = true }
 # Tests: `#guard`, `#guard_msgs` and theorems checked by `lake build`.
 [[lean_lib]]
 name = "GinTest"
+
+# Reject fixtures: designs the exporter must refuse. Not a default target and
+# imported by none, so they are built only on request
+# (scripts/export-examples.sh --check-rejects), and the only module root the
+# kernel replay of the export skips.
+[[lean_lib]]
+name = "GinReject"
 
 # Writes examples/<name>/<name>.gin.json and <name>.vectors.json; see
 # scripts/export-examples.sh. `supportInterpreter` is required to import an

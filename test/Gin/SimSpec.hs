@@ -1222,6 +1222,19 @@ coreLimitSpec = do
     r <- settled (simulateCore prog [[b8 7]])
     r `shouldBeSimError` "the cycle needs more than 1048576 evaluation steps"
     r `shouldBeSimError` "in cycle 0"
+  it "[sim-operand-charge] charges a step for each component of a literal tuple" $ do
+    -- A literal of 2^19 components fits in the 2^20 steps of a cycle; one of
+    -- 2^21 does not, though evaluating it is a single expression.
+    let lifted n =
+          topProgram (bv8Ports ["x"]) (bv8Ports ["o"]) . overPorts (bv8Ports ["x"]) $
+            liftE [bv 8] (bv 8) (ELam [("v", bv 8)] (literalWork n "v")) [var "x"]
+    checkProgram (lifted 21) `shouldBe` Right ()
+    r <- settled (simulateCore (lifted 19) [[b8 7], [b8 8]])
+    r `shouldBe` Right [[b8 7], [b8 8]]
+    r' <- settled (simulateCore (lifted 21) [[b8 7]])
+    r' `shouldBeSimError` "the cycle needs more than 1048576 evaluation steps"
+    r' `shouldBeSimError` "in cycle 0"
+    either isBudgetError (const False) r' `shouldBe` True
   it "[sim-build-limit] builds a network whose functions are applied 2^17 times" $ do
     r <- settled (simulateCore (signalDoubling (var "s") 16) [[b8 1], [b8 2]])
     r `shouldBe` Right [[b8 1], [b8 2]]

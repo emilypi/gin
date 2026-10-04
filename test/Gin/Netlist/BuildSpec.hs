@@ -6,6 +6,7 @@ module Gin.Netlist.BuildSpec
 
     -- * Shared with the backend suites
   , specCertificate
+  , withSpecCounter
   ) where
 
 import Control.Exception (evaluate)
@@ -1360,6 +1361,13 @@ specCertificate =
             \  fun en t => Counter.count en t"
         ]
     }
+
+-- | Check the counter built from its normal form with 'specCertificate',
+-- whose header lists spec definitions and the spec hash.
+withSpecCounter :: (Module -> Expectation) -> Expectation
+withSpecCounter check = case buildNetlist counterNormal {nmCertificate = specCertificate} of
+  Left e -> expectationFailure (show e)
+  Right m -> check m
 
 -- | The header of the counter carrying the given certificate.
 headerFor :: Certificate -> Either GinError [Text]

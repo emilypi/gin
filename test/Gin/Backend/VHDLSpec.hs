@@ -16,7 +16,7 @@ import Data.Char (GeneralCategory (..), generalCategory, isAlpha, isAlphaNum, to
 import Data.List (mapAccumL, unfoldr)
 import Data.Map (Map)
 import Data.Map qualified as Map
-import Data.Maybe (isNothing, mapMaybe)
+import Data.Maybe (mapMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -35,6 +35,7 @@ import Gin.Examples
   , macVectors
   )
 import Gin.Limits (maxNormalBinds, maxVectorBits)
+import Gin.Netlist.BuildSpec (withSpecCounter)
 import Gin.Netlist.Types
 import Gin.TestUtil (goldenText, itWithTools, runTool, withTempDir)
 import Gin.Vectors (Cycle (..), Vectors (..))
@@ -42,6 +43,7 @@ import Numeric (showHex)
 import Numeric.Natural (Natural)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
+import System.Timeout (timeout)
 import Test.Hspec
 
 spec :: Spec
@@ -73,6 +75,17 @@ spec = do
       comments `shouldContain` ["-- unicode stays: \8704 x, f x = g x"]
     itWithTools ["nvc"] "[vhd-analyze] a design with a hostile header passes nvc analysis" $
       analyze hostileHeader >>= shouldAnalyze
+    it "[nl-header-spec] the built counter with spec definitions matches its golden file" $
+      withSpecCounter (goldenText "vhdl/counter_spec.vhd" . backendRender vhdl)
+    it "[nl-header-spec] emits every header line, spec lines and hash included, as a comment" $
+      withSpecCounter $ \m -> do
+        let ls = Text.lines (backendRender vhdl m)
+        filter ("-- spec" `Text.isPrefixOf`) ls `shouldSatisfy` ((> 2) . length)
+        take (length (modHeader m)) ls `shouldBe` fmap ("-- " <>) (modHeader m)
+    itWithTools ["nvc"] "[nl-header-spec] the counter with spec definitions analyzes and passes" $
+      withSpecCounter $ \m -> do
+        analyze m >>= shouldAnalyze
+        simulate m counterVectors >>= shouldPassCycles (length (vecCycles counterVectors))
     it "qualifies every constant and never calls to_unsigned" $
       for_ allDesigns $ \m -> do
         let src = backendRender vhdl m
@@ -116,13 +129,39 @@ spec = do
     it "renders vectors that violate the port precondition without throwing" $ do
       n <- evaluate (Text.length (backendTestbench vhdl counterNetlist macVectors))
       n `shouldSatisfy` (> 0)
+    it "[backend-minors] reports nothing extra for well-formed vectors" $
+      for_ fixtures $ \(_, m, vs) ->
+        backendTestbench vhdl m vs `shouldNotSatisfy` Text.isInfixOf "malformed"
+    itWithTools ["nvc"] "[backend-minors] an extra input value in a row counts as a mismatch" $ do
+      let bad = editRow 2 (\c -> c {cycInputs = cycInputs c <> [VBool True]}) counterVectors
+      simulate counterNetlist bad
+        >>= shouldReportOnly
+          ["GIN-MISMATCH malformed-values=1 first-cycle=2", "GIN-FAIL mismatches=1"]
+    itWithTools ["nvc"] "[backend-minors] an ill-typed value of an unread input is a mismatch" $ do
+      let vs = vectorsFor idleInputNetlist (inputRows 41 6 idleInputNetlist)
+          bad = editRow 4 (\c -> c {cycInputs = take 1 (cycInputs c) <> [VBool True]}) vs
+      checkRun idleInputNetlist vs
+      simulate idleInputNetlist bad
+        >>= shouldReportOnly
+          ["GIN-MISMATCH malformed-values=1 first-cycle=4", "GIN-FAIL mismatches=1"]
+    itWithTools ["nvc"] "[backend-minors] missing and extra expected values are mismatches" $ do
+      let bad =
+            editRow 6 (\c -> c {cycOutputs = cycOutputs c <> [VBV 8 0]}) $
+              editRow 3 (\c -> c {cycOutputs = []}) counterVectors
+      simulate counterNetlist bad
+        >>= shouldReportOnly
+          [ "GIN-MISMATCH malformed-values=2 first-cycle=3"
+          , "GIN-MISMATCH cycle=3 port=count expected=00 got=02"
+          , "GIN-FAIL mismatches=3"
+          ]
 
   describe "operators" $ do
     it "the reference evaluator reproduces the hand-written fixture vectors" $
       for_ fixtures $ \(_, m, vs) ->
         vectorsFor m (fmap cycInputs (vecCycles vs)) `shouldBe` vs
-    it "the test netlists satisfy the netlist identifier and reference invariants" $
-      for_ (allDesigns <> largeDesigns) $ \m -> invariantViolations m `shouldBe` []
+    it "[o0-fast] the test netlists satisfy the netlist identifier and reference invariants" $
+      withinSeconds 60 . for_ (allDesigns <> largeDesigns) $ \m ->
+        invariantViolations m `shouldBe` []
     itWithTools ["nvc"] "[vhd-coverage] every operator with constants in every position analyzes" $
       analyze coverageNetlist >>= shouldAnalyze
     itWithTools ["nvc"] "[vhd-coverage] every operator with constants in every position simulates" $
@@ -186,6 +225,18 @@ spec = do
     it "reads every net of a narrow design from a variable within its process" $
       for_ [interleavedNetlist, chainNetlist 8 12000] $ \m ->
         signalReads m (backendRender vhdl m) `shouldBe` []
+    it "[vhd-waterfill] shares variables by need: lanes beside a narrow chain read no signal" $ do
+      let src = backendRender vhdl lanesNetlist
+      length (combinationalProcesses src) `shouldBe` 66
+      length (modDecls lanesNetlist) `shouldSatisfy` (<= maxNormalBinds)
+      combinationalBits lanesNetlist `shouldSatisfy` (<= 2 ^ (23 :: Int))
+      -- an equal share of 2^23 elements between 66 processes holds 31 nets
+      -- of 4096 bits, one fewer than a lane step reaches back
+      (2 ^ (23 :: Int) `div` 66 :: Int) `shouldSatisfy` (< 32 * 4096)
+      signalReads lanesNetlist src `shouldBe` []
+    itWithTools ["nvc"] "[vhd-waterfill] wide lanes beside a 63112-net chain pass under nvc" $ do
+      length (modDecls lanesNetlist) `shouldBe` 65002
+      checkRunRows 8 lanesNetlist
     itWithTools ["nvc"] "16 interleaved chains of 8-bit nets in 66 processes pass" $ do
       length (modDecls interleavedNetlist) `shouldBe` maxNormalBinds
       checkRunRows 4 interleavedNetlist
@@ -259,6 +310,14 @@ checkRunRows n m = do
   let vs = vectorsFor m (inputRows 37 n m)
   payloadBits vs `shouldSatisfy` (<= maxVectorBits)
   checkRun m vs
+
+-- | Fail instead of running on when a check takes longer than the given
+-- number of seconds. The pure checks over the largest test netlists take
+-- a few seconds even when built without optimization.
+withinSeconds :: Int -> Expectation -> Expectation
+withinSeconds seconds check =
+  timeout (seconds * 1000000) check
+    >>= maybe (expectationFailure ("took more than " <> show seconds <> " s")) pure
 
 -- | Lines carrying a testbench protocol marker.
 markerLines :: Text -> [Text]
@@ -432,12 +491,14 @@ invariantViolations :: Module -> [String]
 invariantViolations m =
   [ "illegal identifier " <> show i | i <- idents, not (isLegalIdent (unIdent i))]
     <> ["duplicate identifiers" | Set.size (Set.fromList lowered) /= length lowered]
-    <> ["dangling reference " <> show i | ORef i <- operands, isNothing (operandType m (ORef i))]
+    <> ["dangling reference " <> show i | ORef i <- operands, i `Map.notMember` nets]
     <> [ "unread net " <> show n
        | n <- fmap (netName . declNet) (modDecls m)
        , n `Set.notMember` read'
        ]
   where
+    -- built once: rebuilding it per reference is quadratic without optimization
+    nets = moduleNets m
     idents =
       modName m
         : modClock m
@@ -615,6 +676,17 @@ corrupt t j vs = vs {vecCycles = zipWith fix [0 ..] (vecCycles vs)}
       VBV w x -> VBV w (x `xor` 1)
       v -> v
 
+-- | Change cycle @t@ of a vector set.
+editRow :: Int -> (Cycle -> Cycle) -> Vectors -> Vectors
+editRow t f vs = vs {vecCycles = zipWith edit [0 ..] (vecCycles vs)}
+  where
+    edit i c = if i == t then f c else c
+
+-- | Bits of all combinational nets together: what their variables would
+-- hold if every net had its own.
+combinationalBits :: Module -> Int
+combinationalBits m = sum [fromIntegral (hwWidth (netType n)) | DAssign n _ <- modDecls m]
+
 -- | Hex digits (one per four bits) for vectors, @0@/@1@ for bits.
 showValue :: Value -> Text
 showValue = \case
@@ -657,6 +729,7 @@ largeDesigns =
   , chainNetlist 4096 65535
   , interleavedNetlist
   , windowNetlist
+  , lanesNetlist
   ]
 
 ref :: Text -> Operand
@@ -819,7 +892,9 @@ wideNetlist =
     }
   where
     v = HVec 4096
-    k4096 = sum [2 ^ i | i <- [0, 3 .. 4095 :: Int]] + 2 ^ (4095 :: Int)
+    -- every third bit from bit 0, and the top bit (4095 is itself a multiple
+    -- of 3, so it is left out of the sum: the literal must stay below 2^4096)
+    k4096 = sum [2 ^ i | i <- [0, 3 .. 4094 :: Int]] + 2 ^ (4095 :: Int)
     observedNets =
       [ ("sum", v)
       , ("prod", v)
@@ -1055,15 +1130,17 @@ crowdedNetlist =
            ]
     input b = if b == 0 then "r" else result (b - 1)
 
--- | 16000 nets, so 16 processes, each holding at most 2^23 / 16 = 524288
--- elements in variables. The first process has 130 nets of 4096 bits, so
--- its window is 128 nets: net @k@ goes to @gin_v<k mod 128>@ and is read
--- from there for 127 positions. @x@ (position 0) is read 127, 128 and 129
--- nets later, by which time @z@ (position 128) has taken its variable.
+-- | 16000 nets, so 16 processes. The first holds 130 nets of 4096 bits
+-- and 870 narrower ones; the other 15 hold a chain of 4096-bit nets, so
+-- together they need far more than 2^23 elements, and the first, needing
+-- the least, gets an equal share, 2^23 / 16 = 524288. Its window is
+-- therefore 128 nets: net @k@ goes to @gin_v<k mod 128>@ and is read from
+-- there for 127 positions. @x@ (position 0) is read 127, 128 and 129 nets
+-- later, by which time @z@ (position 128) has taken its variable.
 -- Positions 130 to 139 put narrower vectors and bits into the variables of
--- 4096-bit nets and read them through every kind of operator; a chain of
--- 8-bit nets fills the remaining processes. Declared in dependency order,
--- so positions are as listed.
+-- 4096-bit nets and read them through every kind of operator, and a chain
+-- of 8-bit nets fills the rest of the first process. Declared in
+-- dependency order, so positions are as listed.
 windowNetlist :: Module
 windowNetlist =
   Module
@@ -1074,7 +1151,8 @@ windowNetlist =
     , modInputs = [net "a" wide, net "b" v8]
     , modOutputs =
         [ Output (net ("o_" <> o) ty) (ref o)
-        | (o, ty) <- [("w", wide), ("c12", HVec 12), ("h", HBit), ("g", HBit), (u chain, v8)]
+        | (o, ty) <-
+            [("w", wide), ("c12", HVec 12), ("h", HBit), ("g", HBit), (u narrow, v8), ("vo", v8)]
         ]
     , modDecls =
         register "r" wide (HLitVec 4096 0x5A) (ref "w")
@@ -1097,16 +1175,68 @@ windowNetlist =
              , assign "p16" v16 (HBin BMul (ref "e16") (ref "sh")) -- 139
              , assign (u 1) v8 (HSlice 11 4 (ref "p16")) -- 140
              ]
-          <> [assign (u k) v8 (HBin (cycleOp k) (ref (u (k - 1))) (ref "b")) | k <- [2 .. chain]]
+          <> [assign (u k) v8 (HBin (cycleOp k) (ref (u (k - 1))) (ref "b")) | k <- [2 .. narrow]]
+          <> [assign (v 1) wide (HBin BAdd (ref "w") (ref "a"))] -- 1000
+          <> [assign (v k) wide (HBin (cycleOp k) (ref (v (k - 1))) (ref "a")) | k <- [2 .. deep]]
+          <> [assign "vo" v8 (HSlice 7 0 (ref (v deep)))] -- 15999
     }
   where
     wide = HVec 4096
     v8 = HVec 8
     v16 = HVec 16
-    chain = 15860 :: Int
-    f, u :: Int -> Text
+    narrow = 860 :: Int
+    deep = 14999 :: Int
+    f, u, v :: Int -> Text
     f k = "f" <> tshow k
     u k = "u" <> tshow k
+    v k = "v" <> tshow k
+
+-- | 32 lanes of 58 nets of 4096 bits, interleaved so that net @x<k>@ reads
+-- @x<k-32>@, then a tree of xors joining their ends into the register
+-- @r@; next to them an independent chain of 63112 8-bit nets: 65001
+-- combinational nets in 66 processes, declared in dependency order.
+-- Together they have 1888 * 4096 + 63113 * 8 = 8238152 bits, within 2^23,
+-- so every process gets its whole need: the two wide processes about 4 MB
+-- each, far more than an equal share, and every lane step reads a
+-- variable.
+lanesNetlist :: Module
+lanesNetlist =
+  Module
+    { modName = Ident "lanes"
+    , modHeader = ["generated by the gin test suite"]
+    , modClock = Ident "clk"
+    , modReset = Ident "rst"
+    , modInputs = [net "a" v8]
+    , modOutputs = [Output (net "o" v8) (ref "o_low"), Output (net "p" v8) (ref (c chain))]
+    , modDecls =
+        [register "r" wide (HLitVec 4096 0x5A) (ref root), assign "aw" wide (HZext 4096 (ref "a"))]
+          <> lanes
+          <> tree
+          <> [assign "o_low" v8 (HSlice 7 0 (ref root)), assign (c 1) v8 (HUn UNot (ref "a"))]
+          <> [assign (c k) v8 (HBin (cycleOp k) (ref (c (k - 1))) (ref "a")) | k <- [2 .. chain]]
+    }
+  where
+    wide = HVec 4096
+    v8 = HVec 8
+    width = 32 :: Int
+    steps = 58 :: Int
+    chain = 63112 :: Int
+    x, c :: Int -> Text
+    x k = "x" <> tshow k
+    c k = "c" <> tshow k
+    lanes =
+      [assign (x k) wide (HShl (fromIntegral k) (ref "r")) | k <- [0 .. width - 1]]
+        <> [ assign (x k) wide (HBin (cycleOp k) (ref (x (k - width))) (ref "aw"))
+           | k <- [width .. width * steps - 1]
+           ]
+    (root, tree) = joinAll (0 :: Int) [x k | k <- [width * (steps - 1) .. width * steps - 1]]
+    joinAll k = \case
+      [n] -> (n, [])
+      n1 : n2 : ns ->
+        let t = "t" <> tshow k
+            (r, more) = joinAll (k + 1) (ns <> [t])
+         in (r, assign t wide (HBin BXor (ref n1) (ref n2)) : more)
+      [] -> ("aw", [])
 
 -- | 16 chains of 4095 nets of 8 bits, interleaved so that net @k@ reads net
 -- @k - 16@, then a tree of xors joining their ends: 65535 nets in 66

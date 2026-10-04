@@ -19,7 +19,7 @@ module Gin.Backend.VerilogSpec
   , allNetlists
   ) where
 
-import Control.Monad (forM_)
+import Control.Monad (forM_, when)
 import Data.Bits (complement, shiftL, shiftR, xor, (.&.), (.|.))
 import Data.ByteString qualified as ByteString
 import Data.Char (isAsciiLower, isDigit, isHexDigit)
@@ -37,10 +37,14 @@ import Gin.Core.Type (maxWidth)
 import Gin.Examples
 import Gin.Netlist.Types
 import Gin.TestUtil
+import Gin.Limits (maxVectorBits)
+import Gin.Netlist.BuildSpec (withSpecCounter)
 import Gin.Vectors (Cycle (..), Vectors (..), maxCycles)
 import Numeric.Natural (Natural)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
+import System.Process (CreateProcess (..), proc, readCreateProcessWithExitCode)
+import System.Timeout (timeout)
 import Test.Hspec
 
 ----------------------------------------------------------------------
@@ -142,6 +146,18 @@ familySpec fl = do
     it "[v-coverage] prints every constant operand as a sized literal" $
       forM_ checkedNetlists $ \m ->
         concatMap unsizedNumbers (codeLines (render m)) `shouldBe` []
+    it "[nl-header-spec] the built counter with spec definitions matches its golden file" $
+      withSpecCounter (goldenText (golden "counter_spec") . render)
+    it "[nl-header-spec] emits every header line, spec lines and hash included, as a comment" $
+      withSpecCounter $ \m -> do
+        let ls = Text.lines (render m)
+        filter ("// spec" `Text.isPrefixOf`) ls `shouldSatisfy` ((> 2) . length)
+        take (length (modHeader m)) ls `shouldBe` fmap ("// " <>) (modHeader m)
+    itWithTools lintTools "[nl-header-spec] the counter with spec definitions lints clean" $
+      withSpecCounter (lintClean fl)
+    itWithTools simTools "[nl-header-spec] the counter with spec definitions simulates" $
+      withSpecCounter $ \m ->
+        simulate fl m counterVectors >>= shouldPass (length (vecCycles counterVectors))
   describe "testbench files" $ do
     forM_ examples $ \(name, m, vs) ->
       it (name <> " testbench matches its golden file") $
@@ -173,7 +189,12 @@ familySpec fl = do
       itWithTools simTools (tag "tb-pass" <> " " <> name <> " testbench prints GIN-PASS") $
         simulate fl m vs >>= shouldPass (length (vecCycles vs))
     itWithTools simTools (tag "tb-pass" <> " a testbench with the most cycles allowed passes") $
-      simulate fl delayNetlist delayVectors >>= shouldPass maxCycles
+      simulateWithin slowToolSeconds fl delayNetlist delayVectors >>= shouldPass maxCycles
+    it "[v-robust] the most-cycles testbench reaches the payload limit with a generous time bound" $ do
+      length (vecCycles delayVectors) `shouldBe` maxCycles
+      payloadBits delayVectors `shouldSatisfy` (> maxVectorBits `div` 2)
+      payloadBits delayVectors `shouldSatisfy` (<= maxVectorBits)
+      slowToolSeconds `shouldSatisfy` (>= 4 * 300)
   describe "failing testbenches" $ do
     itWithTools simTools "[v-tb-fail] corrupted expected values print mismatches and GIN-FAIL" $ do
       let vs = corruptOutput 5 (VBV 8 9) (corruptOutput 3 (VBV 8 7) counterVectors)
@@ -217,6 +238,27 @@ familySpec fl = do
       result <- simulate fl counterNetlist vs
       markerLines result
         `shouldBe` ["GIN-MISMATCH cycle=4 port=count expected=none got=03", "GIN-FAIL mismatches=1"]
+    it "[backend-minors] reports nothing extra for well-formed vectors" $
+      forM_ examples $ \(_, m, vs) ->
+        testbench m vs `shouldNotSatisfy` \t -> any (`Text.isInfixOf` t) ["extra-", "=invalid"]
+    itWithTools simTools "[backend-minors] extra input and output values count as mismatches" $ do
+      let vs =
+            editRow 5 (\c -> c {cycOutputs = cycOutputs c <> [VBV 8 0, VBool True]}) $
+              editRow 2 (\c -> c {cycInputs = cycInputs c <> [VBool True]}) counterVectors
+      result <- simulate fl counterNetlist vs
+      markerLines result
+        `shouldBe` [ "GIN-MISMATCH cycle=2 extra-inputs=1"
+                   , "GIN-MISMATCH cycle=5 extra-outputs=2"
+                   , "GIN-FAIL mismatches=2"
+                   ]
+    itWithTools simTools "[backend-minors] an ill-typed value of an unread input is a mismatch" $ do
+      let good = referenceVectors spareNetlist [spareRow k | k <- [0 .. 5]]
+          bad = editRow 3 (\c -> c {cycInputs = zipWith badB [0 :: Int ..] (cycInputs c)}) good
+          badB i v = if i == 1 then VBV 8 1 else v
+      simulate fl spareNetlist good >>= shouldPass 6
+      result <- simulate fl spareNetlist bad
+      markerLines result
+        `shouldBe` ["GIN-MISMATCH cycle=3 port=b input=invalid", "GIN-FAIL mismatches=1"]
   describe "operator coverage" $ do
     itWithTools lintTools "[v-coverage] a netlist using every operator lints clean" $
       lintClean fl allOpsNetlist
@@ -348,13 +390,19 @@ verilatorDiagnostics :: Flavour -> Module -> Text -> IO [(Text, Maybe Int, Text)
 verilatorDiagnostics fl m design = withTempDir $ \dir -> do
   let file = designFile fl (unIdent (modName m))
   writeUtf8 (dir </> file) design
-  (_, out, err) <- runTool dir "verilator" (verilatorArgs fl file)
-  pure
-    [ diagnostic code (Text.drop 1 body)
-    | l <- Text.lines (out <> err)
-    , Just rest <- [Text.stripPrefix "%Warning-" l]
-    , let (code, body) = Text.breakOn ":" rest
-    ]
+  (exit, out, err) <- runTool dir "verilator" (verilatorArgs fl file)
+  let found =
+        [ diagnostic code (Text.drop 1 body)
+        | l <- Text.lines (out <> err)
+        , Just rest <- [Text.stripPrefix "%Warning-" l]
+        , let (code, body) = Text.breakOn ":" rest
+        ]
+  -- a run that failed without a single warning (a timeout, a crash) is a
+  -- tool failure, not a clean design: report it instead of returning none
+  when (exit /= ExitSuccess && null found) $
+    expectationFailure
+      ("verilator failed without warnings: " <> show exit <> "\n" <> Text.unpack (out <> err))
+  pure found
   where
     -- @<file>:<line>:<column>: <message>@
     diagnostic code body = case Text.splitOn ":" body of
@@ -371,13 +419,75 @@ simulate fl m vs =
     b = flBackend fl
 
 simulateText :: Flavour -> Text -> Text -> Text -> IO (ExitCode, Text, Text)
-simulateText fl name design bench = withTempDir $ \dir -> do
+simulateText = simulateTextWith runTool
+
+-- | 'simulate' with a per-tool time limit of the given number of seconds
+-- instead of the usual 300 s.
+--
+-- The testbench with the most cycles allowed compiles and runs in about
+-- 7 s on an idle machine, but under heavy load (many simulators and
+-- compilers sharing the host) it has hit the 300 s limit, which made the
+-- test fail without any fault in the testbench. It gets a limit long
+-- enough for a loaded machine; a real hang still fails, only later.
+simulateWithin :: Int -> Flavour -> Module -> Vectors -> IO (ExitCode, Text, Text)
+simulateWithin seconds fl m vs =
+  simulateTextWith
+    (runToolWithin seconds)
+    fl
+    (unIdent (modName m))
+    (backendRender b m)
+    (backendTestbench b m vs)
+  where
+    b = flBackend fl
+
+-- | The per-tool time limit, in seconds, of the slowest simulation test.
+slowToolSeconds :: Int
+slowToolSeconds = 1800
+
+simulateTextWith
+  :: (FilePath -> String -> [String] -> IO (ExitCode, Text, Text))
+  -> Flavour
+  -> Text
+  -> Text
+  -> Text
+  -> IO (ExitCode, Text, Text)
+simulateTextWith run fl name design bench = withTempDir $ \dir -> do
   writeUtf8 (dir </> designFile fl name) design
   writeUtf8 (dir </> benchFile fl name) bench
   compiled <-
-    runTool dir "iverilog" [flIcarusStd fl, "-o", "tb.vvp", designFile fl name, benchFile fl name]
+    run dir "iverilog" [flIcarusStd fl, "-o", "tb.vvp", designFile fl name, benchFile fl name]
   combined compiled `shouldBe` (ExitSuccess, "")
-  runTool dir "vvp" ["-n", "tb.vvp"]
+  run dir "vvp" ["-n", "tb.vvp"]
+
+-- | Run a tool (no shell) in a working directory with a limit of the given
+-- number of seconds; on timeout the tool is killed and the result is exit
+-- code 124 with empty output.
+runToolWithin :: Int -> FilePath -> String -> [String] -> IO (ExitCode, Text, Text)
+runToolWithin seconds cwd' exe args =
+  timeout (seconds * 1000000) (readCreateProcessWithExitCode (proc exe args) {cwd = Just cwd'} "")
+    >>= \case
+      Just (code, out, err) -> pure (code, Text.pack out, Text.pack err)
+      Nothing -> pure (ExitFailure 124, "", Text.pack ("timeout: " <> exe))
+
+-- | Payload bits of a vector set: cycles times the widths of all ports.
+payloadBits :: Vectors -> Integer
+payloadBits vs =
+  fromIntegral (length (vecCycles vs))
+    * sum [toInteger (width (portTy p)) | p <- vecInputs vs <> vecOutputs vs]
+  where
+    width = \case
+      TBitVec w -> w
+      _ -> 1
+
+-- | Change cycle @t@ of a vector set.
+editRow :: Int -> (Cycle -> Cycle) -> Vectors -> Vectors
+editRow t f vs = vs {vecCycles = zipWith edit [0 :: Int ..] (vecCycles vs)}
+  where
+    edit i c = if i == t then f c else c
+
+-- | Row @k@ of inputs for 'spareNetlist'.
+spareRow :: Integer -> [Value]
+spareRow k = [VBV 8 (k * 37 `mod` 256), VBool (odd k), VBV 8 (k * 11), VBV 8 (255 - k)]
 
 combined :: (ExitCode, Text, Text) -> (ExitCode, Text)
 combined (code, out, err) = (code, out <> err)

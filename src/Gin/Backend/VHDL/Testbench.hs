@@ -136,7 +136,11 @@ tshow = Text.pack . show
 -- module's by name, order and type. The module's ports name and type every
 -- field; a value of the wrong shape is coerced to the port's type (a vector
 -- to its least significant bit, a bit to 0 or 1) and missing values count
--- as zero, so the function stays total.
+-- as zero, so the function stays total. A malformed vector set still never
+-- passes: every missing, ill-typed or extra value in a row counts as a
+-- mismatch, reported in one line before the first cycle
+-- (@GIN-MISMATCH malformed-values=\<k\> first-cycle=\<t\>@), as an unread
+-- input would otherwise hide a wrong value.
 renderTestbench :: Module -> Vectors -> Text
 renderTestbench m vs =
   Text.unlines $
@@ -147,7 +151,7 @@ renderTestbench m vs =
       <> ["architecture gin_tb of " <> tb <> " is"]
       <> indent (table m rows <> signalDecls m)
       <> ["begin"]
-      <> indent (instantiation m <> [""] <> stimulus m (length rows))
+      <> indent (instantiation m <> [""] <> stimulus m (length rows) (malformed m rows))
       <> ["end architecture gin_tb;"]
   where
     tb = unIdent (modName m) <> "_tb"
@@ -236,9 +240,28 @@ instantiation m =
     formals =
       [modClock m, modReset m] <> fmap netName (modInputs m <> outputNets m)
 
--- | The process that drives the protocol.
-stimulus :: Module -> Int -> [Text]
-stimulus m n =
+-- | The number of row values that do not fit the module's ports (missing,
+-- ill-typed or extra, among inputs and outputs) and the first cycle
+-- holding one, if any.
+malformed :: Module -> [Cycle] -> Maybe (Int, Int)
+malformed m rows = case filter ((> 0) . snd) (zip [0 ..] counts) of
+  [] -> Nothing
+  (first, _) : _ -> Just (sum counts, first)
+  where
+    counts = fmap misfits rows
+    misfits c = mismatched (modInputs m) (cycInputs c) + mismatched (outputNets m) (cycOutputs c)
+    mismatched ns vals =
+      length (filter not (zipWith fits (fmap netType ns) vals))
+        + abs (length ns - length vals)
+    fits ty = \case
+      VBool _ -> ty == HBit
+      VBV w x -> ty == HVec w && x >= 0 && x < 2 ^ w
+      VTuple _ -> False
+
+-- | The process that drives the protocol for @n@ cycles, counting the
+-- malformed values (see 'malformed') as mismatches up front.
+stimulus :: Module -> Int -> Maybe (Int, Int) -> [Text]
+stimulus m n bad =
   [ "gin_stimulus : process"
   , "  variable gin_line : line;"
   , "  variable gin_mismatches : natural := 0;"
@@ -262,8 +285,16 @@ stimulus m n =
            , clk <> " <= '0';"
            , rst <> " <= '0';"
            ]
+        <> maybe [] reportMalformed bad
         <> cycles
         <> verdict
+    reportMalformed (k, first) =
+      [ "-- Missing, ill-typed or extra values in the vectors: each is a mismatch."
+      , "gin_mismatches := " <> tshow k <> ";"
+      , writeText
+          (mismatchMarker <> " malformed-values=" <> tshow k <> " first-cycle=" <> tshow first)
+      , "writeline(output, gin_line);"
+      ]
     cycles
       | n <= 0 = []
       | otherwise =

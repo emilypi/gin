@@ -52,9 +52,13 @@ data Dialect
 --
 -- Precondition (checked by the driver): the vectors' ports equal the
 -- module's by name, order and type. Ports are taken from the module and
--- row values by position; a missing or ill-typed expected value is
--- reported as a mismatch (@expected=none@) and a missing or ill-typed
--- input value is driven as all X, so a malformed vector set never passes.
+-- row values by position, and every value that does not fit counts as a
+-- mismatch in its cycle, so a malformed vector set never passes: a missing
+-- or ill-typed expected value is reported as @expected=none@; a missing or
+-- ill-typed input value is driven as all X and reported as
+-- @input=invalid@ (an input the design never reads would not pass the X
+-- on); and values beyond the ports are reported as @extra-inputs=\<k\>@
+-- or @extra-outputs=\<k\>@.
 renderTestbench :: Dialect -> Module -> Vectors -> Text
 renderTestbench dialect m vs =
   Text.unlines $
@@ -101,10 +105,22 @@ renderTestbench dialect m vs =
         <> ["end"]
     cycleLines t c =
       ["// cycle " <> showInt t]
-        <> zipWith drive (modInputs m) (rowBits (modInputs m) (cycInputs c))
+        <> zipWith drive (modInputs m) inputBits
+        <> concat [report t (invalid n) | (n, Nothing) <- zip (modInputs m) inputBits]
+        <> extra t "extra-inputs" (length (cycInputs c) - length (modInputs m))
+        <> extra t "extra-outputs" (length (cycOutputs c) - length outs)
         <> ["#1;"]
         <> concat (zipWith (check t) outs (rowBits outs (cycOutputs c)))
         <> ["#4 " <> clk <> " = 1'b1;", "#5 " <> clk <> " = 1'b0;"]
+      where
+        inputBits = rowBits (modInputs m) (cycInputs c)
+        invalid n = "port=" <> unIdent (netName n) <> " input=invalid"
+    -- a mismatch the generator found in the row itself
+    report t what =
+      [ "$display(\"" <> mismatchMarker <> " cycle=" <> showInt t <> " " <> what <> "\");"
+      , "gin_mismatches = gin_mismatches + 1;"
+      ]
+    extra t what k = if k > 0 then report t (what <> "=" <> showInt k) else []
     drive n bits =
       unIdent (netName n) <> " = " <> maybe (unknown ty) (valueLiteral ty) bits <> ";"
       where

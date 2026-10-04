@@ -78,9 +78,12 @@ partial def prettyAt (width indent col : Nat) (d : JsonDoc) : String :=
     "{\n" ++ ",\n".intercalate items ++ "\n" ++ close ++ "}"
   | _ => flat
 
-/-- The text of a JSON file: pretty-printed within 100 columns, ending in a
-newline. -/
-def render (d : JsonDoc) : String := prettyAt 100 0 0 d ++ "\n"
+/-- The width JSON files are pretty-printed within. -/
+def width : Nat := 100
+
+/-- The text of a JSON file: pretty-printed within `width` columns, ending
+in a newline. -/
+def render (d : JsonDoc) : String := prettyAt width 0 0 d ++ "\n"
 
 /-- Nesting depth of arrays and objects: 0 for a scalar, and one more than
 the deepest element for an array or object, so `[]` and `[[1]]` have depths

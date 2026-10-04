@@ -11,10 +11,15 @@
 # without kernel checking, e.g. under debug.skipKernelTC), and then writes
 # examples/<name>/<name>.gin.json and <name>.vectors.json for each example.
 # Every export runs gin-check-export first and stops if it fails:
-# gin-export links the designs, whose initializers run as soon as it starts,
-# so it never starts for circuits the checker, which links no design,
-# refuses. A second export into a temporary directory must reproduce the
-# files byte for byte.
+# gin-export links the design code, which runs as soon as it starts
+# (initializers and closed terms of every linked module), so it never starts
+# for circuits the checker, which links no design, refuses. The checker's
+# certificate is the authority: gin-export writes into a temporary
+# directory, and its output is refused unless every certificate in it is,
+# byte for byte, the one gin-check-export computed; only then is it copied
+# into examples/. Linked design code can still write any file the user can,
+# so export designs you did not write only in a sandbox (lean/README.md,
+# "Trust"). A second export must reproduce the files byte for byte.
 #
 # --check-rejects builds the reject fixtures under lean/GinReject, which are
 # not part of the default build, and checks that each one is refused for its
@@ -23,8 +28,8 @@
 # without the refinement shape, a module initializer, a module with code
 # that may run IO when gin-export starts (@[implemented_by], an unsafe
 # closed term, foreign code), a translation that would run compiled code
-# (Lean.reduceBool), or a design that is not a reject fixture but loads
-# one. The
+# (Lean.reduceBool), a design that is not a reject fixture but loads one,
+# or a certificate in gin-export's output other than the checker's. The
 # unexpander fixture is not refused; its check module verifies that the
 # certificate shows the real specification. Nothing under examples/ may
 # change.
@@ -80,16 +85,65 @@ loaded_modules() {
   lake -d lean exe gin-check-export --list-modules "$@"
 }
 
+# check_certificates CERTS OUT NAME...: for each named circuit,
+# OUT/NAME/NAME.gin.json ends, byte for byte, in CERTS/NAME.certificate,
+# the certificate as gin-check-export rendered it (the last member of the
+# top-level object and the closing brace), and no object in the file has a
+# key twice, so the file holds no other certificate that a reader could
+# take instead.
+check_certificates() {
+  local certs=$1 out=$2 n
+  shift 2
+  for n in "$@"; do
+    python3 - "$certs/$n.certificate" "$out/$n/$n.gin.json" <<'PY' || return 1
+import json, sys
+
+cert_path, gin_path = sys.argv[1], sys.argv[2]
+
+def refuse(why):
+    sys.exit(f"export-examples: {gin_path}: {why}; refusing the export")
+
+def unique_keys(pairs):
+    keys = [k for k, _ in pairs]
+    for k in keys:
+        if keys.count(k) > 1:
+            refuse(f"the key {k!r} occurs twice in one object")
+    return dict(pairs)
+
+with open(cert_path, "rb") as f:
+    tail = f.read()
+with open(gin_path, "rb") as f:
+    data = f.read()
+if not (tail.startswith(b',\n  "certificate": ') and tail.endswith(b"\n}\n")):
+    refuse(f"{cert_path} is not a certificate written by gin-check-export")
+if not data.endswith(tail):
+    refuse("the certificate is not the one gin-check-export computed")
+try:
+    doc = json.loads(data.decode("utf-8"), object_pairs_hook=unique_keys)
+except ValueError as err:
+    refuse(f"not JSON: {err}")
+if not isinstance(doc, dict):
+    refuse("not a JSON object")
+PY
+  done
+}
+
 # export_with EXE ROOT OUT NAME...: export the named circuits into OUT with
 # the exporter EXE, whose root module is ROOT, only after gin-check-export
-# has accepted them and the modules of ROOT. The checker links no design and
-# runs none of their code; EXE runs the initializers of every design it
-# links as soon as it starts, so it must not start before the checks pass.
+# has accepted them and the modules of ROOT, and accept the export only if
+# every certificate EXE wrote is, byte for byte, the one gin-check-export
+# computed. The checker links no design and runs none of their code; EXE
+# links the designs, and their code runs as soon as it starts (initializers,
+# closed terms), so it must not start before the checks pass, and its
+# certificates are only accepted when they match the checker's.
 export_with() {
-  local exe=$1 root=$2 out=$3
+  local exe=$1 root=$2 out=$3 certs
   shift 3
-  lake -d lean exe gin-check-export --exporter "$root" "$@" >/dev/null || return 1
-  lake -d lean exe "$exe" --out "$out" "$@"
+  certs=$(mktemp -d "$tmp/certificates.XXXXXX")
+  lake -d lean exe gin-check-export --exporter "$root" --certificates "$certs" "$@" >/dev/null ||
+    return 1
+  lake -d lean exe "$exe" --out "$out" "$@" || return 1
+  check_certificates "$certs" "$out" "$@"
 }
 
 # env_export_with VAR=VALUE EXE ROOT OUT NAME...: export_with, with VAR set
@@ -151,11 +205,18 @@ export_examples() {
   mods=($(loaded_modules "${examples[@]}")) || die "gin-check-export --list-modules ${examples[*]} failed"
   [ "${#mods[@]}" -gt 0 ] || die "gin-check-export --list-modules ${examples[*]} listed no modules"
   replay "$tmp/replay" "${mods[@]}"
-  export_to examples "${examples[@]}" || die "the export of ${examples[*]} failed"
-  # [lean-determinism] a second export reproduces every file byte for byte
-  export_to "$tmp" "${examples[@]}" >/dev/null || die "the second export of ${examples[*]} failed"
+  # [lean-certificate-authority] exported into a temporary directory and
+  # copied into examples/ only once every certificate matches the checker's
+  export_to "$tmp/export" "${examples[@]}" || die "the export of ${examples[*]} failed"
   for n in "${examples[@]}"; do
-    diff -r "$tmp/$n" "examples/$n" >/dev/null || die "the export of $n is not deterministic"
+    mkdir -p "examples/$n"
+    cp "$tmp/export/$n/$n.gin.json" "$tmp/export/$n/$n.vectors.json" "examples/$n/"
+  done
+  # [lean-determinism] a second export reproduces every file byte for byte
+  export_to "$tmp/second" "${examples[@]}" >/dev/null ||
+    die "the second export of ${examples[*]} failed"
+  for n in "${examples[@]}"; do
+    diff -r "$tmp/second/$n" "examples/$n" >/dev/null || die "the export of $n is not deterministic"
   done
   echo "export-examples: exported ${examples[*]} (kernel-checked ${mods[*]})"
 }
@@ -249,6 +310,32 @@ check_stale_olean() {
   echo "export-examples: a stale .olean is not replayed"
 }
 
+# gin-export-forged changes the certificates it wrote after exporting, as
+# code linked into gin-export that gin-check-export does not see could; the
+# export pipeline refuses its output, whose certificate is not the one the
+# checker computed. A file that ends in the checker's certificate but holds
+# a second, forged certificate member earlier is refused too.
+check_forged_certificate() {
+  local out
+  out=$(lake -d lean build gin-export-forged 2>&1) || die "gin-export-forged does not build:"$'\n'"$out"
+  expect_refusal "the export of" counter "the certificate is not the one gin-check-export computed" \
+    "a certificate other than the checker's" \
+    export_with gin-export-forged GinExport "$tmp/forged" counter
+  grep -F -- "List.range (t + 1)" "$tmp/forged/counter/counter.gin.json" >/dev/null ||
+    die "gin-export-forged did not change the certificate it wrote"
+  export_to "$tmp/duplicate" counter >/dev/null || die "the export of counter failed"
+  lake -d lean exe gin-check-export --certificates "$tmp/duplicate-certificates" counter >/dev/null ||
+    die "gin-check-export counter failed"
+  check_certificates "$tmp/duplicate-certificates" "$tmp/duplicate" counter ||
+    die "the certificate of an honest export of counter does not match the checker's"
+  sed -i.bak '1s/^{$/{"certificate": {"theorem": "Counter.counter_correct", "statement": "True"},/' \
+    "$tmp/duplicate/counter/counter.gin.json"
+  expect_refusal "the certificate check of" counter "the key 'certificate' occurs twice in one object" \
+    "a second certificate member" \
+    check_certificates "$tmp/duplicate-certificates" "$tmp/duplicate" counter
+  echo "export-examples: certificates other than the checker's refused"
+}
+
 check_rejects() {
   # [lean-rejects] every fixture builds, is refused for its own reason, and
   # nothing under examples/ changes
@@ -275,6 +362,7 @@ check_rejects() {
     "an unsafe closed term, which would run when gin-export starts"
   check_reject GinReject.BadExtern bad_extern "BadExtern.foreign calls foreign code (@[extern])" \
     "foreign code called by a closed term, which would run when gin-export starts"
+  check_forged_certificate
   check_reject GinReject.BadReduceBool bad_reduce_bool \
     "BadReduceBool.hooked refers to Lean.reduceBool" "a translation that would run compiled code"
   # [lean-printer] not refused: the certificate names specR and lists its body

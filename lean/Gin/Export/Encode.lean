@@ -66,7 +66,18 @@ partial def Expr.toDoc : Expr → JsonDoc
 /-- Encode a port. -/
 def Port.toDoc (p : Port) : JsonDoc := obj [("name", str p.name), ("type", p.type.toDoc)]
 
-/-- Encode a program file. -/
+/-- Encode a certificate. -/
+def Certificate.toDoc (c : Certificate) : JsonDoc :=
+  obj [
+    ("theorem", str c.theorem_),
+    ("statement", str c.statement),
+    ("axioms", arr (c.axioms.map str)),
+    ("implAxioms", arr (c.implAxioms.map str)),
+    ("specDefinitions", arr (c.specDefinitions.map fun d =>
+      obj [("name", str d.name), ("body", str d.body)]))]
+
+/-- Encode a program file. Its last member is the certificate, so that the
+file ends in `certificateTail`. -/
 def Program.toDoc (p : Program) : JsonDoc :=
   obj [
     ("format", str irFormat),
@@ -79,13 +90,7 @@ def Program.toDoc (p : Program) : JsonDoc :=
       ("def", str p.top.def_)]),
     ("defs", arr (p.defs.map fun d =>
       obj [("name", str d.name), ("type", d.type.toDoc), ("body", d.body.toDoc)])),
-    ("certificate", obj [
-      ("theorem", str p.certificate.theorem_),
-      ("statement", str p.certificate.statement),
-      ("axioms", arr (p.certificate.axioms.map str)),
-      ("implAxioms", arr (p.certificate.implAxioms.map str)),
-      ("specDefinitions", arr (p.certificate.specDefinitions.map fun d =>
-        obj [("name", str d.name), ("body", str d.body)]))])]
+    ("certificate", p.certificate.toDoc)]
 
 /-- Encode a test-vector file. -/
 def Vectors.toDoc (v : Vectors) : JsonDoc :=
@@ -115,5 +120,16 @@ def renderFile (doc : JsonDoc) : Except String String := do
   let text := doc.render
   checkLimits doc text.utf8ByteSize
   return text
+
+/-- The last bytes of every program file with certificate `c` that
+`renderFile` writes: the certificate, the last member of the top-level
+object, laid out as `JsonDoc.render` lays it out there, and the closing
+brace. `gin-check-export --certificates`, which links no design, writes it
+for each circuit, and `scripts/export-examples.sh` refuses a `.gin.json`
+file from `gin-export`, which does link designs, unless the file ends in
+exactly these bytes (`GinTest/Json.lean` checks the layout). -/
+def certificateTail (c : Certificate) : String :=
+  let key := JsonDoc.quote "certificate" ++ ": "
+  ",\n  " ++ key ++ JsonDoc.prettyAt JsonDoc.width 2 (2 + key.length) c.toDoc ++ "\n}\n"
 
 end Gin.Export

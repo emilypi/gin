@@ -134,6 +134,23 @@ def programWithPeriod (period : Nat) : Program :=
     | none => false
   | _ => false
 
+/-- `programWithPeriod 10000` with a certificate too long for one line. -/
+def programWithLongCertificate : Program :=
+  let p := programWithPeriod 10000
+  { p with certificate := { p.certificate with
+      specDefinitions := (List.range 4).map fun i =>
+        { name := s!"M.s{i}", body := s!"M.s{i} : Nat := {"".pushn '1' 60}" } } }
+
+-- [lean-certificate-authority] a program file ends in the certificate tail
+-- that `gin-check-export --certificates` writes, whether the certificate
+-- definitions fit on one line or not
+#guard (programWithPeriod 10000).toDoc.render.endsWith
+  (certificateTail (programWithPeriod 10000).certificate)
+#guard programWithLongCertificate.toDoc.render.endsWith
+  (certificateTail programWithLongCertificate.certificate)
+#guard (certificateTail programWithLongCertificate.certificate).startsWith
+  ",\n  \"certificate\": {\n    \"theorem\": \"M.m_correct\",\n"
+
 /-- `[[…[null]…]]`, `n` arrays deep. -/
 def nested (n : Nat) : JsonDoc := n.repeat (fun d => .arr [d]) .null
 

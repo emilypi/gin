@@ -14,10 +14,15 @@ project modules that register IO initializers or are named like toolchain
 modules, in the modules the named circuits load and in those `gin-export`
 links (its root module, `--exporter`), and then checks and renders every
 certificate; `collectAxioms` walks the proofs themselves instead of
-trusting axiom summaries stored by the modules.
+trusting axiom summaries stored by the modules. With `--certificates DIR`
+it writes each certificate as it must end the circuit's `.gin.json` file
+(`certificateTail`); the export script refuses a file from `gin-export`
+that does not end in exactly those bytes, so the checker's certificate,
+not the one `gin-export` wrote, is the authority.
 
 `gin-export` links the designs, to compute vectors by running them. Their
-`initialize` declarations run when it starts, before any check, so
+code runs when it starts, before any check (the initializers and closed
+terms of every linked module), so
 `scripts/export-examples.sh` runs it only after `gin-check-export` has
 passed. It repeats the same checks (defence in depth), then imports the
 modules again with their extensions, which the translator needs (instances,
@@ -38,12 +43,15 @@ def usage : String :=
   "Writes DIR/NAME/NAME.gin.json and DIR/NAME/NAME.vectors.json for each named circuit\n" ++
   "(default: the shipped examples; DIR defaults to examples). Run it through `lake exe`\n" ++
   "so that the Lean search path is set, and only after `lake exe gin-check-export` has\n" ++
-  "accepted the same circuits: the designs linked into gin-export run their initializers\n" ++
-  "when it starts. Nothing is written unless every named circuit exports successfully."
+  "accepted the same circuits: the code of the designs linked into gin-export runs when it\n" ++
+  "starts, and the certificates it writes are trusted only when they equal the checker's\n" ++
+  "(scripts/export-examples.sh). Nothing is written unless every named circuit exports\n" ++
+  "successfully."
 
 /-- Command-line help of `gin-check-export`. -/
 def checkUsage : String :=
-  "usage: lake exe gin-check-export [--exporter MODULE] [--list-modules] [NAME ...]\n\n" ++
+  "usage: lake exe gin-check-export [--exporter MODULE] [--list-modules] [--certificates DIR]\n" ++
+  "                                 [NAME ...]\n\n" ++
   "Checks, without running any code of a design, what gin-export checks before it\n" ++
   "translates the named circuits (default: the shipped examples): the modules they load\n" ++
   "and the modules of the exporter MODULE (default GinExport, the root of gin-export)\n" ++
@@ -52,7 +60,10 @@ def checkUsage : String :=
   "the shape check. Exit code 0 when all pass.\n\n" ++
   "--list-modules prints, after those checks, the modules outside the Lean toolchain\n" ++
   "that the circuits and the exporter load, one per line: the modules the kernel replay\n" ++
-  "(scripts/export-examples.sh) must check."
+  "(scripts/export-examples.sh) must check.\n\n" ++
+  "--certificates DIR writes DIR/NAME.certificate for each circuit: the bytes its\n" ++
+  "NAME.gin.json must end in, the certificate rendered here, where no design runs.\n" ++
+  "scripts/export-examples.sh refuses an export by gin-export that does not end in them."
 
 /-- Parsed command line. -/
 structure CliOptions where
@@ -67,6 +78,9 @@ structure CliOptions where
   /-- Root module of the exporter whose linked modules are checked
   (`gin-check-export`). -/
   exporter : Name := `GinExport
+  /-- Where to write the certificate tail of each circuit
+  (`gin-check-export`). -/
+  certificates : Option FilePath := none
 
 /-- Parse the command line; `check` selects the options of
 `gin-check-export`, otherwise those of `gin-export`. -/
@@ -82,6 +96,11 @@ def parseArgs (check : Bool) : List String → CliOptions → Except String CliO
     if check then parseArgs check rest { o with exporter := m.toName }
     else .error "unknown option --exporter"
   | ["--exporter"], _ => .error "--exporter needs a module name"
+  | "--certificates" :: dir :: rest, o =>
+    if check then parseArgs check rest { o with certificates := some dir }
+    else .error "unknown option --certificates (see gin-check-export)"
+  | ["--certificates"], _ =>
+    .error (if check then "--certificates needs a directory" else "unknown option --certificates")
   | "--help" :: rest, o | "-h" :: rest, o => parseArgs check rest { o with help := true }
   | a :: rest, o =>
     if a.startsWith "-" then .error s!"unknown option {a}"
@@ -192,7 +211,11 @@ def checkMain (table : List Entry) (defaults : List String) (args : List String)
     | .ok r => pure r
     | .error code => return code
   try
-    let (data, _) ← gate entries #[opts.exporter]
+    let (data, certificates) ← gate entries #[opts.exporter]
+    if let some dir := opts.certificates then
+      IO.FS.createDirAll dir
+      for e in entries, c in certificates do
+        writeAtomically (dir / s!"{e.name}.certificate") (certificateTail c)
     if opts.listModules then
       for m in data.header.moduleNames do
         unless isToolchainModule m do

@@ -17,7 +17,7 @@ open Lean Meta
 namespace Gin.Export
 
 /-- Number of cycles of every exported vector file. -/
-def vectorCycles : Nat := 64
+def vectorCycles : Nat := 1024
 
 /-- Upper bound on cycles × summed port widths of a vector file. -/
 def maxVectorPayloadBits : Nat := 2 ^ 18
@@ -47,6 +47,8 @@ structure Entry where
   vectors : Option VectorSource
   /-- Seed of the pseudo-random inputs. -/
   seed : UInt64 := 1
+  /-- Number of vector cycles; every exported circuit uses `vectorCycles`. -/
+  cycles : Nat := vectorCycles
 
 /-- Producer recorded in every file. -/
 def producer : Producer := { tool := "gin-export", leanVersion := Lean.versionString }
@@ -139,7 +141,7 @@ def exportVectors (e : Entry) (top : Top) : Except String Vectors := do
   let some src := e.vectors | throw s!"{e.name} has no vector source"
   unless src.inputs == top.inputs.map (·.type) && src.outputs == top.outputs.map (·.type) do
     throw s!"the vector source of {e.name} does not match the port types of {e.top}"
-  let cycles := src.rows e.seed vectorCycles
+  let cycles := src.rows e.seed e.cycles
   for c in cycles do
     unless c.inputs.map (·.ty) == src.inputs && c.outputs.map (·.ty) == src.outputs do
       throw s!"a vector row of {e.name} does not match its port types"

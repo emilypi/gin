@@ -4,7 +4,7 @@ import GinTest.Util
 
 /-!
 The shipped export table: each example certifies, translates to IR that
-agrees with its Lean vectors on all 64 cycles, and has the interface the
+agrees with its Lean vectors on all 1024 cycles, and has the interface the
 rest of gin expects. Also covers the top-entity checks.
 -/
 
@@ -34,7 +34,7 @@ run_meta do
     match IrEval.agrees p.top p.defs v with
     | .ok () => pure ()
     | .error msg => throwError "{n}: {msg}"
-    unless v.cycles.size == 64 && p.top.name == n && v.top == n do
+    unless v.cycles.size == 1024 && vectorCycles == 1024 && p.top.name == n && v.top == n do
       throwError "{n}: wrong name or cycle count"
     unless p.top.domain == { name := "System", periodPs := 10000 } do
       throwError "{n}: wrong domain"
@@ -57,23 +57,29 @@ run_meta do
     [("b", .bool)] [("hit", .bool)]
   expect "mac" ["Mac.mac"] "Mac.mac_correct" [("x", .bv 8), ("y", .bv 8)] [("acc", .bv 16)]
 
--- The seeded inputs exercise the interesting behaviour: both enable values,
--- several detector hits including an overlapping one, and accumulator
--- wrap-around.
+-- The biased inputs exercise the interesting behaviour: the counter wraps
+-- past 255 and is also held, the detector sees both isolated and overlapping
+-- `101` patterns, and the accumulator overflows.
 run_meta do
   let rows (n : String) : MetaM (Array Cycle) := do
     let e ← GinTest.Examples.entry n
     return (← ofExcept (exportVectors e (← exportProgram e).top)).cycles
   let counter ← rows "counter"
-  unless counter.any (·.inputs == [.bool true]) && counter.any (·.inputs == [.bool false]) do
-    throwError "counter inputs are constant"
+  unless counter.any (·.inputs == [.bool false]) do
+    throwError "the counter enable is never low"
+  let count := counter.map fun c => match c.outputs with | [.bv _ v] => v | _ => 0
+  unless (List.range 1023).any fun t => count[t]! == 255 && count[t + 1]! == 0 do
+    throwError "the counter never wraps past 255"
   let detector ← rows "detector"
-  let hits := (List.range 64).filter fun t => detector[t]!.outputs == [.bool true]
-  unless hits.length ≥ 3 && (hits.zip hits.tail).any (fun (a, b) => b == a + 2) do
-    throwError "detector hits {hits}: expected at least three, two of them overlapping"
+  let hits := (List.range 1024).filter fun t => detector[t]!.outputs == [.bool true]
+  unless (hits.zip hits.tail).any (fun (a, b) => b == a + 2) do
+    throwError "detector hits {hits}: no overlapping pair"
+  let isolated := hits.filter fun t => hits.all fun u => u == t || u + 2 < t || t + 2 < u
+  unless isolated.length ≥ 3 do
+    throwError "detector hits {hits}: fewer than three isolated hits"
   let acc := (← rows "mac").map fun c => match c.outputs with | [.bv _ v] => v | _ => 0
-  unless (List.range 63).any fun t => acc[t + 1]! < acc[t]! do
-    throwError "the accumulator never wraps around"
+  unless ((List.range 1023).filter fun t => acc[t + 1]! < acc[t]!).length ≥ 100 do
+    throwError "the accumulator rarely wraps around"
 
 -- Hardware identifiers.
 #guard isLegalIdent "counter" && isLegalIdent "a1_b2" && isLegalIdent "x"

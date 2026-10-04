@@ -13,11 +13,12 @@ open Lean Meta Gin.Export
 namespace GinTest
 
 /-- An entry for a test circuit. Its theorem is never looked at by
-`translateTop`. -/
+`translateTop`. Test circuits have wide ports, so they run for 64 cycles
+rather than `vectorCycles`. -/
 def testEntry (top : Name) (inputs outputs : List String) (src : VectorSource)
     (defs : List Name := [top]) (seed : UInt64 := 7) : Entry :=
   { name := "dut", module := .anonymous, top, defs, theorem_ := .anonymous,
-    inputs, outputs, vectors := some src, seed }
+    inputs, outputs, vectors := some src, seed, cycles := 64 }
 
 /-- Translate an entry, compute its vectors by running the Lean definition,
 and check that the reference evaluator agrees with them on every cycle. -/

@@ -22,17 +22,17 @@ def table : List Entry := [
     top := ``Counter.counter, defs := [``Counter.counter]
     theorem_ := ``Counter.counter_correct
     inputs := ["en"], outputs := ["count"]
-    vectors := some (.of1 Counter.counter), seed := 1 },
+    vectors := some (.of1 Counter.counter enableRuns), seed := 1 },
   { name := "detector", module := `Gin
     top := ``Detector.detector, defs := [``Detector.step, ``Detector.detector]
     theorem_ := ``Detector.detector_correct
     inputs := ["b"], outputs := ["hit"]
-    vectors := some (.of1 Detector.detector), seed := 3 },
+    vectors := some (.of1 Detector.detector patternBits), seed := 3 },
   { name := "mac", module := `Gin
     top := ``Mac.mac, defs := [``Mac.mac]
     theorem_ := ``Mac.mac_correct
     inputs := ["x", "y"], outputs := ["acc"]
-    vectors := some (.of2 Mac.mac), seed := 2 },
+    vectors := some (.of2 Mac.mac largeOperands), seed := 2 },
   { name := "bad", module := `GinReject.Bad
     top := `Bad.bad, defs := [`Bad.bad]
     theorem_ := `Bad.bad_correct

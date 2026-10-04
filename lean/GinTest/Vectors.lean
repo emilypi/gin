@@ -39,4 +39,20 @@ def twoOutputs (b : Signal System Bool) : Signal System (Bool × BitVec 3) :=
 #guard (VectorSource.of2 Mac.mac).inputs == [.bv 8, .bv 8]
 #guard ((VectorSource.of2 Mac.mac).rows 2 1).map (·.outputs) == #[[.bv 16 0]]
 
+-- The biased generators produce exactly `n` samples, reproducibly.
+#guard ((enableRuns 1024 ⟨1⟩).1.size, (patternBits 1024 ⟨1⟩).1.size) == (1024, 1024)
+#guard ((largeOperands (w := 8) (v := 8) 1024 ⟨1⟩).1.size) == 1024
+#guard (enableRuns 50 ⟨4⟩).1 == (enableRuns 50 ⟨4⟩).1
+#guard (enableRuns 0 ⟨4⟩).1.size == 0
+
+-- Enable runs include a high run longer than 255 cycles.
+#guard ((enableRuns 1024 ⟨1⟩).1.foldl (fun (best, cur) b =>
+  let cur := if b then cur + 1 else 0; (max best cur, cur)) (0, 0)).1 > 255
+
+-- Most operands have their top bit set.
+#guard ((largeOperands (w := 8) (v := 8) 1024 ⟨2⟩).1.filter fun (x, _) => x.toNat ≥ 128).size > 640
+
+-- A biased generator replaces the uniform one in a vector source.
+#guard ((VectorSource.of1 Counter.counter enableRuns).rows 1 1024).size == 1024
+
 end GinTest.Vectors

@@ -92,37 +92,102 @@ def drawSamples {α : Type} [PortValue α] (n : Nat) (g : Rng) : Array α × Rng
     xs := xs.push x
   return (xs, g)
 
-/-- Vectors of a one-input circuit. -/
+/-- `n` pairs of samples, one per cycle; each cycle draws the first
+component, then the second. -/
+def drawPairs {α β : Type} [PortValue α] [PortValue β] (n : Nat) (g : Rng) :
+    Array (α × β) × Rng := Id.run do
+  let mut g := g
+  let mut xs := #[]
+  for _ in [0:n] do
+    let (x, g') := PortValue.draw g
+    let (y, g'') := PortValue.draw g'
+    g := g''
+    xs := xs.push (x, y)
+  return (xs, g)
+
+/-- Vectors of a one-input circuit. `gen n g` draws the `n` inputs; by
+default they are uniformly distributed. -/
 def VectorSource.of1 {dom : Domain} {α ο : Type} [PortValue α] [Inhabited α] [OutputValues ο]
-    (f : Signal dom α → Signal dom ο) : VectorSource where
+    (f : Signal dom α → Signal dom ο) (gen : Nat → Rng → Array α × Rng := drawSamples) :
+    VectorSource where
   inputs := [PortValue.ty α]
   outputs := OutputValues.tys ο
   rows seed n :=
-    let (xs, _) := drawSamples (α := α) n ⟨seed⟩
+    let (xs, _) := gen n ⟨seed⟩
     let out := f (ofArray xs)
     (List.range n).toArray.map fun t =>
       { inputs := [PortValue.toValue xs[t]!], outputs := OutputValues.values (out t) }
 
-/-- Vectors of a two-input circuit. Each cycle draws the first input, then
-the second. -/
+/-- Vectors of a two-input circuit. `gen n g` draws the `n` input pairs; by
+default each cycle draws the first input, then the second, uniformly. -/
 def VectorSource.of2 {dom : Domain} {α β ο : Type} [PortValue α] [Inhabited α] [PortValue β]
-    [Inhabited β] [OutputValues ο] (f : Signal dom α → Signal dom β → Signal dom ο) :
-    VectorSource where
+    [Inhabited β] [OutputValues ο] (f : Signal dom α → Signal dom β → Signal dom ο)
+    (gen : Nat → Rng → Array (α × β) × Rng := drawPairs) : VectorSource where
   inputs := [PortValue.ty α, PortValue.ty β]
   outputs := OutputValues.tys ο
-  rows seed n := Id.run do
-    let mut g : Rng := ⟨seed⟩
-    let mut xs : Array α := #[]
-    let mut ys : Array β := #[]
-    for _ in [0:n] do
-      let (x, g') := PortValue.draw g
-      let (y, g'') := PortValue.draw g'
-      g := g''
-      xs := xs.push x
-      ys := ys.push y
+  rows seed n :=
+    let (ps, _) := gen n ⟨seed⟩
+    let xs := ps.map (·.1)
+    let ys := ps.map (·.2)
     let out := f (ofArray xs) (ofArray ys)
-    return (List.range n).toArray.map fun t =>
+    (List.range n).toArray.map fun t =>
       { inputs := [PortValue.toValue xs[t]!, PortValue.toValue ys[t]!],
         outputs := OutputValues.values (out t) }
+
+/-! ## Biased generators
+
+Uniform inputs rarely reach the corners of the examples: an 8-bit counter
+with a fair enable needs about 512 cycles to wrap, and small products keep an
+accumulator far from overflow. These generators bias the inputs towards that
+behaviour while staying reproducible from the seed. -/
+
+/-- Enable inputs in runs: a high run of 1 to 512 cycles, then a low run of
+1 to 8 cycles, repeated. Long high runs wrap an 8-bit counter. -/
+def enableRuns (n : Nat) (g : Rng) : Array Bool × Rng := Id.run do
+  let mut g := g
+  let mut xs := #[]
+  while xs.size < n do
+    let (hi, g') := g.bits 9
+    let (lo, g'') := g'.bits 3
+    g := g''
+    for _ in [0:hi + 1] do xs := xs.push true
+    for _ in [0:lo + 1] do xs := xs.push false
+  return (xs.extract 0 n, g)
+
+/-- Bit-stream pieces for `patternBits`: an isolated `101`, an overlapping
+`10101`, and filler. -/
+def patternPieces : Array (List Bool) :=
+  #[[true, false, true, false, false], [true, false, true, false, true], [false], [true, true],
+    [false, false], [true], [false, true, true, false], [false, false, false]]
+
+/-- A bit stream assembled from `patternPieces`, chosen uniformly, so that
+`101` occurs both isolated and overlapping. -/
+def patternBits (n : Nat) (g : Rng) : Array Bool × Rng := Id.run do
+  let mut g := g
+  let mut xs := #[]
+  while xs.size < n do
+    let (i, g') := g.bits 3
+    g := g'
+    xs := xs ++ (patternPieces[i]!).toArray
+  return (xs.extract 0 n, g)
+
+/-- A `w`-bit operand that is large three times in four (top bit set) and
+uniform otherwise. -/
+def largeOperand (w : Nat) (g : Rng) : BitVec w × Rng :=
+  let (k, g) := g.bits 2
+  let (v, g) := g.bits w
+  (BitVec.ofNat w (if k == 0 || w == 0 then v else v ||| 2 ^ (w - 1)), g)
+
+/-- Operand pairs from `largeOperand`; large products overflow an
+accumulator within a few cycles. -/
+def largeOperands {w v : Nat} (n : Nat) (g : Rng) : Array (BitVec w × BitVec v) × Rng := Id.run do
+  let mut g := g
+  let mut xs := #[]
+  for _ in [0:n] do
+    let (x, g') := largeOperand w g
+    let (y, g'') := largeOperand v g'
+    g := g''
+    xs := xs.push (x, y)
+  return (xs, g)
 
 end Gin.Export

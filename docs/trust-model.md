@@ -80,8 +80,18 @@ same theorem keeps the hash. The hash is printed in every generated HDL
 file header (`spec hash: ...`). Every `gin` command accepts
 `--spec-hash HEX` and fails with a `certificate error:` naming both values
 when the certificate's hash differs. Pin the hash once you have reviewed
-the specification; any later change to the theorem, its statement or a
-definition it depends on changes the hash and fails the run.
+the specification; any later change to the theorem name, its statement or
+a printed definition changes the hash and fails the run.
+
+The hash covers only what is printed: the statement and the project
+definitions in `specDefinitions`. Definitions from gin's signal DSL
+(`lean/Gin/Signal.lean`, for example `Gin.Signal` and its combinators) and
+from Lean's core library (`Init`, `Std`, `Lean`, for example `List.countP`
+or `BitVec.ofNat`) are not printed and not hashed. A change to
+`lean/Gin/Signal.lean` or to the toolchain pinned in `lean/lean-toolchain`
+can change what a pinned statement means and leave its hash unchanged.
+Those two files are pinned only by reviewing every change to them; they
+are part of the trusted base below.
 
 ## What is validated
 
@@ -90,7 +100,12 @@ meaning of the proved Lean definition. It does not prove it.
 
 - The exporter computes the test vectors by running the compiled Lean
   definitions on seeded, biased pseudo-random inputs, never by
-  interpreting the exported IR. The examples ship 1024 cycles each; the
+  interpreting the exported IR. An export writes 1024 cycles unless its
+  entry sets fewer, and it refuses vectors that carry more than 2^18 bits
+  (cycles times the summed width of all ports). So 1024 cycles fit only
+  when the ports total at most 256 bits; in general a design gets at most
+  2^18 / (sum of port widths) cycles, for example 32 cycles for a 4096-bit
+  input and a 4096-bit output. The examples ship 1024 cycles each; the
   generators bias inputs towards corner cases (long enable runs that wrap
   an 8-bit counter, overlapping bit patterns, large products).
 - `gin sim` runs both reference simulators, one on the core IR and one on
@@ -104,12 +119,14 @@ meaning of the proved Lean definition. It does not prove it.
 
 Coverage limits:
 
-- Vectors are samples. Agreement on 1024 cycles of chosen inputs is
+- Vectors are samples. Agreement on the exported cycles of chosen inputs
+  (1024 for narrow designs, correspondingly fewer for wide ones) is
   evidence, not an equivalence proof between the Lean definition and the
   HDL. A bug that only shows on inputs the vectors never reach passes.
 - By default `gin validate` accepts a vectors file with a single cycle;
-  pass `--min-cycles 1024` so that a truncated vectors file fails
-  (`vectors: FAIL cycles=<n> < 1024`).
+  pass `--min-cycles N`, with `N` the number of cycles the reviewed export
+  writes for that design, so that a truncated vectors file fails
+  (`vectors: FAIL cycles=<n> < N`).
 - Reset is asserted once, before cycle 0. Asserting `rst` in the middle of
   a run is outside both the theorems (the Lean model has no reset input)
   and the testbenches.
@@ -134,7 +151,9 @@ The trusted base is everything a PASS relies on without checking it.
 | The Lean kernel and `leanchecker` | That the theorem is proved, and that every module of the project was replayed through the kernel. |
 | The exporter (`lean/Gin/Export/`) | That the IR is a faithful translation of the definition the theorem is about, and that the certificate's statement, definitions and axiom lists are the theorem's. Its fixed printer is trusted to render the claim unambiguously. |
 | The Lean compiler | The vectors come from compiled Lean code. If compiled code differed from the definitions, the vectors would test the wrong thing; the exporter refuses `@[implemented_by]`, `@[extern]` and project `@[csimp]` rewrites that could cause that, but the compiler itself is trusted. |
-| The design author | A design's Lean code runs on your machine when it is built and exported (see "Threat model"). The checks refuse what they can, but they do not make running unknown code safe. |
+| The design author | A design's Lean code runs when it is built and exported, before and alongside the kernel replay, the checker and the certificate comparison (see "Threat model"). Unless that code has been read, or the replay and the checker ran from trusted binaries in a separate clean environment, the author can forge every output, the certificate included. A sandbox protects your machine, not the result. |
+| gin's signal DSL (`lean/Gin/Signal.lean`) | The meaning of `Gin.Signal`, `Gin.System` and the combinators a specification uses. These definitions are not printed in the certificate and not part of the spec hash; changes to the file need review. |
+| The Lean toolchain version (`lean/lean-toolchain`) | The kernel, the compiler and the core library (`Init`, `Std`, `Lean`) whose definitions a specification uses unprinted and unhashed. A toolchain change needs review. |
 | The Lake configuration (`lean/lakefile.toml`) | Like the toolchain: a link input declared there would add native code the checks do not see. The export script refuses unexpected settings and packages, but a change to the lakefile needs review. |
 | gin's decoder, type checker and certificate policy | That the IR and certificate gin reads are the ones the exporter wrote, and that the axiom policy is enforced (`Gin.Core.Json`, `Gin.Core.Check`, `Gin.Certificate`). |
 | GHC and the Haskell libraries gin is built with | That gin does what its source says. |
@@ -175,12 +194,34 @@ and closed terms run as soon as it starts. The export script runs the
 design-free checker `gin-check-export` first, which refuses initializers,
 `unsafe`, `partial`, `@[extern]` and `@[implemented_by]` code and native
 reduction (`Lean.reduceBool`, `Lean.reduceNat`) in every loaded project
-module, and only then starts `gin-export`; the checker's certificate is
-the authority. None of this stops code that runs at build time, and
-linked code that escapes the checks can write any file you can write.
+module, and only then starts `gin-export`; the export script refuses an
+output whose certificate is not the checker's. All of this assumes that
+the build did not tamper with the environment, and nothing stops code that
+runs at build time. `lake build` runs first, in the same environment as
+`leanchecker`, `gin-check-export`, the certificate comparison and the
+output directory, so build-time code can replace any of them or rewrite
+the output afterwards. Against a malicious design author every output can
+be forged, the certificate included: a reviewed statement with the
+standard axioms, next to an IR and vectors that agree with each other and
+not with any proof. Linked code that escapes the checks can likewise write
+any file you can write.
+
 Build and export designs you did not write only in a sandbox: a container
 or VM without your credentials and without write access to anything but
-its output directory.
+its output directory. A sandbox protects your machine; it does not
+protect the result. A PASS for a design you did not write is evidence only
+if one of these holds:
+
+- its Lean sources have been read for code that runs at build time
+  (`#eval`, `run_cmd`, `initialize`, macros, elaborators, custom tactics,
+  attributes and commands it defines), or
+- the kernel replay and `gin-check-export` ran from trusted binaries in a
+  separate, clean environment over the built `.olean` files, and the
+  certificate used is the one that run produced.
+
+In either case the export script, the exporter (`lean/Gin/Export/`), the
+lakefile, the DSL, the toolchain pin and gin itself must come from a
+reviewed revision of gin, not from the contributor's checkout.
 
 ## Recommended CI
 
@@ -190,17 +231,29 @@ For a circuit whose implementation you did not write:
    `specDefinitions` in the certificate (they are also in the header of
    every generated HDL file), decide that they say what you want, and
    record the spec hash from the header.
-2. Build and export in a sandbox, through `scripts/export-examples.sh`
+2. Use the export script, exporter, lakefile, DSL, toolchain pin and gin
+   from a reviewed revision of gin, never from the contributor's checkout,
+   and review any change the contribution makes to them.
+3. Either read the design's Lean sources for build-time code (see "Threat
+   model"), or run the kernel replay and `gin-check-export` from trusted
+   binaries in a separate, clean environment over the built `.olean`
+   files and keep that run's certificate. Without one of the two, the
+   steps below protect your machine but not the result.
+4. Build and export in a sandbox, through `scripts/export-examples.sh`
    only. It builds the package, replays it with `leanchecker`, runs the
    checker before the exporter and refuses any output whose certificate
    is not the checker's. Never run `gin-export` directly.
-3. Copy only the `.gin.json` and `.vectors.json` files out of the sandbox.
-4. Outside the sandbox, run, for each circuit,
+5. Copy only the `.gin.json` and `.vectors.json` files out of the sandbox.
+6. Outside the sandbox, run, for each circuit,
 
    ```sh
    gin validate NAME.gin.json --vectors NAME.vectors.json \
-     --spec-hash <pinned hash> --min-cycles 1024
+     --spec-hash <pinned hash> --min-cycles <N>
    ```
+
+   with `N` the number of cycles the reviewed export writes for that
+   circuit (1024 unless its ports total more than 256 bits or its entry
+   sets fewer),
 
    without `--allow-missing-tools` and without `--allow-axiom`, and
    require exit status 0. Keep its `tools:` line in the log.
@@ -208,4 +261,7 @@ For a circuit whose implementation you did not write:
 A green run then means: the pinned specification is the one the
 certificate claims, the claim was proved with the standard axioms only,
 and every stage of gin agreed with the compiled Lean definition on at
-least 1024 cycles, provided the trusted base above holds.
+least `N` cycles, provided the trusted base above holds. For a design you
+did not write, that includes step 3: if its build-time code was neither
+read nor kept away from the replay and the checker, a green run says
+nothing about the circuit.

@@ -38,8 +38,11 @@ specification. Whether the implementation was written by a hardware
 engineer, a contributor you have never met or a language model, a reviewer
 only has to answer three small questions:
 
-1. Does the specification say what I want? It is a short Lean definition,
-   and the theorem statement is printed into every generated HDL file.
+1. Does the specification say what I want? The certificate carries the
+   theorem statement and every definition it depends on
+   (`specDefinitions`), printed by the exporter's fixed printer into every
+   generated HDL file, together with their hash. Review them once, then pin
+   the hash with `--spec-hash` so that any later change to the claim fails.
 2. Does the proof check? The Lean kernel decides. The exporter refuses
    proofs that rely on `sorry`, `native_decide`, `bv_decide` or any axiom
    beyond Lean's standard three, and gin checks the same policy again.
@@ -48,8 +51,13 @@ only has to answer three small questions:
    reference simulators and the HDL simulators must produce identical
    outputs, cycle for cycle, on the same vectors.
 
-The implementation itself can be as clever or as obscure as it likes: once
-its theorem is reviewed and validation passes, it does not need to be read.
+The implementation itself can be as clever or as obscure as it likes: its
+behaviour is covered by the proof, so once its theorem is reviewed and
+validation passes, you do not need to read it to know what it computes.
+Building it, however, runs its code: Lean executes `#eval`, `run_cmd`,
+macros and elaborators at build time, and the exporter links the design.
+Build and export designs you did not write in a sandbox, as described in
+[docs/trust-model.md](docs/trust-model.md).
 
 ## Quickstart
 
@@ -86,8 +94,8 @@ missing HDL tool is a failure.
 
 ### The `gin` command
 
-Every command takes the IR file the exporter wrote; those that simulate
-also take its vectors.
+Every command takes the IR file the exporter wrote; `testbench`, `sim`
+and `validate` also take its vectors.
 
 ```sh
 gin check     examples/counter/counter.gin.json
@@ -107,8 +115,12 @@ From a checkout, run them as `cabal run -v0 gin -- check …`.
   first mismatching cycle and port.
 - `validate` runs `sim`, then lints each target's design and runs its
   testbench, printing one `<check>: PASS|FAIL|SKIP(…)` line per check.
+  `--min-cycles N` fails vectors with fewer than `N` cycles (default 1);
   `--allow-missing-tools` skips checks whose tool is not installed;
-  `--tool-timeout SECONDS` bounds each tool run (default 300).
+  `--tool-timeout SECONDS` bounds each tool run (default 300) and
+  `--sim-timeout SECONDS` each reference simulation (default 600).
+- `--spec-hash HEX` (every command) fails unless the certificate's spec
+  hash, printed in every generated HDL header, is `HEX`.
 - `--allow-axiom NAME` admits an extra axiom. `sorryAx`, the
   `Lean.ofReduce*` and `Lean.trustCompiler` axioms and any `._native.`
   axiom are refused regardless.
@@ -125,17 +137,21 @@ To add a circuit of your own, follow "Adding a circuit" in
 | --- | --- | --- |
 | The Lean implementation meets its specification | Proven | The refinement theorem, checked by the Lean kernel, for every cycle and every input stream. `leanchecker` replays every declaration, catching any that was added without kernel checking. |
 | The proof takes no unsound shortcuts | Checked | The exporter refuses, and gin by default rejects, any axiom other than `propext`, `Classical.choice` and `Quot.sound`, in the theorem and in the implementation. |
-| The specification is the one you meant | Reviewed | By you. The theorem statement is part of the certificate and is printed into every generated HDL file. |
+| The specification is the one you meant | Reviewed | By you. The certificate carries the statement and every definition it depends on (`specDefinitions`), rendered by the exporter's fixed printer and printed into every generated HDL file with their hash; `--spec-hash` pins the reviewed version. |
 | The core IR means the Lean definition | Validated | The vectors come from running the compiled Lean definition, never from the IR, and gin's core IR simulator must reproduce them. |
 | Normalization preserves meaning | Validated | The normal-form simulator must reproduce the same vectors, and the normal form is checked against its invariants. |
 | The netlist and the generated HDL preserve meaning | Validated | Verilog and SystemVerilog designs must pass Verilator's `-Wall` lint and compile under Icarus Verilog, VHDL designs must analyse under nvc, and every generated testbench must reproduce the vectors under Icarus Verilog or nvc. |
-| The exporter's translation and certificate are faithful | Trusted | gin cannot re-check a Lean proof. It trusts that the IR is the definition the theorem is about, and that the certificate's statement and axiom lists are the theorem's. Validation checks the first point only on the vectors' inputs. |
-| The tools are correct | Trusted | The Lean kernel and `leanchecker`, GHC, the HDL simulators, and whatever synthesis tool consumes the generated HDL. |
+| The exporter's translation and certificate are faithful | Trusted | gin cannot re-check a Lean proof. It trusts that the IR is the definition the theorem is about, and that the certificate's statement, definitions and axiom lists are the theorem's. Validation checks the first point only on the vectors' inputs. |
+| The design's code is harmless to run | Trusted | Building a design runs its code, and the exporter links it; the exporter's checks refuse initializers and code that could run at start-up, but designs you did not write belong in a sandbox. |
+| The tools are correct | Trusted | The Lean kernel and `leanchecker`, the Lean compiler (the vectors come from compiled code), GHC, the HDL tools, and whatever synthesis tool consumes the generated HDL. |
 
 Validation is evidence, not proof: it shows that every stage agrees with
-the Lean model on the vectors' inputs (64 cycles per example), not on every
-input. The meaning every stage must preserve is defined in
-[docs/semantics.md](docs/semantics.md).
+the Lean model on the vectors' inputs (1024 cycles per example), not on
+every input, and neither the proofs nor the testbenches cover asserting
+reset in the middle of a run. The meaning every stage must preserve is
+defined in [docs/semantics.md](docs/semantics.md).
+[docs/trust-model.md](docs/trust-model.md) gives the full trust model: the
+trusted base, the threat model and a recommended CI setup.
 
 ## Repository layout
 
@@ -155,7 +171,7 @@ input. The meaning every stage must preserve is defined in
 | `test/golden/` | Golden netlists and HDL: regenerate with `GIN_ACCEPT=1 cabal test` and review the diff |
 | `scripts/export-examples.sh` | Build the Lean package, replay it through the kernel and regenerate `examples/` |
 | `scripts/validate.sh` | The whole pipeline, from the Lean sources to HDL simulation |
-| `docs/` | The file formats and the semantics every stage implements |
+| `docs/` | The file formats, the semantics every stage implements and the trust model |
 
 ## Documentation
 
@@ -165,6 +181,8 @@ input. The meaning every stage must preserve is defined in
 - [docs/semantics.md](docs/semantics.md): the cycle semantics, the meaning
   of each primitive, the hardware mapping (clock `clk`, synchronous
   active-high reset `rst`) and the testbench protocol.
+- [docs/trust-model.md](docs/trust-model.md): what is proved, validated and
+  trusted, the threat model and a recommended CI setup.
 - [lean/README.md](lean/README.md): the Lean workflow, the supported
   fragment and how to add a circuit.
 - The module documentation in `src/`, starting with `Gin.Driver`, which

@@ -121,6 +121,16 @@ What a reviewer reads in a certificate is what the kernel checked:
   output directory), and trust the certificate the checker computed, not
   the process that wrote the file.
 
+The Lake configuration (`lean/lakefile.toml`) is trusted, like the
+toolchain: `gin-check-export` checks the import closures of what
+`gin-export` links, and a link input declared in the lakefile
+(`moreLinkArgs`, `moreLinkObjs`, an `extern_lib`, a required package)
+would add native code it does not see. The export script therefore
+refuses a `lakefile.lean`, any package setting, library or executable
+option it does not expect, and any package in `lake-manifest.json`, so
+such an input cannot be added unnoticed; a change to the lakefile still
+needs review.
+
 `lake build` itself runs code from the sources it builds: `#eval`,
 `run_cmd`, macros and elaborators execute at build time with the
 builder's privileges. Build and export designs you did not write only in

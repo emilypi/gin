@@ -4,7 +4,9 @@
 #   scripts/export-examples.sh                  build, re-check and export
 #   scripts/export-examples.sh --check-rejects  check that unproven designs are refused
 #
-# Run from the repository root. The export builds the Lean package with
+# Run from the repository root. The export first refuses a Lake
+# configuration that could link native code the checks do not see (the
+# lakefile is trusted; see check_lakefile), then builds the Lean package with
 # warnings as errors (which runs the Lean tests), replays every module the
 # exported circuits and the exporter load (gin-check-export --list-modules)
 # and every module of the package's module roots (Gin, GinTest, GinExport,
@@ -31,7 +33,8 @@
 # that may run IO when gin-export starts (@[implemented_by], an unsafe
 # closed term, foreign code), a translation that would run compiled code
 # (Lean.reduceBool), a design that is not a reject fixture but loads one,
-# or a certificate in gin-export's output other than the checker's. The
+# a certificate in gin-export's output other than the checker's, or a
+# link input added to (a copy of) the lakefile. The
 # unexpander fixture is not refused; its check module verifies that the
 # certificate shows the real specification. Nothing under examples/ may
 # change.
@@ -237,8 +240,93 @@ check_replay_covers() {
   [ -z "$missing" ] || die "the kernel replay does not cover these modules:"$'\n'"$missing"
 }
 
+# [lean-link-inputs] check_lakefile DIR: the Lake configuration in DIR adds
+# nothing to what gin-export and gin-check-export link beyond their root
+# modules' import closures, which gin-check-export checks: it is a
+# lakefile.toml (no lakefile.lean, whose Lean code would run on every lake
+# command), requires no package, declares no extern_lib or other target, and
+# its libraries and executables set only the options listed below (no
+# moreLinkArgs, moreLinkObjs, moreLinkLibs, extraDepTargets, ...). The
+# lakefile itself is trusted, like the toolchain: this check only stops a
+# link input from being added to it unnoticed.
+check_lakefile() {
+  local dir=$1
+  [ ! -e "$dir/lakefile.lean" ] || die "$dir/lakefile.lean exists; the package must be configured by lakefile.toml only"
+  python3 - "$dir/lakefile.toml" "$dir/lake-manifest.json" <<'PY' || return 1
+import json, os, sys, tomllib
+
+toml_path, manifest_path = sys.argv[1], sys.argv[2]
+
+def refuse(why):
+    sys.exit(f"export-examples: {toml_path}: {why}; refusing the export")
+
+with open(toml_path, "rb") as f:
+    conf = tomllib.load(f)
+package_keys = {"name", "defaultTargets", "leanOptions", "lean_lib", "lean_exe"}
+target_keys = {
+    "lean_lib": {"name", "leanOptions"},
+    "lean_exe": {"name", "root", "supportInterpreter"},
+}
+for key in conf:
+    if key not in package_keys:
+        refuse(f"unexpected package setting {key!r} (a required package or a link input?)")
+for kind, allowed in target_keys.items():
+    targets = conf.get(kind, [])
+    if not isinstance(targets, list):
+        refuse(f"{kind} is not an array of tables")
+    for t in targets:
+        for key in t:
+            if key not in allowed:
+                refuse(f"{kind} {t.get('name', '?')!r} sets {key!r}, which may add link inputs")
+if os.path.exists(manifest_path):
+    with open(manifest_path) as f:
+        if json.load(f).get("packages", []) != []:
+            refuse(f"{manifest_path} lists packages")
+PY
+}
+
+# Each link input check_lakefile must refuse, added to a copy of the
+# package's lakefile.toml.
+check_lakefile_rejects() {
+  local dir=$tmp/lakefile i
+  local -a additions=(
+    $'[[require]]\nname = "dep"\npath = "dep"'
+    $'[[extern_lib]]\nname = "native"'
+    $'[[lean_exe]]\nname = "gin-export-linked"\nroot = "GinExport"\nmoreLinkArgs = ["-lnative"]'
+    $'[[lean_exe]]\nname = "gin-export-linked"\nroot = "GinExport"\nmoreLinkObjs = ["native"]'
+    $'[[lean_lib]]\nname = "Native"\nmoreLinkArgs = ["-lnative"]'
+    $'[[lean_exe]]\nname = "gin-export-linked"\nroot = "GinExport"\nextraDepTargets = ["native"]'
+    $'plugins = ["native"]'
+  )
+  for i in "${!additions[@]}"; do
+    rm -rf "$dir" && mkdir -p "$dir"
+    cp lean/lakefile.toml lean/lake-manifest.json "$dir/"
+    if [ "${additions[$i]}" = 'plugins = ["native"]' ]; then
+      # a package setting goes before the first table
+      { printf '%s\n' "${additions[$i]}"; cat lean/lakefile.toml; } > "$dir/lakefile.toml"
+    else
+      printf '\n%s\n' "${additions[$i]}" >> "$dir/lakefile.toml"
+    fi
+    expect_refusal "the lakefile check of" "${additions[$i]%%$'\n'*}" "refusing the export" \
+      "a link input in lakefile.toml" check_lakefile "$dir"
+  done
+  rm -rf "$dir" && mkdir -p "$dir"
+  cp lean/lakefile.toml lean/lake-manifest.json "$dir/"
+  sed -i.bak 's/"packages": \[\]/"packages": [{"name": "dep"}]/' "$dir/lake-manifest.json"
+  expect_refusal "the lakefile check of" lake-manifest.json "lists packages" \
+    "a package in lake-manifest.json" check_lakefile "$dir"
+  rm -rf "$dir" && mkdir -p "$dir"
+  cp lean/lakefile.toml lean/lake-manifest.json "$dir/"
+  touch "$dir/lakefile.lean"
+  expect_refusal "the lakefile check of" lakefile.lean "lakefile.lean exists" \
+    "a lakefile.lean" check_lakefile "$dir"
+  check_lakefile lean || die "the lakefile check refuses lean/lakefile.toml"
+  echo "export-examples: link inputs in the lakefile refused"
+}
+
 export_examples() {
   local mods
+  check_lakefile lean || die "lean/lakefile.toml adds link inputs"
   lake -d lean build --wfail
   check_reserved_words
   check_checker_closure
@@ -406,6 +494,7 @@ check_rejects() {
   check_reject GinReject.BadExtern bad_extern "BadExtern.foreign calls foreign code (@[extern])" \
     "foreign code called by a closed term, which would run when gin-export starts"
   check_forged_certificate
+  check_lakefile_rejects
   check_reject GinReject.BadReduceBool bad_reduce_bool \
     "BadReduceBool.hooked refers to Lean.reduceBool" "a translation that would run compiled code"
   # [lean-printer] not refused: the certificate names specR and lists its body

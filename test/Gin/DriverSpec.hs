@@ -1344,12 +1344,13 @@ doublingVectors =
     , vecCycles = [Cycle [VBV 8 n] [VBV 8 n] | n <- [7, 9]]
     }
 
--- | @o = x + c@, lifted over the input, where the constant @c@ is
--- @g18 7 = 7@ ('doublingDefs') in a definition with the given name.
--- Computing @c@ exceeds the core simulator's cycle budget, so that name
--- ends up in its inconclusive message.
+-- | A top definition with the given name computing @o = l18 x = x@, where
+-- @l0 s = sig.lift id s@ and @l(i+1) s = li (li s)@. Normalization erases
+-- the identity lifts, but the core simulator builds one network node per
+-- lift and reaches its node cap (@2^18@) while building the top
+-- definition, so its name ends up in the inconclusive message.
 constantBudgetProgram :: Text -> Program
-constantBudgetProgram constName =
+constantBudgetProgram topDefName =
   Program
     { progProducer = Producer "gin-driver-spec" "n/a"
     , progTop =
@@ -1358,18 +1359,22 @@ constantBudgetProgram constName =
           , topDomain = sysDomain
           , topInputs = [Port "x" (bv 8)]
           , topOutputs = [Port "o" (bv 8)]
-          , topDef = "D.top"
+          , topDef = Name topDefName
           }
     , progDefs =
-        Def "D.top" (TFun (sig (bv 8)) (sig (bv 8))) top
-          : Def (Name constName) (bv 8) (EApp (EGlobal (doublingName 18)) [ELit (VBV 8 7)])
-          : doublingDefs 18
+        Def (Name topDefName) sigFn (ELam [("x", sig (bv 8))] (EApp (EGlobal (liftName 18)) [EVar "x"]))
+          : fmap level [0 .. 18]
     , progCertificate = testCertificate "D.top_correct"
     }
   where
-    add = EPrim BvAdd (tFuns [bv 8, bv 8] (bv 8))
-    plusC = ELam [("v", bv 8)] (EApp add [EVar "v", EGlobal (Name constName)])
-    top = ELam [("x", sig (bv 8))] (EApp (lift1 (bv 8) (bv 8)) [plusC, EVar "x"])
+    sigFn = TFun (sig (bv 8)) (sig (bv 8))
+    liftName :: Int -> Name
+    liftName i = Name (Text.pack ("D.l" <> show i))
+    level i =
+      Def (liftName i) sigFn . ELam [("s", sig (bv 8))] $
+        if i == 0
+          then EApp (lift1 (bv 8) (bv 8)) [ELam [("v", bv 8)] (EVar "v"), EVar "s"]
+          else EApp (EGlobal (liftName (i - 1))) [EApp (EGlobal (liftName (i - 1))) [EVar "s"]]
 
 constantBudgetVectors :: Vectors
 constantBudgetVectors =
@@ -1377,7 +1382,7 @@ constantBudgetVectors =
     { vecTop = "forged"
     , vecInputs = [Port "x" (bv 8)]
     , vecOutputs = [Port "o" (bv 8)]
-    , vecCycles = [Cycle [VBV 8 n] [VBV 8 (n + 7)] | n <- [7, 9]]
+    , vecCycles = [Cycle [VBV 8 n] [VBV 8 n] | n <- [7, 9]]
     }
 
 -- | @f0 v = v * v@ and @fi v = f(i-1) (f(i-1) v)@ on 4096-bit vectors, so

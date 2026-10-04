@@ -97,13 +97,26 @@ What a reviewer reads in a certificate is what the kernel checked:
   running the compiled code of `c`. Both tools refuse, before translating,
   a design that reaches a constant referring to either
   (`GinReject/BadReduceBool.lean`).
-- `gin-export` links the designs to compute vectors, and the
-  initializers of linked modules run as soon as it starts, before any of
-  its own checks; such code could write forged files. The export script
-  therefore runs `gin-check-export` first and never starts `gin-export`
-  when it fails (`GinReject/Hooked.lean`). `gin-export` repeats the checks,
-  but they cannot stop an initializer that has already run: run it only
-  through the script.
+- `gin-export` links the design code to compute vectors, and that code
+  runs as soon as it starts, before any of its own checks: the
+  initializers and the closed terms of every linked module. Such code
+  could write forged files. The export script therefore runs
+  `gin-check-export` first and never starts `gin-export` when it fails
+  (`GinReject/Hooked.lean`). `gin-export` repeats the checks, but they
+  cannot stop code that has already run: run it only through the script.
+- The checker's certificate is the authority. `gin-check-export
+  --certificates DIR` writes the certificate it rendered for each circuit,
+  without linking or running any design, and the export script writes
+  gin-export's output to a temporary directory and refuses it unless every
+  `.gin.json` file ends, byte for byte, in that certificate and has no key
+  twice in one object, so it holds no second certificate. Only then is it
+  copied into `examples/` (`GinReject/ForgedExport.lean`). Linked code
+  that escapes the checks can still corrupt the IR or the vectors, which
+  gin checks against each other, or write any file the user can write.
+  Export designs you did not write only in a sandbox (a container or VM
+  without your credentials and without write access to anything but its
+  output directory), and trust the certificate the checker computed, not
+  the process that wrote the file.
 
 `lake build` itself runs code from the sources it builds: `#eval`,
 `run_cmd`, macros and elaborators execute at build time with the

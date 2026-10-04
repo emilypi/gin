@@ -29,7 +29,9 @@ Terms:
   and the `BitVec.*` functions behind these operators;
 * `if c then t else e` and `decide c`, where `c` is built from `= ≠ < ≤ > ≥`
   on `BitVec n`, `b = true`/`b = false`/`=` on `Bool`, `¬ ∧ ∨`, `True` and
-  `False`; `bif b then t else e`;
+  `False`; `bif b then t else e`; the branches must be values (`Bool`,
+  `BitVec n`, products), and an if applied to further arguments has them
+  pushed into both branches;
 * pairs `(a, b)`, `p.1`, `p.2`, and destructuring `let (a, b) := p` or
   `fun (a, b) => …` (one pair, not nested);
 * the combinators of `Gin.Signal`: `Signal.pure`, `lift`, `lift2`, `lift3`,
@@ -347,6 +349,11 @@ partial def trConst (e : Lean.Expr) (c : Name) (us : List Level) (args : Array L
     if args.size < arity then
       return ← trExpr (← etaExpandBy e (arity - args.size))
     let now := args.extract 0 arity
+    let extra := args.extract arity args.size
+    if (c == ``ite || c == ``cond) && !extra.isEmpty then
+      -- `(if c then f else g) x` is `if c then f x else g x`: push the
+      -- extra arguments into both branches so the if is at a value type.
+      return ← trExpr (← pushIntoBranches c now extra)
     let head ← trPrim (mkAppN e.getAppFn now) c now
     return applyTo head (← (args.extract arity args.size).toList.mapM trExpr)
   if ← isMatcher c then
@@ -449,8 +456,12 @@ partial def trPrim (e : Lean.Expr) (c : Name) (args : Array Lean.Expr) : TrM Exp
     let eq ← trEq args[0]! args[2]! args[3]!
     return if c == ``bne then notE eq else eq
   | ``decide => trProp args[0]!
-  | ``ite => return .ite (← trProp args[1]!) (← trExpr args[3]!) (← trExpr args[4]!)
-  | ``cond => return .ite (← trExpr args[1]!) (← trExpr args[2]!) (← trExpr args[3]!)
+  | ``ite =>
+    checkIfType e args[0]!
+    return .ite (← trProp args[1]!) (← trExpr args[3]!) (← trExpr args[4]!)
+  | ``cond =>
+    checkIfType e args[0]!
+    return .ite (← trExpr args[1]!) (← trExpr args[2]!) (← trExpr args[3]!)
   | ``Prod.mk => return .tuple [← trExpr args[2]!, ← trExpr args[3]!]
   | ``Prod.fst => return .proj 0 (← trExpr args[2]!)
   | ``Prod.snd => return .proj 1 (← trExpr args[2]!)
@@ -486,6 +497,32 @@ partial def trPrim (e : Lean.Expr) (c : Name) (args : Array Lean.Expr) : TrM Exp
     let type := Ty.fn (.funs [s, i] (.prod [s, o])) (.fn (.signal d i) (.signal d o))
     return primApp (.sigMealy init) type [← trExpr args[4]!, ← trExpr args[6]!]
   | _ => trFail m!"internal error: no translation for {c}"
+
+/-- An if (`ite` or `cond`) must choose between values: Booleans, bit
+vectors or products of these. One choosing between functions that is not
+applied, or between signals, has no IR form. -/
+partial def checkIfType (e ty : Lean.Expr) : TrM Unit := do
+  let rec valueTy : Ty → Bool
+    | .bool | .bv _ => true
+    | .prod ts => ts.all valueTy
+    | _ => false
+  let t ← trTy ty
+  unless valueTy t do
+    trFail m!"if-then-else {e} chooses between values of type {ty}; only Bool, BitVec and products of these can be chosen (apply a function-typed if to its arguments, and choose inside `lift` rather than between signals)"
+
+/-- `ite`/`cond` applied to more arguments than it takes: rebuild it with
+the extra arguments applied (and beta-reduced) in each branch, at the
+branches' result type. -/
+partial def pushIntoBranches (c : Name) (now extra : Array Lean.Expr) : TrM Lean.Expr := do
+  let (tIdx, eIdx) := if c == ``ite then (3, 4) else (2, 3)
+  let t := (mkAppN now[tIdx]! extra).headBeta
+  let f := (mkAppN now[eIdx]! extra).headBeta
+  let ty ← inferType t
+  let lvl ← getLevel ty
+  if c == ``ite then
+    return mkApp5 (mkConst ``ite [lvl]) ty now[1]! now[2]! t f
+  else
+    return mkApp4 (mkConst ``cond [lvl]) ty now[1]! t f
 
 /-- `a = b` (or `a == b`) at type `ty`, as a Boolean expression. -/
 partial def trEq (ty a b : Lean.Expr) : TrM Expr := do

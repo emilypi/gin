@@ -73,6 +73,18 @@ def computedInit (x : Signal System (BitVec 8)) : Signal System (BitVec 8) :=
 def dependentIf (x : Signal System (BitVec 8)) : Signal System (BitVec 8) :=
   lift (fun a => if _h : a = 0 then 1 else a) x
 
+/-- Increments a byte. -/
+def incByte (a : BitVec 8) : BitVec 8 := a + 1
+
+/-- A function-valued `if` that is never applied: there is no IR value of
+function type to choose. -/
+def unappliedFunIf (x : Signal System (BitVec 8)) : Signal System (BitVec 8) :=
+  lift (if (2 : BitVec 8) < 3 then incByte else id) x
+
+/-- An `if` choosing between signals. -/
+def signalIf (x : Signal System (BitVec 8)) : Signal System (BitVec 8) :=
+  bif (1 : BitVec 8) == 1 then x else register 0 x
+
 /-- An opaque constant has no definition to translate. -/
 opaque mystery : BitVec 8 → BitVec 8
 
@@ -133,6 +145,8 @@ run_meta do
   expectError (tr ``nestedPattern) ["pattern match", "nestedPattern.match_1"]
   expectError (tr ``computedInit) ["must be literals"]
   expectError (tr ``dependentIf) ["dependent if-then-else"]
+  expectError (tr ``unappliedFunIf) ["unappliedFunIf", "if-then-else", "incByte", "only Bool, BitVec"]
+  expectError (tr ``signalIf) ["if-then-else", "Signal", "between signals"]
   expectError (tr ``usesOpaque) ["GinTest.Unsupported.mystery", "no definition"]
   expectError (tr ``tooWide) ["width 5000"]
   expectError (tr ``zeroWide) ["width 0"]

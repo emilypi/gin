@@ -8,10 +8,10 @@ core IR and test vectors that the Haskell side of gin compiles to HDL
 | ------------------------ | --------------------------------------------------------------- |
 | `Gin/Signal.lean`        | The DSL: `Signal`, `register`, `mealy`, `lift`…                 |
 | `Gin/Examples/`          | `counter`, `detector`, `mac` with refinement theorems           |
-| `Gin/Examples/Bad*.lean` | Reject fixtures (`sorry`, `native_decide`), not built by default |
 | `Gin/Export/`            | Translator, certificate policy, vectors, export table, CLI      |
 | `GinExport.lean`         | Root of the `gin-export` executable                             |
 | `GinTest/`               | Tests, run by `lake build`                                      |
+| `GinReject/`             | Designs the exporter must refuse, not built by default          |
 
 ## Workflow
 
@@ -31,12 +31,38 @@ them together with the Lean change that produced them.
    Register and Mealy initial values must be literals.
 2. State a refinement theorem `∀ inputs t, impl inputs t = spec inputs t`
    against an independent specification and prove it with ordinary tactics.
+   The exporter checks this shape: the inputs are passed straight through,
+   `spec` is a constant other than `impl`, and `impl` does not occur in the
+   definitions `spec` depends on.
    Only `propext`, `Classical.choice` and `Quot.sound` may appear in the
    proof: no `sorry`, `native_decide` or `bv_decide`.
 3. Add an entry to `Gin/Export/Table.lean` with the hardware name, port
    names, the definitions to emit, a vector source and a seed, and list it
    in `defaultExports`.
 4. Run `scripts/export-examples.sh`.
+
+## Trust
+
+What a reviewer reads in a certificate is what the kernel checked:
+
+- The statement and every definition it depends on (`specDefinitions`)
+  are rendered by the exporter's own printer (`Gin/Export/Print.lean`),
+  which prints fully qualified names and explicit applications and never
+  consults notation, delaborators or unexpanders declared by a design.
+- The export script replays every module of the package through the
+  kernel with `leanchecker` (every module root under `lean/` except
+  `GinReject`), so declarations added under `debug.skipKernelTC` are
+  caught wherever they live.
+- The exporter imports the environment first without its extensions, so
+  no code of a design runs while the certificate is checked, and refuses
+  any project module that registers an IO initializer (`initialize`,
+  `builtin_initialize`, `@[init]`): such code would run inside the
+  exporter.
+
+`lake build` itself runs code from the sources it builds: `#eval`,
+`run_cmd`, macros and elaborators execute at build time with the
+builder's privileges. Build and export designs you did not write only in
+a sandbox (a container or VM without your credentials).
 
 ## Caveats
 

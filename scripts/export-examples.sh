@@ -21,8 +21,9 @@
 # own reason: an axiom (sorryAx, a ._native. axiom), a kernel replay failure
 # (of the design's module, or of an unchecked module it imports), a theorem
 # without the refinement shape, a module initializer, compiled code that is
-# not the definition (@[implemented_by]), or a design that is not a reject
-# fixture but loads one. The
+# not the definition (@[implemented_by]), a translation that would run
+# compiled code (Lean.reduceBool), or a design that is not a reject fixture
+# but loads one. The
 # unexpander fixture is not refused; its check module verifies that the
 # certificate shows the real specification. Nothing under examples/ may
 # change.
@@ -268,6 +269,8 @@ check_rejects() {
   check_linked_initializer
   check_reject GinReject.BadImplementedBy bad_implemented_by \
     "BadImplementedBy.inc is marked @[implemented_by]" "compiled code that is not the definition"
+  check_reject GinReject.BadReduceBool bad_reduce_bool \
+    "BadReduceBool.hooked refers to Lean.reduceBool" "a translation that would run compiled code"
   # [lean-printer] not refused: the certificate names specR and lists its body
   build_fixture GinReject.BadUnexpander
   build_fixture GinReject.UnexpanderCheck

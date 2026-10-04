@@ -155,7 +155,8 @@ def importsOf (entries : Array Entry) (linked : Array Name := #[]) : Array Impor
 `entries` and `linked` as data (no initializer runs, no extension is
 loaded), refuse shadowed toolchain modules and IO initializers, refuse a
 circuit that is not a reject fixture but loads one, refuse a circuit whose
-compiled code may differ from its definitions (`checkCompiledCode`), and
+compiled code may differ from its definitions (`checkCompiledCode`) or
+whose translation may run compiled code (`checkNoNativeReduction`), and
 check and render every certificate. Returns the data environment and the certificates. -/
 def gate (entries : Array Entry) (linked : Array Name := #[]) :
     IO (Environment × Array Certificate) := do
@@ -169,6 +170,7 @@ def gate (entries : Array Entry) (linked : Array Name := #[]) :
     try
       certificates := certificates.push (← runMeta data do
         checkCompiledCode e.defs.toArray
+        checkNoNativeReduction e.defs.toArray
         certifyEntry e)
     catch err =>
       throw <| IO.userError s!"{e.name}: {err}"

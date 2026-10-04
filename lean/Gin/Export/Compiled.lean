@@ -23,6 +23,12 @@ toolchain. `compiledOverrides` finds the project's: an `implemented_by` or
 including constants of Lean's core library that the compiler may inline
 into the design. The exporter refuses a design with any of them, so its
 vectors are computed from the code its definitions describe.
+
+The translator itself must not run code of a design either. Lean's
+`whnf` and `isDefEq` evaluate `Lean.reduceBool c` and `Lean.reduceNat c` by
+running the compiled code of `c`, so `nativeReductions` finds the
+constants a design reaches that refer to them, and the exporter refuses
+the design before translating it.
 -/
 
 open Lean
@@ -92,6 +98,33 @@ def compiledOverrides (env : Environment) (roots : Array Name) : Array String :=
       if reached.contains f then
         out := out.push s!"the @[csimp] theorem {thm} replaces {f} in compiled code"
   return out
+
+/-- The constants that Lean's reduction evaluates by running compiled
+code. -/
+def nativeReductionConsts : List Name := [``Lean.reduceBool, ``Lean.reduceNat]
+
+/-- The constants reachable from `roots` through definitions (see
+`reachableConstants`) that refer to `Lean.reduceBool` or `Lean.reduceNat`,
+with the one they refer to. Reducing a term built from them may run
+compiled code. -/
+def nativeReductions (env : Environment) (roots : Array Name) : Array (Name × Name) := Id.run do
+  let mut out := #[]
+  for c in (reachableConstants env roots).toArray.qsort Name.lt do
+    if let some (.thmInfo _) := env.find? c then continue
+    for r in nativeReductionConsts do
+      if (closureEdges env c).1.contains r then
+        out := out.push (c, r)
+  return out
+
+/-- Refuse the definitions `roots` if reducing them may run compiled code
+(see `nativeReductions`). The translator reduces the definitions of a
+design, so this check must come first. -/
+def checkNoNativeReduction (roots : Array Name) : MetaM Unit := do
+  let found := nativeReductions (← getEnv) roots
+  unless found.isEmpty do
+    let uses := found.toList.map fun (c, r) => s!"{c} refers to {r}"
+    throwError "reducing {roots} may run compiled code: {"; ".intercalate uses}; refusing to \
+      translate it"
 
 /-- Refuse the definitions `roots` if their compiled code, which computes
 the vectors, may differ from them (see `compiledOverrides`). -/

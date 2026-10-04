@@ -78,6 +78,11 @@ What a reviewer reads in a certificate is what the kernel checked:
   theorem that rewrites any constant it may reach, core library included
   (`Gin/Export/Compiled.lean`, `GinTest/Compiled.lean`,
   `GinReject/BadImplementedBy.lean`).
+- The translator reduces a design's terms (clock domains, matches), and
+  Lean's reduction evaluates `Lean.reduceBool c` and `Lean.reduceNat c` by
+  running the compiled code of `c`. Both tools refuse, before translating,
+  a design that reaches a constant referring to either
+  (`GinReject/BadReduceBool.lean`).
 - `gin-export` links the designs to compute vectors, and the
   initializers of linked modules run as soon as it starts, before any of
   its own checks; such code could write forged files. The export script

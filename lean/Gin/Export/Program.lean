@@ -107,6 +107,7 @@ def translateTop (e : Entry) : MetaM (Top × List Def) := do
   unless ports.eraseDups.length == ports.length do
     throwError "port names {ports} are not pairwise distinct"
   checkCompiledCode e.defs.toArray
+  checkNoNativeReduction e.defs.toArray
   let exported := e.defs.foldl NameSet.insert {}
   let defs ← e.defs.mapM (translateDef · exported)
   let some topDef := defs.find? (·.name == e.top.toString) | unreachable!

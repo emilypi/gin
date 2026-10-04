@@ -10,3 +10,4 @@ import GinTest.Unsupported
 import GinTest.Limits
 import GinTest.Capture
 import GinTest.Examples
+import GinTest.Modules

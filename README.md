@@ -49,9 +49,10 @@ from trusted tooling as described below:
    proofs that rely on `sorry`, `native_decide`, `bv_decide` or any axiom
    beyond Lean's standard three, and gin checks the same policy again.
 3. Does the generated hardware still mean the proven Lean definition?
-   Translation validation answers that: the Lean model, both of gin's
-   reference simulators and the HDL simulators must produce identical
-   outputs, cycle for cycle, on the same vectors.
+   Translation validation answers that: the Lean model, gin's normal-form
+   simulator and the HDL simulators must produce identical outputs, cycle
+   for cycle, on the same vectors, and so must the core IR simulator
+   unless its evaluation budget makes it report an inconclusive `SKIP`.
 
 The implementation itself can be as clever or as obscure as it likes: its
 behaviour is covered by the proof, so once its theorem is reviewed and
@@ -64,8 +65,10 @@ build time can forge every output, the certificate, IR and vectors
 included, and re-checking the certificate elsewhere would not secure the
 IR and vectors, which are not bound to it. For a design you did not write,
 a PASS is evidence about the HDL only if its Lean sources were read for
-build-time code and the export script, exporter, lakefile, DSL and
-toolchain pin came from a reviewed revision of gin. The spec hash also does not
+build-time code and the export script, exporter (`lean/Gin/Export/`,
+`lean/GinExport.lean`, `lean/GinCheckExport.lean`, including each entry's
+vector source), lakefile, DSL and toolchain pin came from a reviewed
+revision of gin. The spec hash also does not
 cover gin's signal DSL or Lean's core library; changes to
 `lean/Gin/Signal.lean` and `lean/lean-toolchain` need review. See
 [docs/trust-model.md](docs/trust-model.md).
@@ -149,11 +152,11 @@ To add a circuit of your own, follow "Adding a circuit" in
 | The Lean implementation meets its specification | Proven | The refinement theorem, checked by the Lean kernel, for every cycle and every input stream. `leanchecker` replays every declaration, catching any that was added without kernel checking. |
 | The proof takes no unsound shortcuts | Checked | The exporter refuses, and gin by default rejects, any axiom other than `propext`, `Classical.choice` and `Quot.sound`, in the theorem and in the implementation. |
 | The specification is the one you meant | Reviewed | By you. The certificate carries the statement and every definition it depends on (`specDefinitions`), rendered by the exporter's fixed printer and printed into every generated HDL file with their hash; `--spec-hash` pins the reviewed version. |
-| The core IR means the Lean definition | Validated | The vectors come from running the compiled Lean definition, never from the IR, and gin's core IR simulator must reproduce them. |
+| The core IR means the Lean definition | Validated | The vectors come from running compiled Lean code (the entry's vector source, reviewed to apply the top definition), never from the IR, and gin's core IR simulator must reproduce them unless it reports an inconclusive `SKIP`. |
 | Normalization preserves meaning | Validated | The normal-form simulator must reproduce the same vectors, and the normal form is checked against its invariants. |
 | The netlist and the generated HDL preserve meaning | Validated | Verilog and SystemVerilog designs must pass Verilator's `-Wall` lint and compile under Icarus Verilog, VHDL designs must analyse under nvc, and every generated testbench must reproduce the vectors under Icarus Verilog or nvc. |
 | The exporter's translation and certificate are faithful | Trusted | gin cannot re-check a Lean proof. It trusts that the IR is the definition the theorem is about, and that the certificate's statement, definitions and axiom lists are the theorem's. Validation checks the first point only on the vectors' inputs. |
-| The design's code is harmless to run | Trusted | Building a design runs its code, and the exporter links it; the exporter's checks refuse initializers and code that could run at start-up, but designs you did not write belong in a sandbox. |
+| The design's code is harmless to run | Trusted | Building a design runs its code, and the exporter links it; the exporter's checks refuse initializers and code that could run at start-up. Designs you did not write belong in a sandbox, which protects your machine but not the result: unless their sources were read for build-time code, their build can forge the certificate, IR and vectors (see `docs/trust-model.md`). |
 | The tools are correct | Trusted | The Lean kernel and `leanchecker`, the Lean compiler (the vectors come from compiled code), GHC, the HDL tools, and whatever synthesis tool consumes the generated HDL. |
 
 Validation is evidence, not proof: it shows that every stage agrees with

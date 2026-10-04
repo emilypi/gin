@@ -99,9 +99,13 @@ are part of the trusted base below.
 Translation validation tests that each stage of gin preserves the
 meaning of the proved Lean definition. It does not prove it.
 
-- The exporter computes the test vectors by running the compiled Lean
-  definitions on seeded, biased pseudo-random inputs, never by
-  interpreting the exported IR. An export writes the number of cycles its
+- The exporter computes the test vectors by running compiled Lean code on
+  seeded pseudo-random inputs from the entry's generator (uniform by
+  default; the shipped examples' generators are biased towards corner
+  cases), never by interpreting the exported IR. Which function the
+  vectors run is set by the entry's vector source in
+  `lean/Gin/Export/Table.lean`; nothing checks that it applies the proved
+  top definition, so that file is reviewed with the entry. An export writes the number of cycles its
   entry sets (`Entry.cycles` in `lean/Gin/Export/Program.lean`, 1024 by
   default), and it refuses vectors that carry more than 2^18 bits (cycles
   times the summed width of all ports). So 1024 cycles fit only when the
@@ -152,7 +156,7 @@ The trusted base is everything a PASS relies on without checking it.
 | Trusted | For what |
 | --- | --- |
 | The Lean kernel and `leanchecker` | That the theorem is proved, and that every module of the project was replayed through the kernel. |
-| The exporter (`lean/Gin/Export/`) | That the IR is a faithful translation of the definition the theorem is about, and that the certificate's statement, definitions and axiom lists are the theorem's. Its fixed printer is trusted to render the claim unambiguously. |
+| The exporter (`lean/Gin/Export/`, `lean/GinExport.lean`, `lean/GinCheckExport.lean`) | That the IR is a faithful translation of the definition the theorem is about, that the certificate's statement, definitions and axiom lists are the theorem's, and that each entry's vector source in `Table.lean` applies the entry's top definition. Its fixed printer is trusted to render the claim unambiguously. These modules are exempt from the checks for initializers and for unsafe, partial, extern and implemented_by code, so a change to any of them needs review. |
 | The Lean compiler | The vectors come from compiled Lean code. If compiled code differed from the definitions, the vectors would test the wrong thing; the exporter refuses `@[implemented_by]`, `@[extern]` and project `@[csimp]` rewrites that could cause that, but the compiler itself is trusted. |
 | The design author | A design's Lean code runs when it is built and exported, in the same environment as the kernel replay, the checker, the certificate comparison and `gin-export` (see "Threat model"). Unless the design's sources have been read for code that runs at build time, the author can forge every output, the certificate, IR and vectors included. A sandbox protects your machine, not the result. |
 | The export script (`scripts/export-examples.sh`) and the `python3` it runs | That the package was replayed with `leanchecker`, that the replay covered every Lean source, that `gin-check-export` ran before `gin-export`, and that each exported certificate is byte for byte the checker's (the comparison is a `python3` script). |
@@ -234,17 +238,24 @@ at build time (`#eval`, `run_cmd`, `initialize`, macros, elaborators,
 custom tactics, attributes and commands it defines). The alternative
 would be to run `gin-export` itself from trusted binaries outside the
 build environment, which gin does not yet support. In both cases the
-export script, the exporter (`lean/Gin/Export/`), the lakefile, the DSL,
-the toolchain pin and gin itself must come from a reviewed revision of
-gin, not from the contributor's checkout.
+export script, the exporter (`lean/Gin/Export/`, `lean/GinExport.lean`,
+`lean/GinCheckExport.lean`), the lakefile, the DSL, the toolchain pin and
+gin itself must come from a reviewed revision of gin, not from the
+contributor's checkout.
 
 ## Recommended CI
 
 For a circuit whose implementation you did not write:
 
-1. Use the export script, exporter, lakefile, DSL, toolchain pin and gin
-   from a reviewed revision of gin, never from the contributor's checkout,
-   and review any change the contribution makes to them.
+1. Use the export script, exporter (`lean/Gin/Export/`,
+   `lean/GinExport.lean`, `lean/GinCheckExport.lean`), lakefile, DSL,
+   toolchain pin and gin from a reviewed revision of gin, never from the
+   contributor's checkout. A new circuit needs an entry in
+   `lean/Gin/Export/Entries.lean`, a vector source in
+   `lean/Gin/Export/Table.lean` and its name in the script's `examples`
+   list; review those changes (the vector source must apply the entry's
+   top definition, with a suitable generator) and merge them into the
+   reviewed revision before step 3.
 2. Read the design's Lean sources for build-time code (see "Threat
    model"). Without this, the steps below protect your machine but not
    the result.
@@ -275,11 +286,16 @@ For a circuit whose implementation you did not write:
    ```
 
    without `--allow-missing-tools` and without `--allow-axiom`, and
-   require exit status 0. Keep its `tools:` line in the log.
+   require exit status 0 and no `SKIP` line (`gin validate` exits 0 when
+   the core IR simulator reports `SKIP(inconclusive: ...)`, which only
+   loses the localization of a disagreement). Keep its `tools:` line in
+   the log.
 
 A green run then means: the pinned specification is the one the
 certificate claims, the claim was proved with the standard axioms only,
-and every stage of gin agreed with the compiled Lean definition on at
-least `N` cycles, provided the trusted base above holds. For a design you
+and the normal-form simulator and every HDL target agreed with the
+compiled Lean code the entry's vector source runs (and the core IR
+simulator too, unless it reported `SKIP`) on at least `N` cycles,
+provided the trusted base above holds. For a design you
 did not write, that includes step 2: if its build-time code was not read,
 a green run says nothing about the circuit.

@@ -60,11 +60,12 @@ computes. Building it, however, runs its code: Lean executes `#eval`,
 `run_cmd`, macros and elaborators at build time, before and alongside the
 kernel replay and the exporter's checks, and the exporter links the
 design. A sandbox protects your machine, not the result: code that runs at
-build time can forge every output, the certificate included. For a design
-you did not write, either read its Lean sources for build-time code or run
-the replay and checker from trusted binaries in a separate clean
-environment, and take the export script, exporter, lakefile, DSL and
-toolchain pin from a reviewed revision of gin. The spec hash also does not
+build time can forge every output, the certificate, IR and vectors
+included, and re-checking the certificate elsewhere would not secure the
+IR and vectors, which are not bound to it. For a design you did not write,
+a PASS is evidence about the HDL only if its Lean sources were read for
+build-time code and the export script, exporter, lakefile, DSL and
+toolchain pin came from a reviewed revision of gin. The spec hash also does not
 cover gin's signal DSL or Lean's core library; changes to
 `lean/Gin/Signal.lean` and `lean/lean-toolchain` need review. See
 [docs/trust-model.md](docs/trust-model.md).

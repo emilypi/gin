@@ -11,7 +11,8 @@ hardware interface.
 The reject fixtures (`GinReject`) are listed so the refusal paths can be
 exercised (`scripts/export-examples.sh --check-rejects`); their modules are
 not part of the default build and they have no vector source, so they can
-never be written.
+never be written. Only an entry marked `fixture` may load a `GinReject`
+module.
 -/
 
 namespace Gin.Export
@@ -37,35 +38,52 @@ def table : List Entry := [
     top := `Bad.bad, defs := [`Bad.bad]
     theorem_ := `Bad.bad_correct
     inputs := ["en"], outputs := ["count"]
-    vectors := none },
+    vectors := none, fixture := true },
   { name := "bad_native", module := `GinReject.BadNative
     top := `BadNative.bad, defs := [`BadNative.bad]
     theorem_ := `BadNative.bad_correct
     inputs := ["en"], outputs := ["count"]
-    vectors := none },
+    vectors := none, fixture := true },
   { name := "bad_init", module := `GinReject.BadInit
     top := `BadInit.bad, defs := [`BadInit.bad]
     theorem_ := `BadInit.bad_correct
     inputs := ["en"], outputs := ["count"]
-    vectors := none },
+    vectors := none, fixture := true },
   { name := "bad_tautology", module := `GinReject.BadShape
     top := `BadShape.bad, defs := [`BadShape.bad]
     theorem_ := `BadShape.tautology
     inputs := ["en"], outputs := ["count"]
-    vectors := none },
+    vectors := none, fixture := true },
   { name := "bad_at_zero", module := `GinReject.BadShape
     top := `BadShape.bad, defs := [`BadShape.bad]
     theorem_ := `BadShape.at_zero
     inputs := ["en"], outputs := ["count"]
-    vectors := none },
+    vectors := none, fixture := true },
   { name := "bad_calls_impl", module := `GinReject.BadShape
     top := `BadShape.bad, defs := [`BadShape.bad]
     theorem_ := `BadShape.calls_impl
     inputs := ["en"], outputs := ["count"]
-    vectors := none },
+    vectors := none, fixture := true },
   { name := "bad_or_true", module := `GinReject.BadShape
     top := `BadShape.bad, defs := [`BadShape.bad]
     theorem_ := `BadShape.or_true
+    inputs := ["en"], outputs := ["count"]
+    vectors := none, fixture := true },
+  { name := "bad_kernel", module := `GinReject.BadKernel
+    top := `BadKernel.bad, defs := [`BadKernel.bad]
+    theorem_ := `BadKernel.bad_correct
+    inputs := ["en"], outputs := ["count"]
+    vectors := none, fixture := true },
+  { name := "bad_import", module := `GinReject.BadImport
+    top := `Gin.Examples.Forged.counter, defs := [`Gin.Examples.Forged.counter]
+    theorem_ := `Gin.Examples.Forged.counter_correct
+    inputs := ["en"], outputs := ["count"]
+    vectors := none, fixture := true },
+  -- the same design, not marked as a reject fixture: refused for importing
+  -- GinReject modules
+  { name := "forged", module := `GinReject.BadImport
+    top := `Gin.Examples.Forged.counter, defs := [`Gin.Examples.Forged.counter]
+    theorem_ := `Gin.Examples.Forged.counter_correct
     inputs := ["en"], outputs := ["count"]
     vectors := none }]
 

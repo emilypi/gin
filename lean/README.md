@@ -53,10 +53,15 @@ What a reviewer reads in a certificate is what the kernel checked:
   a plain identifier is written `«…»` with `\u{XXXX}` escapes, and names
   with macro scopes, inaccessible names (`✝`) and duplicate definition
   names are refused (`GinTest/Names.lean`).
-- The export script replays every module of the package through the
-  kernel with `leanchecker` (every module root under `lean/` except
-  `GinReject`), so declarations added under `debug.skipKernelTC` are
-  caught wherever they live.
+- The export script replays through the kernel, with `leanchecker`,
+  exactly the modules the export loads outside the Lean toolchain
+  (`lake exe gin-export --list-modules NAME...`), whatever their names,
+  so declarations added under `debug.skipKernelTC` are caught in any
+  module a design imports. `leanchecker` runs on a search path holding
+  only those modules' `.olean` files, so a stale `.olean` left by a
+  deleted source is neither replayed nor imported.
+- A circuit that loads a module under `GinReject` is refused unless its
+  table entry is marked as a reject fixture.
 - The exporter imports the environment first without its extensions, so
   no code of a design runs while the certificate is checked, and refuses
   any project module that registers an IO initializer (`initialize`,

@@ -50,6 +50,10 @@ structure Entry where
   seed : UInt64 := 1
   /-- Number of vector cycles; every exported circuit uses `vectorCycles`. -/
   cycles : Nat := vectorCycles
+  /-- A reject fixture (`lean/GinReject`): a design that exists to test that
+  the exporter or the kernel replay refuses it. Only a reject fixture may
+  import a `GinReject` module. -/
+  fixture : Bool := false
 
 /-- Producer recorded in every file. -/
 def producer : Producer := { tool := "gin-export", leanVersion := Lean.versionString }

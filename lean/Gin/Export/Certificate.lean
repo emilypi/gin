@@ -15,7 +15,8 @@ trust the compiler through `Lean.ofReduceBool` or generated
 
 `collectAxioms` reads proof terms but cannot tell whether the kernel
 actually checked them (`set_option debug.skipKernelTC`), so the export
-script also replays every module through `leanchecker` before exporting.
+script also replays every module the export loads through `leanchecker`
+before exporting.
 
 ## The refinement shape
 

@@ -86,4 +86,29 @@ def initializers (env : Environment) : Array (Name × Array Name) := Id.run do
       out := out.push (m, decls)
   return out
 
+/-- Is `m` a reject fixture module (`lean/GinReject`)? -/
+def isRejectModule (m : Name) : Bool := m.getRoot == `GinReject
+
+/-- The modules that `m` imports, directly or not, and `m` itself, in the
+order of `env.header.moduleNames`; empty if `m` is not imported in `env`. -/
+def importClosure (env : Environment) (m : Name) : Array Name := Id.run do
+  let names := env.header.moduleNames
+  let idx : Std.HashMap Name Nat := names.size.fold (init := {}) fun i _ acc => acc.insert names[i] i
+  let mut seen : Std.HashSet Name := {}
+  let mut todo := #[m]
+  while h : todo.size > 0 do
+    let n := todo[todo.size - 1]
+    todo := todo.pop
+    if seen.contains n then continue
+    let some i := idx[n]? | continue
+    seen := seen.insert n
+    if let some d := env.header.moduleData[i]? then
+      todo := todo ++ d.imports.map (·.module)
+  return names.filter seen.contains
+
+/-- The first reject fixture module in `closure`, unless the design is a
+reject fixture itself. -/
+def rejectImport? (fixture : Bool) (closure : Array Name) : Option Name :=
+  if fixture then none else closure.find? isRejectModule
+
 end Gin.Export

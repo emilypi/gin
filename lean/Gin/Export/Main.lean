@@ -30,11 +30,15 @@ namespace Gin.Export
 
 /-- Command-line help. -/
 def usage : String :=
-  "usage: lake exe gin-export [--out DIR] [NAME ...]\n\n" ++
+  "usage: lake exe gin-export [--out DIR] [NAME ...]\n" ++
+  "       lake exe gin-export --list-modules [NAME ...]\n\n" ++
   "Writes DIR/NAME/NAME.gin.json and DIR/NAME/NAME.vectors.json for each named circuit\n" ++
   "(default: the shipped examples; DIR defaults to examples). Run it through `lake exe`\n" ++
   "so that the Lean search path is set. Nothing is written unless every named circuit\n" ++
-  "exports successfully."
+  "exports successfully.\n\n" ++
+  "--list-modules checks the modules the named circuits load, as an export does before\n" ++
+  "any certificate, and prints those outside the Lean toolchain, one per line: the\n" ++
+  "modules the kernel replay (scripts/export-examples.sh) must check. Writes nothing."
 
 /-- Parsed command line. -/
 structure CliOptions where
@@ -44,12 +48,15 @@ structure CliOptions where
   names : List String := []
   /-- Print usage and exit. -/
   help : Bool := false
+  /-- Print the project modules the circuits load instead of exporting. -/
+  listModules : Bool := false
 
 /-- Parse the command line. -/
 def parseArgs : List String → CliOptions → Except String CliOptions
   | [], o => .ok { o with names := o.names.reverse }
   | "--out" :: dir :: rest, o => parseArgs rest { o with out := dir }
   | ["--out"], _ => .error "--out needs a directory"
+  | "--list-modules" :: rest, o => parseArgs rest { o with listModules := true }
   | "--help" :: rest, o | "-h" :: rest, o => parseArgs rest { o with help := true }
   | a :: rest, o =>
     if a.startsWith "-" then .error s!"unknown option {a}"
@@ -76,6 +83,15 @@ def checkModules (env : Environment) : IO Unit := do
     let names := ", ".intercalate (decls.toList.map toString)
     throw <| IO.userError s!"module {m} registers IO initializers ({names}), which run code \
       whenever the module is loaded; refusing to export it (see lean/README.md, \"Trust\")"
+
+/-- Refuse a circuit that loads a reject fixture module (`lean/GinReject`)
+unless it is a reject fixture itself: the reject fixtures contain
+declarations the kernel never checked, and only the modules a circuit loads
+are replayed. -/
+def checkRejectImports (env : Environment) (e : Entry) : IO Unit := do
+  if let some m := rejectImport? e.fixture (importClosure env e.module) then
+    throw <| IO.userError s!"{e.name}: module {e.module} imports the reject fixture module {m}; \
+      refusing to export a circuit that is not a reject fixture and loads one"
 
 /-- Write a file by renaming a temporary sibling into place. -/
 def writeAtomically (path : FilePath) (contents : String) : IO Unit := do
@@ -111,6 +127,13 @@ unsafe def main (table : List Entry) (defaults : List String) (args : List Strin
     -- the modules as data: no initializer runs, no extension is loaded
     let data ← importModules imports {} (loadExts := false)
     checkModules data
+    for e in entries do
+      checkRejectImports data e
+    if opts.listModules then
+      for m in data.header.moduleNames do
+        unless isToolchainModule m do
+          IO.println m
+      return 0
     let mut certificates := #[]
     for e in entries do
       try

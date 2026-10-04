@@ -14,10 +14,9 @@ leanOptions = { linter.missingDocs = true }
 [[lean_lib]]
 name = "GinTest"
 
-# Reject fixtures: designs the exporter must refuse. Not a default target and
-# imported by none, so they are built only on request
-# (scripts/export-examples.sh --check-rejects), and the only module root the
-# kernel replay of the export skips.
+# Reject fixtures: designs the exporter must refuse. Not a default target, so
+# they are built only on request (scripts/export-examples.sh --check-rejects).
+# gin-export refuses a circuit that loads one unless it is marked a fixture.
 [[lean_lib]]
 name = "GinReject"
 

@@ -219,13 +219,13 @@
   ],
   "certificate": {
     "theorem": "Mac.mac_correct",
-    "statement": "∀ (x : Gin.Signal Gin.System (BitVec 8)) (y : Gin.Signal Gin.System (BitVec 8)) (t : Nat), Mac.mac x y t = Mac.spec x y t",
+    "statement": "forall (x : Gin.Signal Gin.System (BitVec 8)) (y : Gin.Signal Gin.System (BitVec 8)) (t : Nat), Mac.mac x y t = Mac.spec x y t",
     "axioms": ["Quot.sound", "propext"],
     "implAxioms": [],
     "specDefinitions": [
       {
         "name": "Mac.spec",
-        "body": "Mac.spec : Gin.Signal Gin.System (BitVec 8) → Gin.Signal Gin.System (BitVec 8) → Nat → BitVec 16 := fun (x : Gin.Signal Gin.System (BitVec 8)) (y : Gin.Signal Gin.System (BitVec 8)) (t : Nat) => BitVec.ofNat 16 (@List.sum Nat instAddNat (@Zero.ofOfNat0 Nat (instOfNatNat (nat_lit 0))) (@List.map Nat Nat (fun (i : Nat) => @HMul.hMul Nat Nat Nat (@instHMul Nat instMulNat) (@BitVec.toNat 8 (x i)) (@BitVec.toNat 8 (y i))) (List.range t)))"
+        "body": "Mac.spec : Gin.Signal Gin.System (BitVec 8) -> Gin.Signal Gin.System (BitVec 8) -> Nat -> BitVec 16 := fun (x : Gin.Signal Gin.System (BitVec 8)) (y : Gin.Signal Gin.System (BitVec 8)) (t : Nat) => BitVec.ofNat 16 (@List.sum Nat instAddNat (@Zero.ofOfNat0 Nat (instOfNatNat (nat_lit 0))) (@List.map Nat Nat (fun (i : Nat) => @HMul.hMul Nat Nat Nat (@instHMul Nat instMulNat) (@BitVec.toNat 8 (x i)) (@BitVec.toNat 8 (y i))) (List.range t)))"
       }
     ]
   }

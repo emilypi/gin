@@ -141,13 +141,13 @@
   ],
   "certificate": {
     "theorem": "Detector.detector_correct",
-    "statement": "∀ (b : Gin.Signal Gin.System Bool) (t : Nat), Detector.detector b t = Detector.spec b t",
+    "statement": "forall (b : Gin.Signal Gin.System Bool) (t : Nat), Detector.detector b t = Detector.spec b t",
     "axioms": ["Quot.sound", "propext"],
     "implAxioms": [],
     "specDefinitions": [
       {
         "name": "Detector.spec",
-        "body": "Detector.spec : Gin.Signal Gin.System Bool → Nat → Bool := fun (b : Gin.Signal Gin.System Bool) (t : Nat) => Bool.and (Bool.and (Bool.and (@Decidable.decide (@GE.ge Nat instLENat t 2) (Nat.decLe 2 t)) (b (@HSub.hSub Nat Nat Nat (@instHSub Nat instSubNat) t 2))) (Bool.not (b (@HSub.hSub Nat Nat Nat (@instHSub Nat instSubNat) t 1)))) (b t)"
+        "body": "Detector.spec : Gin.Signal Gin.System Bool -> Nat -> Bool := fun (b : Gin.Signal Gin.System Bool) (t : Nat) => Bool.and (Bool.and (Bool.and (@Decidable.decide (@GE.ge Nat instLENat t 2) (Nat.decLe 2 t)) (b (@HSub.hSub Nat Nat Nat (@instHSub Nat instSubNat) t 2))) (Bool.not (b (@HSub.hSub Nat Nat Nat (@instHSub Nat instSubNat) t 1)))) (b t)"
       }
     ]
   }

@@ -39,6 +39,25 @@ def twoOutputs (b : Signal System Bool) : Signal System (Bool × BitVec 3) :=
 #guard (VectorSource.of2 Mac.mac).inputs == [.bv 8, .bv 8]
 #guard ((VectorSource.of2 Mac.mac).rows 2 1).map (·.outputs) == #[[.bv 16 0]]
 
+/-- A counter without inputs. -/
+def ticks : Signal System (BitVec 4) := mealy (fun (s : BitVec 4) (_ : Bool) => (s + 1, s)) 0 (Signal.pure true)
+
+-- A circuit without inputs has no input values; its outputs follow the clock.
+#guard (VectorSource.of0 ticks).inputs == []
+#guard ((VectorSource.of0 ticks).rows 1 3).map (fun c => (c.inputs, c.outputs)) ==
+  #[([], [.bv 4 0]), ([], [.bv 4 1]), ([], [.bv 4 2])]
+
+/-- Three inputs. -/
+def pick (a : Signal System Bool) (x y : Signal System (BitVec 3)) : Signal System (BitVec 3) :=
+  lift3 (fun a x y => if a then x else y) a x y
+
+-- Three inputs are drawn in order and the output follows them.
+#guard (VectorSource.of3 pick).inputs == [.bool, .bv 3, .bv 3]
+#guard ((VectorSource.of3 pick).rows 5 16).all fun c =>
+  match c.inputs, c.outputs with
+  | [.bool a, x, y], [o] => o == if a then x else y
+  | _, _ => false
+
 -- The biased generators produce exactly `n` samples, reproducibly.
 #guard ((enableRuns 1024 ⟨1⟩).1.size, (patternBits 1024 ⟨1⟩).1.size) == (1024, 1024)
 #guard ((largeOperands (w := 8) (v := 8) 1024 ⟨1⟩).1.size) == 1024

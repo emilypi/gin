@@ -123,6 +123,11 @@ def overApplied (x : Signal System Byte) (b : Signal System Bool) : Signal Syste
 def usesGlobal (x : Signal System Byte) : Signal System Byte :=
   lift double (lift (applyTwice double) x)
 
+/-- Three inputs, one of each kind of port, combined in one `lift3`. -/
+def threeInputs (x : Signal System Byte) (b : Signal System Bool) (y : Signal System (BitVec 4)) :
+    Signal System (Byte × Bool) :=
+  lift3 (fun x b y => (if b then x + y.setWidth 8 else x, b && y == 0)) x b y
+
 /-- A circuit without inputs. -/
 def noInputs : Signal System Byte :=
   mealy (fun (s : Byte) (_ : Bool) => (s + 3, s)) 0 (Signal.pure true)
@@ -151,6 +156,8 @@ run_meta do
   checkAgrees (testEntry ``helpers ["x"] ["o1", "o2", "o3"] (.of1 helpers))
   checkAgrees (testEntry ``partialApps ["x", "y"] ["o"] (.of2 partialApps))
   checkAgrees (testEntry ``overApplied ["x", "b"] ["o"] (.of2 overApplied))
+  checkAgrees (testEntry ``threeInputs ["x", "b", "y"] ["o1", "o2"] (.of3 threeInputs))
+  checkAgrees (testEntry ``noInputs [] ["o"] (.of0 noInputs))
   checkAgrees (testEntry ``usesGlobal ["x"] ["o"] (.of1 usesGlobal)
     (defs := [``double, ``usesGlobal]))
 

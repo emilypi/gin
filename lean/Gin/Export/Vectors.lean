@@ -105,6 +105,13 @@ def drawPairs {α β : Type} [PortValue α] [PortValue β] (n : Nat) (g : Rng) :
     xs := xs.push (x, y)
   return (xs, g)
 
+/-- Vectors of a circuit without inputs: its output on each cycle. -/
+def VectorSource.of0 {dom : Domain} {ο : Type} [OutputValues ο] (f : Signal dom ο) :
+    VectorSource where
+  inputs := []
+  outputs := OutputValues.tys ο
+  rows _ n := (List.range n).toArray.map fun t => { inputs := [], outputs := OutputValues.values (f t) }
+
 /-- Vectors of a one-input circuit. `gen n g` draws the `n` inputs; by
 default they are uniformly distributed. -/
 def VectorSource.of1 {dom : Domain} {α ο : Type} [PortValue α] [Inhabited α] [OutputValues ο]
@@ -132,6 +139,38 @@ def VectorSource.of2 {dom : Domain} {α β ο : Type} [PortValue α] [Inhabited 
     let out := f (ofArray xs) (ofArray ys)
     (List.range n).toArray.map fun t =>
       { inputs := [PortValue.toValue xs[t]!, PortValue.toValue ys[t]!],
+        outputs := OutputValues.values (out t) }
+
+/-- `n` triples of samples, one per cycle; each cycle draws the first
+component, then the second, then the third. -/
+def drawTriples {α β γ : Type} [PortValue α] [PortValue β] [PortValue γ] (n : Nat) (g : Rng) :
+    Array (α × β × γ) × Rng := Id.run do
+  let mut g := g
+  let mut xs := #[]
+  for _ in [0:n] do
+    let (x, g') := PortValue.draw g
+    let (y, g'') := PortValue.draw g'
+    let (z, g''') := PortValue.draw g''
+    g := g'''
+    xs := xs.push (x, y, z)
+  return (xs, g)
+
+/-- Vectors of a three-input circuit. `gen n g` draws the `n` input
+triples; by default each cycle draws the inputs in order, uniformly. -/
+def VectorSource.of3 {dom : Domain} {α β γ ο : Type} [PortValue α] [Inhabited α] [PortValue β]
+    [Inhabited β] [PortValue γ] [Inhabited γ] [OutputValues ο]
+    (f : Signal dom α → Signal dom β → Signal dom γ → Signal dom ο)
+    (gen : Nat → Rng → Array (α × β × γ) × Rng := drawTriples) : VectorSource where
+  inputs := [PortValue.ty α, PortValue.ty β, PortValue.ty γ]
+  outputs := OutputValues.tys ο
+  rows seed n :=
+    let (ts, _) := gen n ⟨seed⟩
+    let xs := ts.map (·.1)
+    let ys := ts.map (·.2.1)
+    let zs := ts.map (·.2.2)
+    let out := f (ofArray xs) (ofArray ys) (ofArray zs)
+    (List.range n).toArray.map fun t =>
+      { inputs := [PortValue.toValue xs[t]!, PortValue.toValue ys[t]!, PortValue.toValue zs[t]!],
         outputs := OutputValues.values (out t) }
 
 /-! ## Biased generators

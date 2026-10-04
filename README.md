@@ -36,13 +36,15 @@ A circuit is only as trustworthy as the reason to believe it does what it
 should. gin moves that reason from the implementation to its
 specification. Whether the implementation was written by a hardware
 engineer, a contributor you have never met or a language model, a reviewer
-only has to answer three small questions:
+answers three small questions about the result, provided it was built
+from trusted tooling as described below:
 
 1. Does the specification say what I want? The certificate carries the
    theorem statement and every definition it depends on
    (`specDefinitions`), printed by the exporter's fixed printer into every
    generated HDL file, together with their hash. Review them once, then pin
-   the hash with `--spec-hash` so that any later change to the claim fails.
+   the hash with `--spec-hash` so that any later change to the printed claim
+   fails.
 2. Does the proof check? The Lean kernel decides. The exporter refuses
    proofs that rely on `sorry`, `native_decide`, `bv_decide` or any axiom
    beyond Lean's standard three, and gin checks the same policy again.
@@ -53,10 +55,18 @@ only has to answer three small questions:
 
 The implementation itself can be as clever or as obscure as it likes: its
 behaviour is covered by the proof, so once its theorem is reviewed and
-validation passes, you do not need to read it to know what it computes.
-Building it, however, runs its code: Lean executes `#eval`, `run_cmd`,
-macros and elaborators at build time, and the exporter links the design.
-Build and export designs you did not write in a sandbox, as described in
+validation passes, you do not need to read its logic to know what it
+computes. Building it, however, runs its code: Lean executes `#eval`,
+`run_cmd`, macros and elaborators at build time, before and alongside the
+kernel replay and the exporter's checks, and the exporter links the
+design. A sandbox protects your machine, not the result: code that runs at
+build time can forge every output, the certificate included. For a design
+you did not write, either read its Lean sources for build-time code or run
+the replay and checker from trusted binaries in a separate clean
+environment, and take the export script, exporter, lakefile, DSL and
+toolchain pin from a reviewed revision of gin. The spec hash also does not
+cover gin's signal DSL or Lean's core library; changes to
+`lean/Gin/Signal.lean` and `lean/lean-toolchain` need review. See
 [docs/trust-model.md](docs/trust-model.md).
 
 ## Quickstart

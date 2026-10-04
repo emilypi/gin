@@ -7,6 +7,8 @@
 # Run from the repository root. The export builds the Lean package with
 # warnings as errors (which runs the Lean tests), replays every module the
 # exported circuits and the exporter load (gin-check-export --list-modules)
+# and every module of the package's module roots (Gin, GinTest, GinExport,
+# GinCheckExport; every Lean source outside GinReject must be among them)
 # through the kernel with leanchecker (catching declarations that were added
 # without kernel checking, e.g. under debug.skipKernelTC), and then writes
 # examples/<name>/<name>.gin.json and <name>.vectors.json for each example.
@@ -181,19 +183,58 @@ check_reserved_words() {
   [ "$hs" = "$lean" ] || die "lean/Gin/Export/Reserved.lean and src/Gin/Netlist/Types.hs reserve different words:"$'\n'"$(diff <(echo "$hs") <(echo "$lean"))"
 }
 
+# import_closure ROOT...: every module that importing one of the named root
+# modules loads, toolchain modules included, one per line. Each root is
+# imported on its own (two executable roots both declare main). Needs the
+# Lean package built.
+import_closure() {
+  printf '%s\n' 'import Lean' 'open Lean in' 'def main (roots : List String) : IO Unit := do' \
+    '  initSearchPath (← findSysroot)' \
+    '  for r in roots do' \
+    '    let env ← importModules #[{ module := r.toName }] {} (loadExts := false)' \
+    '    for m in env.header.moduleNames do IO.println m' > "$tmp/closure.lean"
+  (cd lean && lake env lean --run "$tmp/closure.lean" "$@")
+}
+
 # [lean-check-no-design] gin-check-export links no design: outside the Lean
 # toolchain, its root module imports only the exporter (Gin.Export.*) and the
 # DSL (Gin.Signal). Needs the Lean package built.
 check_checker_closure() {
   local mods bad
-  printf '%s\n' 'import Lean' 'open Lean in' 'def main : IO Unit := do' \
-    '  initSearchPath (← findSysroot)' \
-    '  let env ← importModules #[{ module := `GinCheckExport }] {} (loadExts := false)' \
-    '  for m in env.header.moduleNames do IO.println m' > "$tmp/closure.lean"
-  mods=$(cd lean && lake env lean --run "$tmp/closure.lean") || die "cannot read the modules of GinCheckExport"
+  mods=$(import_closure GinCheckExport) || die "cannot read the modules of GinCheckExport"
   grep -qx GinCheckExport <<<"$mods" || die "GinCheckExport is not among its own modules"
   bad=$(grep -Ev '^(Init|Std|Lean|Lake)(\.|$)|^Gin\.Export\.|^Gin\.Signal$|^GinCheckExport$' <<<"$mods" || true)
   [ -z "$bad" ] || die "gin-check-export links modules other than the exporter and the DSL:"$'\n'"$bad"
+}
+
+# The module roots of the Lean package, other than the reject fixtures: the
+# roots of its default libraries and executables.
+module_roots=(Gin GinTest GinExport GinCheckExport)
+
+# replay_modules NAME...: the modules the kernel replay covers, one per
+# line, sorted: those exporting the named circuits loads and gin-export links
+# (gin-check-export --list-modules), and the import closure, outside the Lean
+# toolchain, of every module root, so the tests (GinTest) are replayed too.
+replay_modules() {
+  local listed roots
+  listed=$(loaded_modules "$@") || die "gin-check-export --list-modules $* failed"
+  roots=$(import_closure "${module_roots[@]}") || die "cannot read the modules of ${module_roots[*]}"
+  printf '%s\n%s\n' "$listed" "$roots" | grep -Ev '^(Init|Std|Lean|Lake)(\.|$)|^$' | sort -u
+}
+
+# check_replay_covers MODULE...: every Lean source under lean/ outside the
+# reject fixtures (GinReject) is one of the named modules, so no module of the
+# package escapes the kernel replay.
+check_replay_covers() {
+  local src m missing=
+  while IFS= read -r src; do
+    m=${src#lean/}
+    m=${m%.lean}
+    m=${m//\//.}
+    printf '%s\n' "$@" | grep -qxF -- "$m" || missing+="$m"$'\n'
+  done < <(find lean -path lean/.lake -prune -o -path lean/GinReject -prune -o \
+    -name GinReject.lean -prune -o -name '*.lean' -print)
+  [ -z "$missing" ] || die "the kernel replay does not cover these modules:"$'\n'"$missing"
 }
 
 export_examples() {
@@ -201,9 +242,11 @@ export_examples() {
   lake -d lean build --wfail
   check_reserved_words
   check_checker_closure
-  # [lean-kernel-replay] exactly the modules the export loads
-  mods=($(loaded_modules "${examples[@]}")) || die "gin-check-export --list-modules ${examples[*]} failed"
-  [ "${#mods[@]}" -gt 0 ] || die "gin-check-export --list-modules ${examples[*]} listed no modules"
+  # [lean-kernel-replay] exactly the modules the export loads and those of
+  # every module root, which together are every module of the package
+  mods=($(replay_modules "${examples[@]}")) || die "cannot list the modules to replay"
+  [ "${#mods[@]}" -gt 0 ] || die "no modules to replay"
+  check_replay_covers "${mods[@]}"
   replay "$tmp/replay" "${mods[@]}"
   # [lean-certificate-authority] exported into a temporary directory and
   # copied into examples/ only once every certificate matches the checker's

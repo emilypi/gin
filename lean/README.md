@@ -64,8 +64,11 @@ What a reviewer reads in a certificate is what the kernel checked:
   exactly the modules the export loads outside the Lean toolchain
   and the modules `gin-export` links
   (`lake exe gin-check-export --list-modules NAME...`), whatever their names,
-  so declarations added under `debug.skipKernelTC` are caught in any
-  module a design imports. `leanchecker` runs on a search path holding
+  together with the import closure of every module root (`Gin`,
+  `GinTest`, `GinExport`, `GinCheckExport`), so declarations added under
+  `debug.skipKernelTC` are caught in any module a design imports and in
+  the tests. The script refuses to export when a Lean source under
+  `lean/` outside `GinReject` is not among the replayed modules. `leanchecker` runs on a search path holding
   only those modules' `.olean` files, so a stale `.olean` left by a
   deleted source is neither replayed nor imported.
 - A circuit that loads a module under `GinReject` is refused unless its

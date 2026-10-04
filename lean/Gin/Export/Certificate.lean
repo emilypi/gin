@@ -57,11 +57,15 @@ module `Gin.Signal`) and at Lean's core library (modules under `Init`,
 
 Every name in the certificate (the theorem, the axioms, the constants and
 binders of the statement and of the definitions, and the `name` of each
-definition) is printed by `Print.name`, which never gives two names the
-same text and prints only ASCII. The export is refused if a name cannot be
-printed that way (a name with macro scopes, an inaccessible name, a
-component containing `»`), if two definitions print the same name, or if a
-bound variable prints like a constant of its term.
+definition) is printed by `Print.name` (with `_root_.` where Lean would
+read the name as an alias, `Print.globalName`), which never gives two names
+the same text and prints only ASCII. The export is refused if a name cannot
+be printed that way (a name with macro scopes or a numeric component, an
+inaccessible name, a component containing `»`), if two definitions print
+the same name, or if a bound variable prints like a constant of its term.
+Every field is printable ASCII by construction of the printer; the export
+is refused if one is not (`checkAscii`), so that no text in a certificate
+can hide a character a reviewer does not see.
 -/
 
 open Lean Meta
@@ -168,14 +172,27 @@ def checkDistinctNames (names : List String) : Except String Unit :=
   | some n => throw s!"two specification definitions print the same name {n}"
   | none => pure ()
 
+/-- Refuse a certificate with a field that is not printable ASCII
+(`0x20`–`0x7E`): a non-ASCII character could pass for another one, and a
+control character could hide text. -/
+def checkAscii (c : Certificate) : Except String Unit := do
+  let fields := [("theorem", c.theorem_), ("statement", c.statement)] ++
+    (c.axioms ++ c.implAxioms).map ("axiom", ·) ++
+    c.specDefinitions.flatMap fun d => [("specification definition name", d.name),
+      ("specification definition", d.body)]
+  for (what, text) in fields do
+    unless Print.isPrintableAscii text do
+      throw s!"the {what} {text.quote} contains a character that is not printable ASCII"
+
 /-- The specification definitions of a statement, rendered. -/
 def specDefinitions (env : Environment) (statement : Lean.Expr) (top : Name) :
     MetaM (List SpecDef) := do
   let nodes := specClosure env statement.getUsedConstants (· == top)
+  let aliases := Print.aliases env
   let defs ← (dependencyOrder env nodes).toList.filterMapM fun c => do
     let some ci := env.find? c | return none
     return some {
-      name := ← printed s!"the name of {c}" (Print.name c)
+      name := ← printed s!"the name of {c}" (Print.globalName aliases c)
       body := ← printed s!"the definition of {c}"
         (Print.decl env c ci.levelParams ci.type (ci.value? (allowOpaque := true))) }
   printed "the specification definitions" (checkDistinctNames (defs.map (·.name)))
@@ -237,12 +254,15 @@ def certify (thm top : Name) (defs : List Name) : MetaM Certificate := do
     impl := impl ++ (← checkedAxioms "definition" d)
   discard <| checkShape thm top ci.type
   let implAxioms := (impl.qsort (·.toString < ·.toString)).toList.eraseDups
-  let names (ns : List Name) := printed "the axioms" (ns.mapM Print.name)
-  return {
-    theorem_ := ← printed s!"the name of {thm}" (Print.name thm)
+  let aliases := Print.aliases env
+  let names (ns : List Name) := printed "the axioms" (ns.mapM (Print.globalName aliases))
+  let c : Certificate := {
+    theorem_ := ← printed s!"the name of {thm}" (Print.globalName aliases thm)
     statement := ← printed s!"the statement of {thm}" (Print.expr env ci.type)
     axioms := ← names axs.toList
     implAxioms := ← names implAxioms
     specDefinitions := ← specDefinitions env ci.type top }
+  printed "the certificate" (checkAscii c)
+  return c
 
 end Gin.Export

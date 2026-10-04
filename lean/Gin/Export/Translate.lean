@@ -1,6 +1,7 @@
 import Lean
 import Gin.Signal
 import Gin.Export.Ir
+import Gin.Export.Print
 
 /-!
 # Translating elaborated definitions to the core IR
@@ -76,6 +77,14 @@ structure TrState where
 
 /-- The translation monad. -/
 abbrev TrM := ReaderT TrContext (StateRefT TrState MetaM)
+
+/-- The IR name of the exported definition `n`: its name as the certificate
+prints it (`Print.name`), which no other name shares. Names with macro
+scopes or numeric components and inaccessible names are refused. -/
+def irName (n : Name) : MetaM String :=
+  match Print.name n with
+  | .ok s => pure s
+  | .error e => throwError "cannot name the exported definition {n} in the IR: {e}"
 
 /-- Throw an error located in the current definition. -/
 def trFail {α : Type} (msg : MessageData) : TrM α := do
@@ -344,7 +353,7 @@ partial def trApp (e : Lean.Expr) : TrM Expr := do
 partial def trConst (e : Lean.Expr) (c : Name) (us : List Level) (args : Array Lean.Expr) :
     TrM Expr := do
   if (← read).exported.contains c then
-    return applyTo (.global c.toString) (← args.toList.mapM trExpr)
+    return applyTo (.global (← irName c)) (← args.toList.mapM trExpr)
   if let some arity := primArity? c then
     if args.size < arity then
       return ← trExpr (← etaExpandBy e (arity - args.size))
@@ -626,6 +635,6 @@ def translateDef (n : Name) (exported : NameSet) : MetaM Def := do
   runTr n exported do
     let type ← trTy ci.type
     let body ← trExpr d.value
-    return { name := n.toString, type, body }
+    return { name := ← irName n, type, body }
 
 end Gin.Export

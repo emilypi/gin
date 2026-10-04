@@ -50,10 +50,16 @@ What a reviewer reads in a certificate is what the kernel checked:
   are rendered by the exporter's own printer (`Gin/Export/Print.lean`),
   which prints fully qualified names and explicit applications and never
   consults notation, delaborators or unexpanders declared by a design.
-  Names are printed in ASCII and never two alike: a component that is not
-  a plain identifier is written `«…»` with `\u{XXXX}` escapes, and names
-  with macro scopes, inaccessible names (`✝`) and duplicate definition
-  names are refused (`GinTest/Names.lean`).
+  Every certificate field is printable ASCII, and the export is refused
+  otherwise: the syntax is written `forall`, `->` and `{{x : α}}`, a name
+  component that is not a plain identifier is written `<<…>>` (Lean's
+  `«…»`) with `\u{XXXX}` escapes, and so is every character of a string
+  literal outside printable ASCII, so that no confusable letter, invisible
+  character or bidirectional override reaches a reviewer. Names are never
+  printed alike: names with macro scopes or numeric components (which would
+  read as projections or numerals), inaccessible names (`✝`) and duplicate
+  definition names are refused, and a constant Lean would read as an alias
+  (a root `true`) is printed `_root_.true` (`GinTest/Names.lean`).
 - The export script replays through the kernel, with `leanchecker`,
   exactly the modules the export loads outside the Lean toolchain
   and the modules `gin-export` links

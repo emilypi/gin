@@ -23,11 +23,11 @@ run_meta do
   unless (pp.splitOn "BadUnexpander.spec ").length > 1 && (pp.splitOn "specR").length == 1 do
     throwError "the unexpander did not take effect: {pp}"
   let c ← Gin.Export.certify thm ``BadUnexpander.bad [``BadUnexpander.bad]
-  let statement := "∀ (en : Gin.Signal Gin.System Bool) (t : Nat), \
+  let statement := "forall (en : Gin.Signal Gin.System Bool) (t : Nat), \
     BadUnexpander.bad en t = BadUnexpander.specR en t"
   unless c.statement == statement do
     throwError "statement {c.statement}, expected {statement}"
-  let body := "BadUnexpander.specR : Gin.Signal Gin.System Bool → Nat → BitVec 8 := \
+  let body := "BadUnexpander.specR : Gin.Signal Gin.System Bool -> Nat -> BitVec 8 := \
     fun (_en : Gin.Signal Gin.System Bool) (_t : Nat) => (0 : BitVec 8)"
   unless c.specDefinitions.map (fun d => (d.name, d.body)) == [("BadUnexpander.specR", body)] do
     throwError "spec definitions {c.specDefinitions.map (fun d => (d.name, d.body))}"

@@ -138,11 +138,11 @@ end GinTest.Certificate
 -- with full names, and the specification's definition is listed.
 /--
 info: { theorem_ := "Counter.counter_correct",
-  statement := "∀ (en : Gin.Signal Gin.System Bool) (t : Nat), Counter.counter en t = Counter.spec en t",
+  statement := "forall (en : Gin.Signal Gin.System Bool) (t : Nat), Counter.counter en t = Counter.spec en t",
   axioms := ["propext"],
   implAxioms := [],
   specDefinitions := [{ name := "Counter.spec",
-                        body := "Counter.spec : Gin.Signal Gin.System Bool → Nat → BitVec 8 := fun (en : Gin.Signal Gin.System Bool) (t : Nat) => BitVec.ofNat 8 (@List.countP Nat (fun (i : Nat) => en i) (List.range t))" }] }
+                        body := "Counter.spec : Gin.Signal Gin.System Bool -> Nat -> BitVec 8 := fun (en : Gin.Signal Gin.System Bool) (t : Nat) => BitVec.ofNat 8 (@List.countP Nat (fun (i : Nat) => en i) (List.range t))" }] }
 -/
 #guard_msgs in
 run_meta do
@@ -184,7 +184,7 @@ run_meta do
       "GinTest.Certificate.Mode.count : GinTest.Certificate.Mode" do
     throwError "constructor shown as {body "GinTest.Certificate.Mode.count"}"
   unless body "GinTest.Certificate.base" == some
-      "GinTest.Certificate.base : Nat → Nat := fun (n : Nat) => @HMod.hMod Nat Nat Nat (@instHMod Nat Nat.instMod) n 256" do
+      "GinTest.Certificate.base : Nat -> Nat := fun (n : Nat) => @HMod.hMod Nat Nat Nat (@instHMod Nat Nat.instMod) n 256" do
     throwError "base shown as {body "GinTest.Certificate.base"}"
   -- deterministic: the same closure, computed again, in the same order
   let again ← Gin.Export.specDefinitions (← Lean.getEnv)
@@ -236,7 +236,7 @@ run_meta do
 open GinTest.Certificate in
 run_meta do
   let c ← Gin.Export.certify ``ticks_correct ``ticks [``ticks]
-  unless c.statement == "∀ (t : Nat), GinTest.Certificate.ticks t = GinTest.Certificate.ticksSpec t" do
+  unless c.statement == "forall (t : Nat), GinTest.Certificate.ticks t = GinTest.Certificate.ticksSpec t" do
     throwError "statement {c.statement}"
   unless c.specDefinitions.map (·.name) == ["GinTest.Certificate.ticksSpec"] do
     throwError "spec definitions {c.specDefinitions.map (·.name)}"

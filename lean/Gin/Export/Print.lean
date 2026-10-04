@@ -13,27 +13,42 @@ checked. (An `app_unexpander` can, for instance, print a call of `specR` as
 values of the constants it mentions; nothing in the environment can change
 its output.
 
+## ASCII
+
+Every printed text is printable ASCII (`0x20`–`0x7E`), so that nothing in
+it can pass for something else that looks alike: a confusable letter
+(`spe\u{3F2}`, with a Greek lunate sigma, for `spec`), an invisible
+character or a bidirectional override. The fixed syntax is written in its
+ASCII forms (`forall`, `->`, `{{x : α}}` for a strict-implicit binder),
+names are escaped as below, and in a string literal every character outside
+printable ASCII, and `"` and `\`, is written `\u{XXXX}` (its code point in
+upper-case hexadecimal, at least four digits), so that `"on\u{200B}"` does
+not read as `"on"`. The certificate checks the result again.
+
 ## Names
 
-Two different names never print the same text, and every printed name is
-ASCII, so that a name cannot pass for another one that looks alike
-(`spe\u{3F2}`, with a Greek lunate sigma, for `spec`). `Name.toString` gives
-neither guarantee: it turns escaping off for inaccessible names and names
-with macro scopes, so the root constant `«A.spec✝»` and the constant
-`spec✝` in namespace `A` both print `A.spec✝`.
+Two different names never print the same text. `Name.toString` does not
+guarantee this: it turns escaping off for inaccessible names and names with
+macro scopes, so the root constant `«A.spec✝»` and the constant `spec✝` in
+namespace `A` both print `A.spec✝`.
 
 * A name component is printed bare if it is a plain ASCII identifier
   (`[A-Za-z_][A-Za-z0-9_']*`) and not one of `keywords`; otherwise it is
-  printed `«…»`, with every character other than an ASCII letter, digit, `_`
-  or `'` written `\u{XXXX}` (so `.`, `«`, `\` and every non-ASCII character
-  are escaped). A numeric component is printed in decimal; a string
-  component that consists of digits is not a plain identifier, so it is
-  printed `«…»`. Components are joined with `.`.
-* A component that contains `»` is refused, and so are names with macro
-  scopes and inaccessible names (a component containing `✝` or equal to
-  `_inaccessible`) of constants and universe parameters: such names are not
-  written by hand, and their meaning depends on the hygiene the printer
-  does not show.
+  printed `<<…>>` (standing for Lean's `«…»`), with every character other
+  than an ASCII letter, digit, `_` or `'` written `\u{XXXX}` (so `.`, `<`,
+  `>`, `\` and every non-ASCII character are escaped). A string component
+  that consists of digits is not a plain identifier, so it is printed
+  `<<…>>`. Components are joined with `.`.
+* Names with a numeric component (`A.1`, which reads as a projection, or
+  the root `1`, which reads as a numeral), names with macro scopes and
+  inaccessible names (a component containing `✝` or equal to
+  `_inaccessible`) of constants and universe parameters are refused, and so
+  is a component that contains `»`: such names are not written by hand, and
+  their meaning depends on what the printer does not show.
+* A constant whose name Lean source would resolve through an alias
+  (`export`), such as a root constant `true`, which is not `Bool.true`, is
+  printed `_root_.true`; `_root_` itself is a keyword, so a constant named
+  `_root_.true` prints `<<_root_>>.true`.
 * A bound variable's name has its macro scopes erased and is printed as one
   component (a multi-component binder name has its `.`s escaped), so that it
   cannot read as a constant or a projection.
@@ -45,31 +60,37 @@ with macro scopes, so the root constant `«A.spec✝»` and the constant
 * Applications print every argument, including implicit and instance
   arguments. An applied constant or variable is written `@c` unless its type,
   with definitions unfolded as needed, is seen to take explicit binders for
-  all the arguments; so the text denotes the same application even when the
-  binders are hidden behind a definition (`g : F` with
-  `F := {n : Nat} → Nat → Nat`).
+  all the arguments and to have no non-explicit binder after them; so the
+  text denotes the same application even when the binders are hidden behind
+  a definition (`g : F` with `F := {n : Nat} -> Nat -> Nat`) and Lean would
+  not insert an implicit argument after the last one. By the same rule an
+  unapplied constant or variable whose type starts with a non-explicit
+  binder is written `@c`.
 * `@Eq α a b` is printed `a = b` (the type `α` is not shown).
-* A non-dependent explicit `∀` is printed `α → β`, and is right-associative;
-  every other `∀` is printed `∀ (x : α), β`, with `{x : α}`, `⦃x : α⦄` and
-  `[x : α]` for the other binder kinds. Consecutive binders share one `∀`,
-  and consecutive lambdas one `fun (x : α) (y : β) => b`.
+* A non-dependent explicit `forall` is printed `α -> β`, and is
+  right-associative; every other `forall` is printed `forall (x : α), β`,
+  with `{x : α}`, `{{x : α}}` and `[x : α]` for the other binder kinds.
+  Consecutive binders share one `forall`, and consecutive lambdas one
+  `fun (x : α) (y : β) => b`.
 * `let x : α := v; b`, and `have x : α := v; b` for a non-dependent `let`.
 * Numerals: `@OfNat.ofNat Nat n (instOfNatNat n)` is printed `n`, so a bare
   number is always a `Nat`; `@OfNat.ofNat (BitVec w) n (BitVec.instOfNat w n)`
   and `BitVec.ofNat w n` for a numeral `n` are printed `(n : BitVec w)`.
   Numerals at any other instance are printed as ordinary applications. A raw
-  literal is printed `nat_lit n`, and a string literal in quotes.
+  literal is printed `nat_lit n`, and a string literal in quotes, escaped as
+  above.
 * Sorts: `Prop`, `Type`, `Type u`, `Sort u`. A structure projection is
-  printed `e.i`, with `i` counted from 1.
+  printed `e.i`, with `i` counted from 1; since no constant name has a
+  numeric component, `A.1` is always a projection.
 * Bound variables keep their names, except that a name already bound in an
   enclosing scope, or equal to a constant of the term or a prefix of one,
   gets the least suffix `_k` (`k ≥ 1`) that makes it fresh. After printing,
   `expr` and `decl` check again that no bound variable prints like a
   constant of the term or a prefix of one.
 * An argument that is not an atom is parenthesised; so are the operands of
-  `=` that are not applications or atoms, the left operand of `→` that is an
+  `=` that are not applications or atoms, the left operand of `->` that is an
   arrow or a binder, and any binder that is not at the end of the enclosing
-  term (the body of a binder and the right operand of `→` are at the end).
+  term (the body of a binder and the right operand of `->` are at the end).
 -/
 
 open Lean
@@ -85,7 +106,8 @@ def keywords : Std.HashSet String := Std.HashSet.ofList
    "do", "else", "end", "example", "exists", "forall", "from", "fun", "have", "if", "import", "in",
    "inductive", "instance", "let", "match", "mut", "namespace", "nat_lit", "noncomputable",
    "opaque", "open", "partial", "private", "protected", "return", "section", "show", "sorry",
-   "structure", "suffices", "then", "theorem", "universe", "unsafe", "variable", "where", "with"]
+   "structure", "suffices", "then", "theorem", "universe", "unsafe", "variable", "where", "with",
+   "_root_"]
 
 /-- May `c` appear in a printed component without escaping? -/
 def plainChar (c : Char) : Bool := c.isAlphanum || c == '_' || c == '\''
@@ -103,29 +125,60 @@ def unicodeEscape (c : Char) : String :=
   let hex := String.ofList ((Nat.toDigits 16 c.toNat).map Char.toUpper)
   "\\u{" ++ "".pushn '0' (4 - hex.length) ++ hex ++ "}"
 
-/-- A name component: bare if it is a plain identifier, otherwise `«…»` with
-every character that is not `plainChar` escaped. A component containing `»`
-is refused. -/
+/-- A name component: bare if it is a plain identifier, otherwise `<<…>>`
+with every character that is not `plainChar` escaped. A component containing
+`»` is refused. -/
 def component (s : String) : Except String String := do
   if s.contains '»' then throw s!"the name component {s.quote} contains »"
   if isPlainIdent s then return s
-  return "«" ++ s.foldl (fun acc c => if plainChar c then acc.push c else acc ++ unicodeEscape c) ""
-    ++ "»"
+  return "<<" ++ s.foldl (fun acc c => if plainChar c then acc.push c else acc ++ unicodeEscape c) ""
+    ++ ">>"
+
+/-- A string literal in quotes, with every character outside printable
+ASCII (`0x20`–`0x7E`), and `"` and `\`, written `\u{XXXX}`. -/
+def stringLit (s : String) : String :=
+  let plain (c : Char) := 0x20 ≤ c.toNat && c.toNat ≤ 0x7E && c != '"' && c != '\\'
+  "\"" ++ s.foldl (fun acc c => if plain c then acc.push c else acc ++ unicodeEscape c) "" ++ "\""
+
+/-- Is every character of `s` printable ASCII (`0x20`–`0x7E`)? -/
+def isPrintableAscii (s : String) : Bool :=
+  s.all fun c => 0x20 ≤ c.toNat && c.toNat ≤ 0x7E
 
 /-- The printed form of a constant's or universe parameter's name (see the
-module documentation). Refuses anonymous names, names with macro scopes and
-inaccessible names. -/
+module documentation). Refuses anonymous names, names with macro scopes,
+names with a numeric component and inaccessible names. -/
 def name (n : Name) : Except String String := do
   if n.isAnonymous then throw "an anonymous name"
   if n.hasMacroScopes then throw s!"the name {n} has macro scopes"
   let rec go : Name → Except String (List String)
     | .anonymous => pure []
-    | .num p k => return (← go p) ++ [toString k]
+    | .num .. => throw s!"the name {n} has a numeric component"
     | .str p s => do
       if s.contains '✝' || s == "_inaccessible" then
         throw s!"the name {n} is inaccessible"
       return (← go p) ++ [← component s]
   return ".".intercalate (← go n)
+
+/-- Names that Lean source resolves to another constant through an alias
+(`export`): those of `env`, read from its imported modules' entries as well
+as from its state (the state is empty when the modules were imported
+without extensions), and `true` and `false`. -/
+def aliases (env : Environment) : NameSet := Id.run do
+  let mut s : NameSet := NameSet.empty |>.insert `true |>.insert `false
+  for (a, _) in (getAliasState env).toList do
+    s := s.insert a
+  for i in [0:env.header.moduleNames.size] do
+    for (a, _) in aliasExtension.getModuleEntries env i do
+      s := s.insert a
+  return s
+
+/-- The printed form of a constant's name in a term or as a declaration's
+name: `name`, prefixed by `_root_.` if Lean source would resolve the bare
+text through an alias (`true` for the root constant `true`, which is not
+`Bool.true`). -/
+def globalName (aliases : NameSet) (n : Name) : Except String String := do
+  let s ← name n
+  return if aliases.contains n then "_root_." ++ s else s
 
 /-- The text of a bound variable's name, before escaping: macro scopes
 erased, components joined with `.`; `x` for an anonymous name. -/
@@ -156,9 +209,9 @@ def checkBound (reserved : Std.HashSet String) (bound : Array String) : Except S
 
 /-- Precedence of printed text: what may appear where without parentheses. -/
 inductive Prec where
-  /-- `∀`, `fun`, `let`, `have`: extend as far to the right as possible. -/
+  /-- `forall`, `fun`, `let`, `have`: extend as far to the right as possible. -/
   | binder
-  /-- `α → β`. -/
+  /-- `α -> β`. -/
   | arrow
   /-- `a = b`. -/
   | eq
@@ -198,6 +251,8 @@ structure Ctx where
   /-- Names a bound variable must not take: every constant of the printed
   term, and every prefix of one, as printed. -/
   reserved : Std.HashSet String := {}
+  /-- Names printed with `_root_.` (see `globalName`). -/
+  aliases : NameSet := {}
 
 /-- The printer's monad: it records every bound variable's printed name and
 can refuse a name. -/
@@ -250,25 +305,31 @@ def sort (u : Level) : Except String Doc :=
   | l => return ⟨"Sort " ++ (← levelArg l), .app⟩
 
 /-- A constant with its universe arguments (omitted when all are `0`). -/
-def constName (c : Name) (us : List Level) : Except String String := do
-  let n ← name c
+def constName (aliases : NameSet) (c : Name) (us : List Level) : Except String String := do
+  let n ← globalName aliases c
   if us.all (· == .zero) then return n
   return n ++ ".{" ++ ", ".intercalate (← us.mapM level) ++ "}"
 
-/-- Is a function of type `ty` applied to `args` possibly given a
-non-explicit argument? The type is walked binder by binder, instantiating
-each with its argument; when it is not a `∀` while arguments remain, its
-head definition is unfolded. If neither works the answer is `true`, so that
-`@` is printed whenever explicit binders are not seen. -/
+/-- Does a function of type `ty`, applied to `args`, possibly have a
+non-explicit binder, among those its arguments fill or after them? Lean
+source would then fill or insert the argument itself, so the application is
+printed with `@`. The type is walked binder by binder, instantiating each
+with its argument while arguments remain; when it is not a `∀`, its head
+definition is unfolded. It has no further binders if it is then a sort, a
+variable or headed by an inductive type, an axiom or an opaque constant
+(and all arguments are used). Otherwise the answer is `true`, so that `@` is
+printed whenever explicit binders are not seen. -/
 partial def needsAt (env : Environment) (ty : Expr) (args : Array Expr) (i : Nat := 0)
     (fuel : Nat := 256) : Bool :=
-  if i ≥ args.size then false else
   match fuel with
   | 0 => true
   | fuel + 1 =>
     match ty.consumeMData.headBeta with
-    | .forallE _ _ b bi => !bi.isExplicit || needsAt env (b.instantiate1 args[i]!) args (i + 1) fuel
+    | .forallE _ _ b bi =>
+      !bi.isExplicit || needsAt env (if h : i < args.size then b.instantiate1 args[i] else b) args
+        (i + 1) fuel
     | .letE _ _ v b _ => needsAt env (b.instantiate1 v) args i fuel
+    | .sort _ => i < args.size
     | t =>
       match t.getAppFn.consumeMData with
       | .const c us =>
@@ -276,7 +337,9 @@ partial def needsAt (env : Environment) (ty : Expr) (args : Array Expr) (i : Nat
         | some ci@(.defnInfo _) =>
           if ci.levelParams.length != us.length then true else
           needsAt env ((ci.instantiateValueLevelParams! us).beta t.getAppArgs) args i fuel
+        | some (.inductInfo _) | some (.axiomInfo _) | some (.opaqueInfo _) => i < args.size
         | _ => true
+      | .bvar _ => i < args.size
       | _ => true
 
 /-- `n` if `e` is a raw natural-number literal. -/
@@ -337,7 +400,7 @@ def Ctx.bind (ctx : Ctx) (name : String) (ty : Expr) : Ctx :=
 def brackets : BinderInfo → String × String
   | .default => ("(", ")")
   | .implicit => ("{", "}")
-  | .strictImplicit => ("⦃", "⦄")
+  | .strictImplicit => ("{{", "}}")
   | .instImplicit => ("[", "]")
 
 mutual
@@ -346,13 +409,20 @@ mutual
 partial def doc (ctx : Ctx) (e : Expr) : M Doc := do
   match e with
   | .mdata _ e => doc ctx e
-  | .bvar i => return ⟨(ctx.locals[i]?.map (·.1)).getD s!"#{i}", .atom⟩
+  | .bvar i =>
+    match ctx.locals[i]? with
+    | some (x, ty) => return ⟨(if needsAt ctx.env ty #[] then "@" else "") ++ x, .atom⟩
+    | none => return ⟨s!"#{i}", .atom⟩
   | .fvar fv => return ⟨s!"?fvar.{fv.name}", .atom⟩
   | .mvar mv => return ⟨s!"?mvar.{mv.name}", .atom⟩
   | .sort u => liftDoc (sort u)
-  | .const c us => return ⟨← liftName (constName c us), .atom⟩
+  | .const c us =>
+    let atSign := match ctx.env.find? c with
+      | some ci => if needsAt ctx.env ci.type #[] then "@" else ""
+      | none => "@"
+    return ⟨atSign ++ (← liftName (constName ctx.aliases c us)), .atom⟩
   | .lit (.natVal n) => return ⟨s!"nat_lit {n}", .app⟩
-  | .lit (.strVal s) => return ⟨s.quote, .atom⟩
+  | .lit (.strVal s) => return ⟨stringLit s, .atom⟩
   | .proj _ i s => return ⟨(← doc ctx s).paren .atom ++ "." ++ toString (i + 1), .atom⟩
   | .app .. => app ctx e
   | .lam .. => lam ctx e #[]
@@ -383,7 +453,7 @@ partial def app (ctx : Ctx) (e : Expr) : M Doc := do
       let atSign := match ctx.env.find? c with
         | some ci => if needsAt ctx.env ci.type args then "@" else ""
         | none => "@"
-      pure (atSign ++ (← liftName (constName c us)))
+      pure (atSign ++ (← liftName (constName ctx.aliases c us)))
     | .bvar i =>
       match ctx.locals[i]? with
       | some (x, ty) => pure ((if needsAt ctx.env ty args then "@" else "") ++ x)
@@ -408,7 +478,7 @@ partial def pi (ctx : Ctx) (e : Expr) : M Doc := do
   match e with
   | .forallE _ t b .default =>
     if b.hasLooseBVar 0 then piBlock ctx e #[] else
-    return ⟨(← doc ctx t).paren .eq ++ " → " ++ (← doc (ctx.bind "_" t) b).text, .arrow⟩
+    return ⟨(← doc ctx t).paren .eq ++ " -> " ++ (← doc (ctx.bind "_" t) b).text, .arrow⟩
   | _ => piBlock ctx e #[]
 
 /-- Print consecutive dependent or non-explicit binders as one `∀`. -/
@@ -426,11 +496,12 @@ partial def piBlock (ctx : Ctx) (e : Expr) (binders : Array String) : M Doc := d
 
 /-- Close a block of `∀` binders. -/
 partial def finish (ctx : Ctx) (body : Expr) (binders : Array String) : M Doc := do
-  return ⟨"∀ " ++ " ".intercalate binders.toList ++ ", " ++ (← doc ctx body).text, .binder⟩
+  return ⟨"forall " ++ " ".intercalate binders.toList ++ ", " ++ (← doc ctx body).text, .binder⟩
 
 end
 
-/-- Every constant of `es` and every prefix of one, as printed. -/
+/-- Every constant of `es` and every prefix of one, as printed (also without
+`_root_.`). -/
 def reservedNames (es : List Expr) : Except String (Std.HashSet String) := do
   let mut s : Std.HashSet String := {}
   for e in es do
@@ -446,7 +517,7 @@ def reservedNames (es : List Expr) : Except String (Std.HashSet String) := do
 def run (env : Environment) (es : List Expr) (extra : List Expr := []) :
     Except String (List String) := do
   let reserved ← reservedNames (es ++ extra)
-  let ctx : Ctx := { env, reserved }
+  let ctx : Ctx := { env, reserved, aliases := aliases env }
   let (texts, bound) ← (es.mapM fun e => return (← doc ctx e).text).run #[]
   checkBound reserved bound
   return texts
@@ -462,7 +533,7 @@ declaration without a value. Universe parameters are written
 def decl (env : Environment) (n : Name) (levelParams : List Name) (type : Expr)
     (value : Option Expr) : Except String String := do
   let texts ← run env (type :: value.toList)
-  let mut head ← name n
+  let mut head ← globalName (aliases env) n
   unless levelParams.isEmpty do
     head := head ++ ".{" ++ ", ".intercalate (← levelParams.mapM name) ++ "}"
   match texts with

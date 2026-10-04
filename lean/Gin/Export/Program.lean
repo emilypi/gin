@@ -110,7 +110,8 @@ def translateTop (e : Entry) : MetaM (Top × List Def) := do
   checkNoNativeReduction e.defs.toArray
   let exported := e.defs.foldl NameSet.insert {}
   let defs ← e.defs.mapM (translateDef · exported)
-  let some topDef := defs.find? (·.name == e.top.toString) | unreachable!
+  let topName ← irName e.top
+  let some topDef := defs.find? (·.name == topName) | unreachable!
   -- the top type: `Signal d i₁ → … → Signal d iₖ → Signal d o`
   let (args, res) := splitFuns topDef.type
   unless args.length == e.inputs.length do
@@ -130,7 +131,7 @@ def translateTop (e : Entry) : MetaM (Top × List Def) := do
   let outputs ← (e.outputs.zip outTys).mapM fun (n, ty) => do
     unless ty.isScalar do throwError "output {n} of {e.top} is not Bool or BitVec"
     return { name := n, type := ty : Port }
-  return ({ name := e.name, domain, inputs, outputs, def_ := e.top.toString }, defs)
+  return ({ name := e.name, domain, inputs, outputs, def_ := topName }, defs)
 where
   splitFuns : Ty → List Ty × Ty
     | .fn a r => let (as, res) := splitFuns r; (a :: as, res)

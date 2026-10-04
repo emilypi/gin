@@ -6,5 +6,6 @@ import GinTest.Print
 import GinTest.Vectors
 import GinTest.Translate
 import GinTest.Unsupported
+import GinTest.Limits
 import GinTest.Capture
 import GinTest.Examples

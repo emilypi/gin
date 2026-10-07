@@ -3,15 +3,18 @@ import Lean
 /-!
 # A fixed printer for kernel terms
 
-Certificates show a reviewer the refinement theorem and every definition it
-depends on (`docs/file-formats.md`, "Certificate"). They are rendered by this
-printer, not by Lean's pretty printer: the pretty printer consults
-delaborators, unexpanders and notation that any imported module can declare,
-so a design could make the printed statement differ from the term the kernel
-checked. (An `app_unexpander` can, for instance, print a call of `specR` as
-`Counter.spec`.) This printer reads only the term itself and the types and
-values of the constants it mentions; nothing in the environment can change
-its output.
+The trace (`Certificate` in the code, `"certificate"` in the JSON) shows you
+the refinement theorem and every definition it depends on
+(`docs/file-formats.md`, "Certificate"). It is there for the first question
+in the README: does the specification say what I want? It is rendered by
+this printer, not by Lean's pretty printer: the pretty printer consults
+delaborators, unexpanders and notation that any imported module can
+declare, so a design could make the printed statement differ from the term
+the kernel checked. (An `app_unexpander` can, for instance, print a call of
+`specR` as `Counter.spec`.) This printer reads only the term itself and the
+types and values of the constants it mentions; nothing in the environment
+can change its output. I would rather you read a plainer term than a
+prettier one that need not be the term the kernel checked.
 
 ## ASCII
 
@@ -23,7 +26,7 @@ ASCII forms (`forall`, `->`, `{{x : α}}` for a strict-implicit binder),
 names are escaped as below, and in a string literal every character outside
 printable ASCII, and `"` and `\`, is written `\u{XXXX}` (its code point in
 upper-case hexadecimal, at least four digits), so that `"on\u{200B}"` does
-not read as `"on"`. The certificate checks the result again.
+not read as `"on"`. `checkAscii` checks the result again.
 
 ## Names
 

@@ -5,15 +5,19 @@ import Gin.Export.Modules
 /-!
 # Code the compiler substitutes for a definition
 
-The exporter reads the IR and the certificate from the kernel definitions
-of a design, but computes its vectors by running the design's compiled
-code. Three attributes let the compiled code differ from the definition:
+The exporter reads the IR and the trace (`Certificate` in the code,
+`"certificate"` in the JSON) from the kernel definitions of a design, but
+computes its vectors by running the design's compiled code. Those vectors
+are what the README's third question (does the generated hardware still
+implement the functionality described by Lean?) is checked against, so I
+want that code to be the code the definitions describe. Three attributes
+let the compiled code differ from the definition:
 
 * `@[implemented_by f]` runs `f` instead of the definition, unchecked;
 * `@[extern]` runs foreign code instead of the definition;
 * a `@[csimp]` theorem `@f = @g` replaces `f` by `g` in the code of every
   definition compiled after it. Its proof may use `sorry` or an unsound
-  axiom, which the certificate never sees, as it is not part of any
+  axiom, which the trace never sees: the theorem is not part of any
   specification.
 
 The toolchain's uses of these attributes are trusted like the rest of the
@@ -34,7 +38,7 @@ Linked code can do more than compute wrong vectors. When `gin-export`
 starts, Lean evaluates every closed term (a definition without arguments)
 of every module linked into it, whether or not anything uses it, and an
 `unsafe` one (through `unsafeIO`) or one that calls foreign code
-(`@[extern]`) can do any IO, such as writing a forged certificate.
+(`@[extern]`) can do any IO, such as writing a forged trace.
 `linkedCodeOverrides` finds every project constant, reachable or not, that
 is `unsafe`, `partial` (compiled from its `_unsafe_rec` twin, not from its
 definition), `@[extern]` or `@[implemented_by]`, in
@@ -114,7 +118,7 @@ def compiledOverrides (env : Environment) (roots : Array Name) : Array String :=
 
 /-- The modules of the exporter itself, which use `unsafe` and `partial`
 definitions and are part of the trusted base (`lean/README.md`, "Trust").
-Listed one by one, so a new module, even under `Gin.Export`, is checked
+I list them one by one: a new module, even under `Gin.Export`, is checked
 like any other until it is added here. `Gin.Export.Entries` and
 `Gin.Export.Table` name and link designs and are checked. -/
 def exporterModules : List Name :=

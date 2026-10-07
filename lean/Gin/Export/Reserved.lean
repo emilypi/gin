@@ -5,9 +5,10 @@ import Std.Data.HashSet
 
 The words gin refuses as identifiers: the union of the Verilog-2005,
 SystemVerilog-2017 and VHDL-2008 reserved words, words the supported tools
-reject, and predeclared VHDL names. This is a copy of `reservedWords` in
-`src/Gin/Netlist/Types.hs`, section for section; `scripts/export-examples.sh`
-checks that the two lists are the same set of words.
+reject, and predeclared VHDL names. I keep it a copy of `reservedWords` in
+`src/Gin/Netlist/Types.hs`, section for section, and
+`scripts/export-examples.sh` checks that the two lists are the same set of
+words.
 -/
 
 namespace Gin.Export

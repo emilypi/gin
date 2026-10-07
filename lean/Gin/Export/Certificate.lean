@@ -4,23 +4,27 @@ import Gin.Export.Modules
 import Gin.Export.Print
 
 /-!
-# Proof certificates
+# Proof traces
 
-The exporter only writes a design whose refinement theorem has the expected
-shape and, like every exported definition, depends on no axioms beyond the
-three standard ones of Lean's logic. In particular it refuses proofs that
-use `sorry` (`sorryAx`) and proofs by `native_decide` or `bv_decide`, which
-trust the compiler through `Lean.ofReduceBool` or generated
-`<theorem>._native.*` axioms.
+This module builds the trace (`Certificate` in the code, `"certificate"` in
+the JSON). The exporter only writes a design whose refinement theorem has
+the expected shape and, like every exported definition, depends on no
+axioms beyond the three standard ones of Lean's logic. In particular it
+refuses proofs that use `sorry` (`sorryAx`) and proofs by `native_decide`
+or `bv_decide`, which trust the compiler through `Lean.ofReduceBool` or
+generated `<theorem>._native.*` axioms.
 
 `collectAxioms` reads proof terms but cannot tell whether the kernel
 actually checked them (`set_option debug.skipKernelTC`), so the export
 script also replays every module the export loads through `leanchecker`
-before exporting.
+before exporting. Does the proof check? The kernel decides that, not this
+module.
 
 ## The refinement shape
 
-The theorem must state
+I want the theorem to say one thing: the implementation equals its
+specification at every cycle and for every input stream. Concretely, it
+must state
 
     ∀ i₁ … iₖ (t : Nat), top i₁ … iₖ t = S i₁ … iₖ t
 
@@ -30,10 +34,10 @@ not refer to `top`, directly or through other definitions. This rules out
 tautologies (`top i t = top i t`), claims about some cycles only
 (`top i 0 = …`), weaker statements (`… ∨ True`) and specifications that
 call the implementation. A specification that copies the implementation's
-body without naming it cannot be told apart mechanically; the certificate
-shows its definition so that a reviewer can.
+body without naming it cannot be told apart mechanically; the trace shows
+its definition so that you can.
 
-## What the certificate shows
+## What the trace shows
 
 `statement` is the theorem's type and `specDefinitions` every constant it
 depends on, rendered by the fixed printer of `Gin.Export.Print`. The
@@ -55,7 +59,7 @@ module `Gin.Signal`) and at Lean's core library (modules under `Init`,
 * An axiom in the closure is shown as `name : type`; any axiom outside the
   allowed three has already been refused.
 
-Every name in the certificate (the theorem, the axioms, the constants and
+Every name in the trace (the theorem, the axioms, the constants and
 binders of the statement and of the definitions, and the `name` of each
 definition) is printed by `Print.name` (with `_root_.` where Lean would
 read the name as an alias, `Print.globalName`), which never gives two names
@@ -64,8 +68,8 @@ be printed that way (a name with macro scopes or a numeric component, an
 inaccessible name, a component containing `»`), if two definitions print
 the same name, or if a bound variable prints like a constant of its term.
 Every field is printable ASCII by construction of the printer; the export
-is refused if one is not (`checkAscii`), so that no text in a certificate
-can hide a character a reviewer does not see.
+is refused if one is not (`checkAscii`), so that no text in a trace can
+hide a character you do not see.
 -/
 
 open Lean Meta
@@ -165,14 +169,14 @@ def printed {α : Type} (what : String) (x : Except String α) : MetaM α :=
   | .ok a => pure a
   | .error e => throwError "cannot print {what} unambiguously: {e}; refusing to export"
 
-/-- Refuse a certificate in which two specification definitions print the
+/-- Refuse a trace in which two specification definitions print the
 same name. -/
 def checkDistinctNames (names : List String) : Except String Unit :=
   match Print.firstDuplicate? names with
   | some n => throw s!"two specification definitions print the same name {n}"
   | none => pure ()
 
-/-- Refuse a certificate with a field that is not printable ASCII
+/-- Refuse a trace with a field that is not printable ASCII
 (`0x20`–`0x7E`): a non-ASCII character could pass for another one, and a
 control character could hide text. -/
 def checkAscii (c : Certificate) : Except String Unit := do
@@ -241,7 +245,7 @@ def checkShape (thm top : Name) (thmType : Lean.Expr) : MetaM Name := do
         m!"the specification {spec} refers to {top}, the implementation it is compared with"
     return spec
 
-/-- The certificate for refinement theorem `thm` about the top definition
+/-- The trace for refinement theorem `thm` about the top definition
 `top`, whose implementation consists of `defs`. Fails if any of them uses a
 disallowed axiom or if the theorem does not have the refinement shape. -/
 def certify (thm top : Name) (defs : List Name) : MetaM Certificate := do

@@ -11,11 +11,12 @@ The exporter treats the modules of an imported environment in three groups:
 * everything else, the project: the designs, their specifications and any
   helper modules they import.
 
-The certificate leaves out the definitions of Lean's core library (`Init`,
-`Std`, `Lean`) and of the DSL, and shows every other definition a
-specification depends on. A project module named like a core module could
-therefore hide a definition from the reviewer; `shadowedCoreModules` finds
-such modules so that the exporter can refuse them.
+The trace (`Certificate` in the code, `"certificate"` in the JSON) leaves
+out the definitions of Lean's core library (`Init`, `Std`, `Lean`) and of
+the DSL, and shows every other definition a specification depends on. A
+project module named like a core module could therefore hide a definition
+from you, the reviewer: `shadowedCoreModules` finds such modules so that the
+exporter can refuse them.
 
 Building a design runs its code: `#eval` and macros run during `lake build`,
 and the `initialize` declarations of every module linked into `gin-export`
@@ -33,7 +34,7 @@ namespace Gin.Export
 def toolchainRoots : List Name := [`Init, `Std, `Lean, `Lake]
 
 /-- Top-level namespaces of Lean's core library, whose definitions the
-certificate does not show. -/
+trace does not show. -/
 def coreLibraryRoots : List Name := [`Init, `Std, `Lean]
 
 /-- Is `m` named like a module shipped with Lean? -/

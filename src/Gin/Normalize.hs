@@ -36,7 +36,6 @@ import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
-import Data.Text qualified as Text
 import Gin.Core.Normal (Atom (..), NBind (..), NModule (..), NOutput (..), NRhs (..))
 import Gin.Core.Syntax
   ( Name (..)
@@ -52,6 +51,8 @@ import Gin.Core.Syntax
 import Gin.Error (GinError, Stage (..), ginError, withContext)
 import Gin.Limits (maxNormalBinds)
 import Gin.Normalize.Internal (buildModule, primResultTy)
+import Gin.Core.Utils (showT)
+
 
 -- | Precondition: 'Gin.Core.Check.checkProgram' succeeded. Inlines
 -- globals, beta-reduces, erases signals, lowers @sig.mealy@ to registers,
@@ -207,5 +208,3 @@ reachable rhss = go Set.empty
 bad :: Text -> Either GinError a
 bad = Left . ginError StNormalize
 
-showT :: (Show a) => a -> Text
-showT = Text.pack . show

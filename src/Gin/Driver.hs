@@ -169,6 +169,8 @@ import Gin.Netlist.Types (HwType (..), Ident (..), Module (..), Net (..), Output
 import Gin.Normalize (checkNormal, normalize)
 import Gin.Sim (isBudgetError, simulateCore, simulateNormal)
 import Gin.Vectors (Cycle (..), Vectors (..))
+import Gin.Core.Utils (showT)
+
 import Options.Applicative
   ( Parser
   , ParserInfo
@@ -1132,9 +1134,6 @@ awakeTimeout seconds act = go 0
 
 driverError :: Text -> GinError
 driverError = ginError StDriver
-
-showT :: (Show a) => a -> Text
-showT = Text.pack . show
 
 -- | The kind of an I/O error and the system's description of it, without
 -- the file name and location that callers already report.

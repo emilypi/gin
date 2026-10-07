@@ -38,6 +38,7 @@ import Data.Text qualified as Text
 import Gin.Core.Syntax
 import Gin.Error (GinError, Stage (..), ginError, withContext)
 import Gin.Netlist.Types (isLegalIdent)
+import Gin.Core.Utils (showT)
 import Numeric.Natural (Natural)
 
 -- | Full static check. Errors use 'StCheck'. Enforces: unique def names;
@@ -76,9 +77,6 @@ checkProgram p = do
 
 failCheck :: Text -> Either GinError a
 failCheck = Left . ginError StCheck
-
-showT :: (Show a) => a -> Text
-showT = Text.pack . show
 
 inDef :: Def -> Either GinError a -> Either GinError a
 inDef d = withContext ("in def " <> unName (defName d))

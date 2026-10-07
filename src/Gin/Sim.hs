@@ -64,6 +64,8 @@ import Gin.Core.Syntax
 import Gin.Error (GinError (..), Stage (StSim), ginError, withContext)
 import Gin.Limits (maxNormalBinds)
 import Gin.Sim.Prim (evalPrim)
+import Gin.Core.Utils (showT)
+
 import Numeric.Natural (Natural)
 
 -- | Simulate the core IR directly. One input row per cycle (values in
@@ -169,9 +171,6 @@ budgetError = simError . (budgetPrefix <>)
 -- count it as a disagreement.
 isBudgetError :: GinError -> Bool
 isBudgetError e = errStage e == StSim && budgetPrefix `Text.isPrefixOf` errMessage e
-
-showT :: (Show a) => a -> Text
-showT = Text.pack . show
 
 inCycle :: Int -> Either GinError a -> Either GinError a
 inCycle t = withContext ("in cycle " <> showT t)

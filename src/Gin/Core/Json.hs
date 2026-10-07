@@ -55,6 +55,8 @@ import Gin.Core.Syntax
 import Gin.Error (GinError, Stage (..), ginError, withContext)
 import Gin.Limits (maxDecimalDigits, maxInputBytes, maxJsonDepth, maxJsonNumber, maxVectorBits)
 import Gin.Vectors (Cycle (..), Vectors (..), maxCycles)
+import Gin.Core.Utils (showT)
+
 import Numeric.Natural (Natural)
 
 -- | Decode and structurally validate (format tag, value invariants, width
@@ -90,9 +92,6 @@ decodeWith parser bytes = do
 
 decodeError :: Text -> Either GinError a
 decodeError = Left . ginError StDecode
-
-showT :: (Show a) => a -> Text
-showT = Text.pack . show
 
 numberBound :: Text
 numberBound = "numbers must be integers from 0 to " <> showT maxJsonNumber

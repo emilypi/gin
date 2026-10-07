@@ -78,6 +78,8 @@ import Gin.Core.Syntax
   )
 import Gin.Error (GinError, Stage (..), ginError, withContext)
 import Gin.Limits (maxNormalBinds)
+import Gin.Core.Utils (showT)
+
 import Numeric.Natural (Natural)
 
 -- | Evaluation steps (expression visits plus function applications) one
@@ -285,9 +287,6 @@ inContext ctx m = do
       r <- StateT (withContext ctx . runStateT m)
       modify' (\s -> s {stDepth = depth})
       pure r
-
-showT :: (Show a) => a -> Text
-showT = Text.pack . show
 
 -- | The source name of an interned id. Lazy in the lookup, so an error
 -- message or context that is never shown costs nothing.

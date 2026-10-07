@@ -24,6 +24,8 @@ import Gin.Core.Syntax
   , valueTy
   )
 import Gin.Error (GinError, Stage (StSim), ginError)
+import Gin.Core.Utils (showT)
+
 
 -- | Apply a combinational prim to exactly 'primArity' argument values.
 -- Errors ('StSim') on a signal prim, wrong arity or ill-typed arguments.
@@ -95,6 +97,3 @@ apply op args = case (op, args) of
   where
     bool = Right . VBool
     bv n = Right . mkBV n
-
-showT :: (Show a) => a -> Text
-showT = Text.pack . show

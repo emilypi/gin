@@ -5,6 +5,9 @@ module Gin.TestUtil
   , itWithTools
   , runTool
   , withTempDir
+  , tshow
+  , moduleOperands
+  , declOperands
   ) where
 
 import Control.Monad (unless, when)
@@ -12,6 +15,7 @@ import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as Text
+import Gin.Netlist.Types (Decl (..), Module (..), Operand, Output (..), exprOperands)
 import System.Directory (createDirectoryIfMissing, doesFileExist, findExecutable)
 import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..))
@@ -69,3 +73,15 @@ runTool cwd' exe args =
 
 withTempDir :: (FilePath -> IO a) -> IO a
 withTempDir = withSystemTempDirectory "gin-test"
+
+tshow :: (Show a) => a -> Text
+tshow = Text.pack . show
+
+-- | Every operand a module reads: output drivers, then each declaration's.
+moduleOperands :: Module -> [Operand]
+moduleOperands m = fmap outDriver (modOutputs m) <> concatMap declOperands (modDecls m)
+
+declOperands :: Decl -> [Operand]
+declOperands = \case
+  DReg _ _ o -> [o]
+  DAssign _ e -> exprOperands e

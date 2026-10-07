@@ -336,7 +336,7 @@ familySpec fl = do
     golden name = flGoldenDir fl </> name <> "." <> backendFileExt b
     mismatch t expected got =
       Text.concat
-        ["GIN-MISMATCH cycle=", Text.pack (show t), " port=count expected=", expected, " got=", got]
+        ["GIN-MISMATCH cycle=", tshow t, " port=count expected=", expected, " got=", got]
 
 ----------------------------------------------------------------------
 -- Tool runs
@@ -499,7 +499,7 @@ combined (code, out, err) = (code, out <> err)
 -- @GIN-PASS cycles=<n>@ line, and no failure or mismatch line.
 shouldPass :: Int -> (ExitCode, Text, Text) -> Expectation
 shouldPass n result@(code, _, _) = do
-  markerLines result `shouldBe` [passMarker <> " cycles=" <> Text.pack (show n)]
+  markerLines result `shouldBe` [passMarker <> " cycles=" <> tshow n]
   code `shouldBe` ExitSuccess
 
 -- | Standard-output lines that carry a protocol marker.
@@ -793,7 +793,7 @@ allOpsNetlist =
   where
     v8 = HVec 8
     decls = registers <> zipWith numbered [0 :: Int ..] exprs
-    numbered i (ty, e) = DAssign (net ("n" <> Text.pack (show i)) ty) e
+    numbered i (ty, e) = DAssign (net ("n" <> tshow i) ty) e
     registers =
       [ DReg (net "acc" v8) (HLitVec 8 0xa5) (ref "acc_next")
       , DAssign (net "acc_next" v8) (HBin BAdd (ref "acc") (ref "a"))
@@ -988,7 +988,7 @@ decidedComparisons =
       , Decided ("ones_lt_" <> a, allOnes w, Lt, ref a) False "CMPCONST"
       ]
     | w <- comparisonWidths
-    , let a = "a" <> showText w
+    , let a = "a" <> tshow w
     ]
     <> [ Decided ("r_lt_zero", ref "r", Lt, zero 8) False "UNSIGNED"
        , Decided ("s_le_ones", ref "s", Le, allOnes 8) True "CMPCONST"
@@ -1006,7 +1006,7 @@ liveComparisons =
       , (b <> "_lt_one", ref b, Lt, vecC w 1)
       ]
     | w <- comparisonWidths
-    , let b = "b" <> showText w
+    , let b = "b" <> tshow w
     ]
 
 allComparisons :: [Comparison]
@@ -1015,9 +1015,6 @@ allComparisons = fmap dcComparison decidedComparisons <> liveComparisons
 zero, allOnes :: Natural -> Operand
 zero w = vecC w 0
 allOnes w = vecC w (2 ^ w - 1)
-
-showText :: Natural -> Text
-showText = Text.pack . show
 
 -- | The @assign@ statement of a comparison net, without the folding.
 comparisonLine :: Comparison -> Text
@@ -1045,7 +1042,7 @@ decidedNetlist :: Module
 decidedNetlist =
   mkModule
     "decided"
-    (concat [[net ("a" <> showText w) (HVec w), net ("b" <> showText w) (HVec w)] | w <- widths])
+    (concat [[net ("a" <> tshow w) (HVec w), net ("b" <> tshow w) (HVec w)] | w <- widths])
     [Output (net ("o_" <> n) HBit) (ref n) | (n, _, _, _) <- allComparisons]
     ( [ DReg (net "r" (HVec 8)) (HLitVec 8 0) (ref "b8")
       , DAssign (net "s" (HVec 8)) (HBin BSub (ref "b8") (vecC 8 1))
@@ -1113,7 +1110,7 @@ chainNames w =
     , cnFo = at "fo"
     }
   where
-    at p = p <> showText w
+    at p = p <> tshow w
 
 -- | Every comparison of 'chainComparisons' as an output, after the nets
 -- they compare. No registers.
@@ -1154,12 +1151,14 @@ constantNetsNetlist =
   where
     inputs = net "p" HBit : [net (input w) (HVec w) | w <- widths]
     widths = comparisonWidths
-    input w = "a" <> showText w
-    constant w c = "k" <> c <> showText w
+    input :: Natural -> Text
+    input w = "a" <> tshow w
+    constant :: Natural -> Text -> Text
+    constant w c = "k" <> c <> tshow w
     values :: Natural -> [(Text, Integer)]
     values w = [("z", 0), ("u", 1), ("f", 2 ^ w - 1)]
     decls = constants <> zipWith numbered [0 :: Int ..] exprs
-    numbered i (ty, e) = DAssign (net ("n" <> Text.pack (show i)) ty) e
+    numbered i (ty, e) = DAssign (net ("n" <> tshow i) ty) e
     constants =
       [ DAssign (net (constant w c) (HVec w)) (HOperand (vecC w x))
       | w <- widths

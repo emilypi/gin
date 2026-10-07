@@ -55,17 +55,17 @@ import Gin.Core.Syntax
   , TopEntity (..)
   , Ty (..)
   , Value (..)
+  , globalRefs
   , isCombinational
   , primArity
   , primName
   , validValue
   , valueTy
   )
+import Gin.Core.Utils (failAt, showT)
 import Gin.Error (GinError (..), Stage (StSim), ginError, withContext)
 import Gin.Limits (maxNormalBinds)
 import Gin.Sim.Prim (evalPrim)
-import Gin.Core.Utils (showT)
-
 import Numeric.Natural (Natural)
 
 -- | Simulate the core IR directly. One input row per cycle (values in
@@ -153,16 +153,13 @@ simulateNormal nm rows = do
 ----------------------------------------------------------------------
 -- Shared
 
-simError :: Text -> GinError
-simError = ginError StSim
-
 -- | Message prefix of every error raised because a simulation bound was
 -- exceeded, as opposed to an error in the program or the rows.
 budgetPrefix :: Text
 budgetPrefix = "reference simulation budget exceeded: "
 
 budgetError :: Text -> GinError
-budgetError = simError . (budgetPrefix <>)
+budgetError = ginError StSim . (budgetPrefix <>)
 
 -- | Did 'simulateCore' stop because it exceeded one of its bounds
 -- (evaluation steps, network nodes, nesting depth)? Such a result is
@@ -180,7 +177,7 @@ validateRows :: [(Text, Ty)] -> [[Value]] -> Either GinError ()
 validateRows ports = zipWithM_ checkRow [0 ..]
   where
     checkRow t row = inCycle t $ do
-      unless (length row == length ports) . Left . simError $
+      unless (length row == length ports) . failAt StSim $
         "expected "
           <> showT (length ports)
           <> " input values ("
@@ -189,14 +186,14 @@ validateRows ports = zipWithM_ checkRow [0 ..]
           <> showT (length row)
       zipWithM_ checkValue ports row
     checkValue (name, ty) v =
-      unless (validValue v && valueTy v == ty) . Left . simError $
+      unless (validValue v && valueTy v == ty) . failAt StSim $
         "input " <> name <> ": expected a value of type " <> showT ty <> ", got " <> showT v
 
 -- | The value is valid and has the given type.
 hasType :: Text -> Ty -> Value -> Either GinError Value
 hasType what ty v
   | validValue v && valueTy v == ty = Right v
-  | otherwise = Left (simError (what <> ": expected type " <> showT ty <> ", got " <> showT v))
+  | otherwise = failAt StSim (what <> ": expected type " <> showT ty <> ", got " <> showT v)
 
 ----------------------------------------------------------------------
 -- Core IR: limits
@@ -406,7 +403,7 @@ failWith :: Failure s -> Eval s a
 failWith f = Eval $ \_ _ -> pure (Left f)
 
 abort :: Text -> Eval s a
-abort = failWith . Abort . simError
+abort = failWith . Abort . ginError StSim
 
 -- | Run a computation, returning how it failed instead of failing.
 attempt :: Eval s a -> Eval s (Either (Failure s) a)
@@ -562,7 +559,7 @@ failureError = \case
 
 loopError :: Loop s -> GinError
 loopError l =
-  simError $
+  ginError StSim $
     "recursive let is not productive: "
       <> subject
       <> atCycle
@@ -636,7 +633,7 @@ noGlobalRecursion prog =
   case [NonEmpty.toList ds | NECyclicSCC ds <- stronglyConnComp graph] of
     [] -> Right ()
     ds : _ ->
-      Left . simError $
+      failAt StSim $
         "recursion among globals: " <> Text.intercalate ", " (fmap (unName . defName) ds)
   where
     graph = [(d, defName d, Set.toList (globalRefs (defBody d))) | d <- progDefs prog]
@@ -725,12 +722,12 @@ splitOutputs ports v = case ports of
   p : rest -> case v of
     VTuple [o, more] -> (:) <$> port p o <*> splitOutputs rest more
     _ ->
-      Left . simError $
+      failAt StSim $
         "expected a pair ("
           <> portName p
           <> ", remaining outputs) on the output spine, got "
           <> showT v
-  [] -> Left (simError "the top entity has no outputs")
+  [] -> failAt StSim "the top entity has no outputs"
   where
     port p = hasType ("output " <> portName p) (portTy p)
 
@@ -1012,20 +1009,6 @@ recSlot name ty value = case ty of
       TProd ts -> any carriesSignal ts
       _ -> False
 
--- | Globals an expression refers to.
-globalRefs :: Expr -> Set.Set Name
-globalRefs = \case
-  EGlobal n -> Set.singleton n
-  EVar _ -> Set.empty
-  ELit _ -> Set.empty
-  EPrim _ _ -> Set.empty
-  EApp f as -> foldMap globalRefs (f : as)
-  ELam _ body -> globalRefs body
-  ELet _ binds body -> foldMap globalRefs (body : fmap bindExpr binds)
-  ETuple es -> foldMap globalRefs es
-  EProj _ e -> globalRefs e
-  EIf c t e -> foldMap globalRefs [c, t, e]
-
 ----------------------------------------------------------------------
 -- Normal form
 
@@ -1039,7 +1022,7 @@ normalCycle nm regs row = do
   Right (outs, regs')
   where
     bindStep env b = withContext ("in bind " <> unName (nbName b)) $ do
-      when (Map.member (nbName b) env) . Left . simError $
+      when (Map.member (nbName b) env) . failAt StSim $
         unName (nbName b) <> " is bound more than once"
       v <- case nbRhs b of
         NPrim op as -> traverse (atom env) as >>= evalPrim op
@@ -1047,9 +1030,9 @@ normalCycle nm regs row = do
           atom env c >>= \case
             VBool True -> atom env th
             VBool False -> atom env el
-            other -> Left (simError ("mux condition is not a Bool: " <> showT other))
+            other -> failAt StSim ("mux condition is not a Bool: " <> showT other)
         NReg _ _ ->
-          maybe (Left (simError "register has no state")) Right (Map.lookup (nbName b) regs)
+          maybe (failAt StSim "register has no state") Right (Map.lookup (nbName b) regs)
         NAtom a -> atom env a
       _ <- hasType (unName (nbName b)) (nbTy b) v
       Right (Map.insert (nbName b) v env)
@@ -1061,6 +1044,6 @@ normalCycle nm regs row = do
       ALit v -> Right v
       AVar n ->
         maybe
-          (Left (simError ("reads " <> unName n <> ", which is not an input or an earlier bind")))
+          (failAt StSim ("reads " <> unName n <> ", which is not an input or an earlier bind"))
           Right
           (Map.lookup n env)

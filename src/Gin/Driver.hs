@@ -120,11 +120,11 @@ import Control.Exception
   , try
   )
 import Control.Monad (guard, unless, void)
-import Control.Monad.Except (ExceptT (..), liftEither, runExceptT, throwError)
+import Control.Monad.Except (ExceptT (..), liftEither, runExceptT)
 import Control.Monad.IO.Class (liftIO)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
-import Data.Char (GeneralCategory (..), generalCategory, isDigit)
+import Data.Char (isDigit)
 import Data.Containers.ListUtils (nubOrd)
 import Data.Either (fromRight)
 import Data.Foldable (for_, traverse_)
@@ -162,6 +162,7 @@ import Gin.Core.Syntax
   , Ty (..)
   , Value (..)
   )
+import Gin.Core.Utils (failAt, invisible, showT)
 import Gin.Error (GinError (..), Stage (..), ginError, renderError, safeLine, withContext)
 import Gin.Limits (defaultSimTimeoutSeconds, defaultToolTimeoutSeconds, maxInputBytes)
 import Gin.Netlist.Build (buildNetlist)
@@ -169,8 +170,6 @@ import Gin.Netlist.Types (HwType (..), Ident (..), Module (..), Net (..), Output
 import Gin.Normalize (checkNormal, normalize)
 import Gin.Sim (isBudgetError, simulateCore, simulateNormal)
 import Gin.Vectors (Cycle (..), Vectors (..))
-import Gin.Core.Utils (showT)
-
 import Options.Applicative
   ( Parser
   , ParserInfo
@@ -488,9 +487,9 @@ runCommand environment cmd =
     Right (Right True) -> pure ExitSuccess
     Right (Right False) -> pure (ExitFailure 1)
     Right (Left e) -> ExitFailure 1 <$ putLine stderr (renderError e)
-    Left ex ->
-      ExitFailure 1
-        <$ ignoreIO (putLine stderr (renderError (driverError (Text.pack (displayException ex)))))
+    Left ex -> do
+      let msg = renderError (ginError StDriver (Text.pack (displayException ex)))
+      ExitFailure 1 <$ ignoreIO (putLine stderr msg)
 
 -- | Run a command; 'False' when one of its checks failed.
 execute :: Env -> Command -> Pipe Bool
@@ -560,7 +559,7 @@ loadProgram ins = do
 checkSpecHash :: Certificate -> Text -> Either GinError ()
 checkSpecHash cert expected =
   unless (Text.toLower expected == Text.toLower actual) $
-    Left . ginError StCertificate $
+    failAt StCertificate $
       "the specification hash is "
         <> actual
         <> ", but --spec-hash requires "
@@ -592,7 +591,7 @@ inFileContext file = withContext ("in " <> Text.pack file)
 readInput :: FilePath -> Pipe LBS.ByteString
 readInput file =
   liftIO (tryIO (withBinaryFile file ReadMode readBounded)) >>= \case
-    Left e -> throwError (driverError ("cannot read " <> Text.pack file <> ": " <> ioMessage e))
+    Left e -> failAt StDriver ("cannot read " <> Text.pack file <> ": " <> ioMessage e)
     Right bytes -> pure bytes
   where
     readBounded h = do
@@ -605,7 +604,7 @@ readInput file =
 matchVectors :: TopEntity -> Vectors -> Either GinError ()
 matchVectors top vecs = do
   unless (vecTop vecs == topName top) $
-    Left . driverError $
+    failAt StDriver $
       "the vectors are for top entity "
         <> clip (vecTop vecs)
         <> ", but the program's top entity is "
@@ -617,7 +616,7 @@ matchPorts :: Text -> [Port] -> [Port] -> Either GinError ()
 matchPorts kind expected actual = do
   for_ (zip3 [0 :: Int ..] expected actual) $ \(i, e, a) ->
     unless (e == a) $
-      Left . driverError $
+      failAt StDriver $
         kind
           <> " port "
           <> showT i
@@ -627,7 +626,7 @@ matchPorts kind expected actual = do
           <> renderPort e
           <> " in the program"
   unless (length expected == length actual) $
-    Left . driverError $
+    failAt StDriver $
       "the vectors have "
         <> ports (length actual)
         <> ", but the program has "
@@ -669,7 +668,7 @@ testbenchPrecondition m vecs =
     ( fmap portShape (vecInputs vecs) == fmap netShape (modInputs m)
         && fmap portShape (vecOutputs vecs) == fmap (netShape . outNet) (modOutputs m)
     )
-    (Left (driverError "the vectors' ports differ from the generated module's ports"))
+    (failAt StDriver "the vectors' ports differ from the generated module's ports")
   where
     portShape p = (portName p, hwType (portTy p))
     netShape n = (unIdent (netName n), Just (netType n))
@@ -700,7 +699,7 @@ generatedFiles m mvecs b =
 writeGroup :: FilePath -> [(FilePath, Text)] -> Pipe ()
 writeGroup dir files =
   liftIO (tryIO (createDirectoryIfMissing True dir >> stage files [])) >>= \case
-    Left e -> throwError (driverError ("cannot write to " <> Text.pack dir <> ": " <> ioMessage e))
+    Left e -> failAt StDriver ("cannot write to " <> Text.pack dir <> ": " <> ioMessage e)
     Right () -> pure ()
   where
     stage [] staged = commit (reverse staged) []
@@ -1132,14 +1131,11 @@ awakeTimeout seconds act = go 0
 ----------------------------------------------------------------------
 -- Helpers
 
-driverError :: Text -> GinError
-driverError = ginError StDriver
-
 -- | The kind of an I/O error and the system's description of it, without
 -- the file name and location that callers already report.
 ioMessage :: IOException -> Text
 ioMessage e =
-  Text.pack (show (ioe_type e))
+  showT (ioe_type e)
     <> if null (ioe_description e) then "" else " (" <> Text.pack (ioe_description e) <> ")"
 
 tryIO :: IO a -> IO (Either IOException a)
@@ -1172,10 +1168,3 @@ putText h t = BS.hPut h (Text.encodeUtf8 (Text.map visible t)) >> hFlush h
       | c == '\n' || c == '\t' = c
       | invisible c = '?'
       | otherwise = c
-
--- | Characters in the Unicode categories Cc, Cf, Zl, Zp, Cs, Co and Cn: they
--- break lines or hide, reorder or disguise text.
-invisible :: Char -> Bool
-invisible c =
-  generalCategory c
-    `elem` [Control, Format, LineSeparator, ParagraphSeparator, Surrogate, PrivateUse, NotAssigned]

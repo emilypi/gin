@@ -11,6 +11,7 @@ module Gin.Error
   , renderError
   , safeLine
   , maxRenderedLine
+  , invisible
   ) where
 
 import Data.Char (GeneralCategory (..), generalCategory, ord)
@@ -85,6 +86,12 @@ safeLine t =
             <> " more characters)"
   where
     escape c
-      | generalCategory c `elem` [Control, Format, LineSeparator, ParagraphSeparator, Surrogate, PrivateUse, NotAssigned] =
-          "\\u{" <> Text.pack (showHex (ord c) "") <> "}"
+      | invisible c = "\\u{" <> Text.pack (showHex (ord c) "") <> "}"
       | otherwise = Text.singleton c
+
+-- | Characters in the Unicode categories Cc, Cf, Zl, Zp, Cs, Co and Cn: they
+-- break lines or hide, reorder or disguise text.
+invisible :: Char -> Bool
+invisible c =
+  generalCategory c
+    `elem` [Control, Format, LineSeparator, ParagraphSeparator, Surrogate, PrivateUse, NotAssigned]

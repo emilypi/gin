@@ -52,11 +52,10 @@ import Data.Text.Encoding qualified as Text
 import Data.Vector qualified as Vector
 import Data.Word (Word8)
 import Gin.Core.Syntax
-import Gin.Error (GinError, Stage (..), ginError, withContext)
+import Gin.Core.Utils (failAt, showT)
+import Gin.Error (GinError, Stage (..), withContext)
 import Gin.Limits (maxDecimalDigits, maxInputBytes, maxJsonDepth, maxJsonNumber, maxVectorBits)
 import Gin.Vectors (Cycle (..), Vectors (..), maxCycles)
-import Gin.Core.Utils (showT)
-
 import Numeric.Natural (Natural)
 
 -- | Decode and structurally validate (format tag, value invariants, width
@@ -88,10 +87,7 @@ decodeWith parser bytes = do
   case A.iparseEither parser json of
     Right a -> Right a
     Left (path, msg) ->
-      withContext ("at " <> Text.pack (A.formatPath path)) (decodeError (Text.pack msg))
-
-decodeError :: Text -> Either GinError a
-decodeError = Left . ginError StDecode
+      withContext ("at " <> Text.pack (A.formatPath path)) (failAt StDecode (Text.pack msg))
 
 numberBound :: Text
 numberBound = "numbers must be integers from 0 to " <> showT maxJsonNumber
@@ -100,11 +96,11 @@ readJson :: LazyByteString -> Either GinError A.Value
 readJson bytes = do
   let limit = fromIntegral maxInputBytes :: Int64
   when (LBS.length (LBS.take (limit + 1) bytes) > limit) $
-    decodeError ("input exceeds " <> showT maxInputBytes <> " bytes")
+    failAt StDecode ("input exceeds " <> showT maxInputBytes <> " bytes")
   scanBytes bytes
   (json, rest) <- tokenValue (lbsToTokens bytes)
   unless (LBS.all isJsonSpace rest) $
-    decodeError "invalid JSON: trailing data after the document"
+    failAt StDecode "invalid JSON: trailing data after the document"
   pure json
 
 isJsonSpace :: Word8 -> Bool
@@ -169,7 +165,7 @@ scanByte s w = case scanMode s of
     | otherwise -> next InString
   InEscape -> next InString
   AfterMinus
-    | isDigitByte w -> failAt (offset - 1) "negative number"
+    | isDigitByte w -> failAtByte (offset - 1) "negative number"
     | otherwise -> outside
   InNumber
     | w == lowerE || w == upperE -> numberByte InExponent 0
@@ -182,7 +178,7 @@ scanByte s w = case scanMode s of
               | otherwise = scanExponentDigits s + 1
          in if digits > maxExponentDigits
               then
-                failAt offset $
+                failAtByte offset $
                   "number with an exponent of more than " <> showT maxExponentDigits <> " digits"
               else numberByte InExponent digits
     | w == plus || w == minus -> numberByte InExponent (scanExponentDigits s)
@@ -191,10 +187,12 @@ scanByte s w = case scanMode s of
   where
     offset = scanOffset s
     next mode = Right s{scanOffset = offset + 1, scanMode = mode}
-    failAt at msg = decodeError (msg <> " at byte " <> showT at <> " (" <> numberBound <> ")")
+    failAtByte at msg =
+      failAt StDecode (msg <> " at byte " <> showT at <> " (" <> numberBound <> ")")
     numberByte mode digits
       | scanNumberLength s >= maxNumberLength =
-          failAt offset ("number literal longer than " <> showT maxNumberLength <> " characters")
+          failAtByte offset $
+            "number literal longer than " <> showT maxNumberLength <> " characters"
       | otherwise =
           Right
             s
@@ -208,7 +206,7 @@ scanByte s w = case scanMode s of
       | w == openBracket || w == openBrace =
           if scanDepth s >= maxJsonDepth
             then
-              decodeError
+              failAt StDecode
                 ("JSON nesting depth exceeds " <> showT maxJsonDepth <> " at byte " <> showT offset)
             else Right s{scanOffset = offset + 1, scanMode = Outside, scanDepth = scanDepth s + 1}
       | w == closeBracket || w == closeBrace =
@@ -283,7 +281,7 @@ arrayValue !n acc = \case
 objectValue :: A.Object -> TkRecord k String -> Either GinError (A.Value, k)
 objectValue acc = \case
   TkPair key toks
-    | KeyMap.member key acc -> decodeError ("duplicate key \"" <> Key.toText key <> "\"")
+    | KeyMap.member key acc -> failAt StDecode ("duplicate key \"" <> Key.toText key <> "\"")
     | otherwise -> do
         (!x, rest) <- tokenValue toks
         objectValue (KeyMap.insert key x acc) rest
@@ -306,7 +304,7 @@ smallNumbers = Vector.generate 4097 (A.Number . fromIntegral)
 {-# NOINLINE smallNumbers #-}
 
 invalidJson :: String -> Either GinError a
-invalidJson e = decodeError ("invalid JSON: " <> Text.pack e)
+invalidJson e = failAt StDecode ("invalid JSON: " <> Text.pack e)
 
 -- | Every JSON number must be an integer from 0 to 'maxJsonNumber'.
 jsonNumber :: Number -> Either GinError A.Value
@@ -315,8 +313,8 @@ jsonNumber n = case Sci.toBoundedInteger s :: Maybe Int64 of
     | i >= 0 && toInteger i <= maxJsonNumber ->
         Right $! fromMaybe (A.Number (fromIntegral i)) (smallNumbers Vector.!? fromIntegral i)
   _
-    | not (Sci.isInteger s) -> decodeError ("non-integral number (" <> numberBound <> ")")
-    | otherwise -> decodeError ("number out of range (" <> numberBound <> ")")
+    | not (Sci.isInteger s) -> failAt StDecode ("non-integral number (" <> numberBound <> ")")
+    | otherwise -> failAt StDecode ("number out of range (" <> numberBound <> ")")
   where
     s = case n of
       NumInteger i -> fromInteger i

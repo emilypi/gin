@@ -23,7 +23,7 @@ module Gin.Core.Check
   ) where
 
 import Control.Monad (foldM, foldM_, unless, when, zipWithM_)
-import Control.Monad.State.Strict (StateT (..), evalStateT, get, lift, put)
+import Control.Monad.State.Strict (StateT, evalStateT, get, lift, put)
 import Data.Bifunctor (first)
 import Data.Foldable (foldrM, for_, toList, traverse_)
 import Data.List (intercalate)
@@ -36,9 +36,9 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Gin.Core.Syntax
-import Gin.Error (GinError, Stage (..), ginError, withContext)
+import Gin.Core.Utils (failAt, showT, withContextM)
+import Gin.Error (GinError, Stage (..), withContext)
 import Gin.Netlist.Types (isLegalIdent)
-import Gin.Core.Utils (showT)
 import Numeric.Natural (Natural)
 
 -- | Full static check. Errors use 'StCheck'. Enforces: unique def names;
@@ -62,7 +62,7 @@ checkProgram p = do
   declared <- defTypes defs
   for_ defs $ \d ->
     inDef d $ for_ (globalRefs (defBody d)) $ \g ->
-      unless (Map.member g declared) (failCheck ("unknown global " <> unName g))
+      unless (Map.member g declared) (failAt StCheck ("unknown global " <> unName g))
   checkAcyclic defs
   flip evalStateT emptyTable $ do
     refs <- traverse (intern . defTy) defs
@@ -74,9 +74,6 @@ checkProgram p = do
             }
     zipWithM_ (checkDef env) defs refs
   checkTopDef declared top
-
-failCheck :: Text -> Either GinError a
-failCheck = Left . ginError StCheck
 
 inDef :: Def -> Either GinError a -> Either GinError a
 inDef d = withContext ("in def " <> unName (defName d))
@@ -93,21 +90,21 @@ inDef d = withContext ("in def " <> unName (defName d))
 checkPorts :: TopEntity -> Either GinError ()
 checkPorts top = withContext "in top entity" $ do
   unless (isLegalIdent (topName top)) $
-    failCheck ("illegal top name " <> showT (topName top) <> ": " <> identRule)
+    failAt StCheck ("illegal top name " <> showT (topName top) <> ": " <> identRule)
   when (topName top == "clk") $
-    failCheck "top name clk is reserved for the clock every module gets"
+    failAt StCheck "top name clk is reserved for the clock every module gets"
   when (topName top == "rst") $
-    failCheck "top name rst is reserved for the reset every module gets"
-  when (null (topOutputs top)) $ failCheck "the top entity has no outputs"
+    failAt StCheck "top name rst is reserved for the reset every module gets"
+  when (null (topOutputs top)) $ failAt StCheck "the top entity has no outputs"
   for_ (topInputs top <> topOutputs top) $ \port -> do
     checkPortName (topName top) (portName port)
     unless (isScalar (portTy port)) $
-      failCheck
+      failAt StCheck
         ("port " <> portName port <> " has non-scalar type " <> renderTy (portTy port))
   foldM_ unique Set.empty (fmap portName (topInputs top <> topOutputs top))
   where
     unique seen n
-      | Set.member n seen = failCheck ("duplicate port name " <> n)
+      | Set.member n seen = failAt StCheck ("duplicate port name " <> n)
       | otherwise = Right (Set.insert n seen)
 
 -- | A port name is a legal identifier other than the clock, the reset and
@@ -115,10 +112,10 @@ checkPorts top = withContext "in top entity" $ do
 -- is comparing them case-insensitively.
 checkPortName :: Text -> Text -> Either GinError ()
 checkPortName top n
-  | not (isLegalIdent n) = failCheck ("illegal port name " <> showT n <> ": " <> identRule)
-  | n == "clk" = failCheck "port name clk is reserved for the clock every module gets"
-  | n == "rst" = failCheck "port name rst is reserved for the reset every module gets"
-  | n == top = failCheck ("port name " <> n <> " equals the top name")
+  | not (isLegalIdent n) = failAt StCheck ("illegal port name " <> showT n <> ": " <> identRule)
+  | n == "clk" = failAt StCheck "port name clk is reserved for the clock every module gets"
+  | n == "rst" = failAt StCheck "port name rst is reserved for the reset every module gets"
+  | n == top = failAt StCheck ("port name " <> n <> " equals the top name")
   | otherwise = Right ()
 
 identRule :: Text
@@ -132,13 +129,13 @@ identRule =
 checkTopDef :: Map Name Ty -> TopEntity -> Either GinError ()
 checkTopDef globals top = withContext "in top entity" $
   case (Map.lookup (topDef top) globals, fmap portTy (topOutputs top)) of
-    (Nothing, _) -> failCheck ("top definition " <> unName (topDef top) <> " is not defined")
-    (_, []) -> failCheck "the top entity has no outputs"
+    (Nothing, _) -> failAt StCheck ("top definition " <> unName (topDef top) <> " is not defined")
+    (_, []) -> failAt StCheck "the top entity has no outputs"
     (Just actual, o : os) -> do
       let d = domainName (topDomain top)
           expected = tFuns (fmap (TSignal d . portTy) (topInputs top)) (TSignal d (nest o os))
       unless (actual == expected) $
-        failCheck
+        failAt StCheck
           ( "top definition "
               <> unName (topDef top)
               <> " has type "
@@ -158,22 +155,8 @@ defTypes :: [Def] -> Either GinError (Map Name Ty)
 defTypes = foldM insert Map.empty
   where
     insert m d
-      | Map.member (defName d) m = failCheck ("duplicate definition " <> unName (defName d))
+      | Map.member (defName d) m = failAt StCheck ("duplicate definition " <> unName (defName d))
       | otherwise = Right (Map.insert (defName d) (defTy d) m)
-
--- | Globals an expression refers to.
-globalRefs :: Expr -> Set Name
-globalRefs = \case
-  EVar _ -> Set.empty
-  EGlobal n -> Set.singleton n
-  ELit _ -> Set.empty
-  EPrim _ _ -> Set.empty
-  EApp f args -> foldMap globalRefs (f : args)
-  ELam _ body -> globalRefs body
-  ELet _ binds body -> foldMap (globalRefs . bindExpr) binds <> globalRefs body
-  ETuple es -> foldMap globalRefs es
-  EProj _ e -> globalRefs e
-  EIf c t e -> globalRefs c <> globalRefs t <> globalRefs e
 
 -- | Depth-first search of the reference graph; a reference back to a
 -- definition still being visited closes a cycle, which is reported in
@@ -182,7 +165,7 @@ checkAcyclic :: [Def] -> Either GinError ()
 checkAcyclic defs = case foldM (visit [] Set.empty) Set.empty (fmap defName defs) of
   Right _ -> Right ()
   Left cycle' ->
-    failCheck
+    failAt StCheck
       ("recursive definitions are not allowed: " <> Text.intercalate " -> " (fmap unName cycle'))
   where
     graph = Map.fromList [(defName d, Set.toList (globalRefs (defBody d))) | d <- defs]
@@ -205,11 +188,11 @@ bindLocals xs env = env{envLocals = Map.union (Map.fromList xs) (envLocals env)}
 
 -- | Check a definition against its declared type, already interned.
 checkDef :: Env -> Def -> TyRef -> Check ()
-checkDef env d declared = inContext ("in def " <> unName (defName d)) $ do
+checkDef env d declared = withContextM ("in def " <> unName (defName d)) $ do
   lift (checkTy env (defTy d))
   actual <- infer env (defBody d)
   unless (sameTy actual declared) $
-    refuse
+    failAt StCheck
       ( "the body has type "
           <> renderRef actual
           <> ", but the definition is declared "
@@ -237,21 +220,21 @@ checkTy env = go
       TBool -> Right ()
       TBitVec w ->
         unless (w >= 1 && w <= maxWidth) $
-          failCheck ("bit-vector width " <> showT w <> " outside 1.." <> showT maxWidth)
+          failAt StCheck ("bit-vector width " <> showT w <> " outside 1.." <> showT maxWidth)
       TProd ts -> case ts of
         _ : _ : _ -> traverse_ go ts
-        _ -> failCheck ("product type " <> renderTy t <> " has fewer than two components")
+        _ -> failAt StCheck ("product type " <> renderTy t <> " has fewer than two components")
       TFun a r -> go a >> go r
       TSignal d e -> do
         unless (d == envDomain env) $
-          failCheck
+          failAt StCheck
             ( "signal in domain "
                 <> d
                 <> ", but every signal must be in the top entity's domain "
                 <> envDomain env
             )
         unless (isData e) $
-          failCheck
+          failAt StCheck
             ("a signal must carry data (no signals or functions), got " <> renderTy t)
         go e
 
@@ -299,12 +282,6 @@ emptyTable = Table Map.empty
 -- | Checking state is the hash-consing table.
 type Check = StateT Table (Either GinError)
 
-refuse :: Text -> Check a
-refuse = lift . failCheck
-
-inContext :: Text -> Check a -> Check a
-inContext ctx m = StateT (withContext ctx . runStateT m)
-
 -- | The node for a layer whose components are already nodes. Costs time
 -- proportional to the number of components (times the logarithm of the
 -- table size), never to the sizes of the components.
@@ -339,17 +316,17 @@ infer env = \case
   EVar n -> lookupIn "unbound variable " n (envLocals env)
   EGlobal n -> lookupIn "unknown global " n (envGlobals env)
   ELit v -> do
-    unless (validValue v) $ refuse ("invalid value " <> renderValue v)
+    unless (validValue v) $ failAt StCheck ("invalid value " <> renderValue v)
     intern (valueTy v)
   EPrim op t -> do
     lift (checkTy env t >> checkPrim op t)
     intern t
   EApp f args -> do
-    when (null args) $ refuse "application with no arguments"
+    when (null args) $ failAt StCheck "application with no arguments"
     ft <- infer env f
     foldM apply ft (zip [1 :: Int ..] args)
   ELam binders body -> do
-    when (null binders) $ refuse "lambda with no binders"
+    when (null binders) $ failAt StCheck "lambda with no binders"
     lift (distinct (fmap fst binders))
     lift (traverse_ (checkTy env . snd) binders)
     refs <- traverse (intern . snd) binders
@@ -374,33 +351,35 @@ infer env = \case
     infer env' body
   ETuple es -> case es of
     _ : _ : _ -> mkTy . FProd . Seq.fromList =<< traverse (infer env) es
-    _ -> refuse "tuple with fewer than two components"
+    _ -> failAt StCheck "tuple with fewer than two components"
   EProj i e -> do
     t <- infer env e
     case refLayer t of
       FProd cs -> case component i cs of
         Just c -> pure c
-        Nothing -> refuse ("projection index " <> showT i <> " out of range for " <> renderRef t)
-      _ -> refuse ("projection from non-product type " <> renderRef t)
+        Nothing ->
+          failAt StCheck ("projection index " <> showT i <> " out of range for " <> renderRef t)
+      _ -> failAt StCheck ("projection from non-product type " <> renderRef t)
   EIf c t e -> do
     ct <- infer env c
     case refLayer ct of
       FBool -> pure ()
-      _ -> refuse ("if condition must be Bool, got " <> renderRef ct)
+      _ -> failAt StCheck ("if condition must be Bool, got " <> renderRef ct)
     tt <- infer env t
     et <- infer env e
     unless (sameTy tt et) $
-      refuse ("if branches have different types: " <> renderRef tt <> " and " <> renderRef et)
+      failAt StCheck
+        ("if branches have different types: " <> renderRef tt <> " and " <> renderRef et)
     unless (refIsData tt) $
-      refuse ("if branches must be data (no signals or functions), got " <> renderRef tt)
+      failAt StCheck ("if branches must be data (no signals or functions), got " <> renderRef tt)
     pure tt
   where
-    lookupIn what n scope = maybe (refuse (what <> unName n)) pure (Map.lookup n scope)
+    lookupIn what n scope = maybe (failAt StCheck (what <> unName n)) pure (Map.lookup n scope)
     apply ft (i, arg) = case refLayer ft of
       FFun expected res -> do
         actual <- infer env arg
         unless (sameTy actual expected) $
-          refuse
+          failAt StCheck
             ( "argument "
                 <> showT i
                 <> ": expected "
@@ -409,7 +388,9 @@ infer env = \case
                 <> renderRef actual
             )
         pure res
-      _ -> refuse ("cannot apply a term of type " <> renderRef ft <> " to argument " <> showT i)
+      _ ->
+        failAt StCheck
+          ("cannot apply a term of type " <> renderRef ft <> " to argument " <> showT i)
     -- In time logarithmic in the index, however wide the product.
     component i cs
       | i < fromIntegral (Seq.length cs) = Seq.lookup (fromIntegral i) cs
@@ -417,10 +398,10 @@ infer env = \case
 
 -- | Check a bind's value against its declared type, already interned.
 checkBind :: Env -> Bind -> TyRef -> Check ()
-checkBind env b declared = inContext ("in bind " <> unName (bindName b)) $ do
+checkBind env b declared = withContextM ("in bind " <> unName (bindName b)) $ do
   actual <- infer env (bindExpr b)
   unless (sameTy actual declared) $
-    refuse
+    failAt StCheck
       ( "the value has type "
           <> renderRef actual
           <> ", but the bind is declared "
@@ -432,7 +413,7 @@ distinct = go Set.empty
   where
     go _ [] = Right ()
     go seen (n : ns)
-      | Set.member n seen = failCheck ("duplicate binder " <> unName n)
+      | Set.member n seen = failAt StCheck ("duplicate binder " <> unName n)
       | otherwise = go (Set.insert n seen) ns
 
 ----------------------------------------------------------------------
@@ -501,7 +482,7 @@ checkPrim op t = case op of
         exactly (tFuns [tFuns [s, i] (TProd [s, o]), TSignal d i] (TSignal d o))
       _ -> shape "(s -> i -> (s, o)) -> Signal d i -> Signal d o"
   where
-    bad msg = failCheck ("prim " <> primName op <> ": " <> msg)
+    bad msg = failAt StCheck ("prim " <> primName op <> ": " <> msg)
     exactly expected =
       unless (t == expected) $
         bad ("expected type " <> renderTy expected <> ", got " <> renderTy t)

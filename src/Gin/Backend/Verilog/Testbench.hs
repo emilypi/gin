@@ -29,19 +29,16 @@ module Gin.Backend.Verilog.Testbench
   , sizedHex
   , hexDigits
   , typeRange
-  , showNat
   , indent
-  , commaSeparated
   ) where
 
-import Data.Char (GeneralCategory (..), generalCategory)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Gin.Backend.Types (failMarker, mismatchMarker, passMarker)
+import Gin.Core.Utils (hexDigits, punctuate, replaceInvisible, showT)
 import Gin.Core.Value (Value (..))
 import Gin.Netlist.Types
 import Gin.Vectors (Cycle (..), Vectors (..))
-import Numeric (showHex)
 import Numeric.Natural (Natural)
 
 -- | The two members of the Verilog family gin generates.
@@ -91,7 +88,7 @@ renderTestbench dialect m vs =
         <> ["integer gin_mismatches;"]
     dut =
       [unIdent (modName m) <> " gin_dut ("]
-        <> fmap indent (commaSeparated [connect i | i <- modClock m : modReset m : portIdents])
+        <> fmap indent (punctuate "," [connect i | i <- modClock m : modReset m : portIdents])
         <> [");"]
     portIdents = fmap netName (modInputs m <> outs)
     connect i = "." <> unIdent i <> "(" <> unIdent i <> ")"
@@ -108,7 +105,7 @@ renderTestbench dialect m vs =
           )
         <> ["end"]
     cycleLines t c =
-      ["// cycle " <> showInt t]
+      ["// cycle " <> showT t]
         <> zipWith drive (modInputs m) inputBits
         <> concat [report t (invalid n) | (n, Nothing) <- zip (modInputs m) inputBits]
         <> extra t "extra-inputs" (length (cycInputs c) - length (modInputs m))
@@ -121,10 +118,10 @@ renderTestbench dialect m vs =
         invalid n = "port=" <> unIdent (netName n) <> " input=invalid"
     -- a mismatch the generator found in the row itself
     report t what =
-      [ "$display(\"" <> mismatchMarker <> " cycle=" <> showInt t <> " " <> what <> "\");"
+      [ "$display(\"" <> mismatchMarker <> " cycle=" <> showT t <> " " <> what <> "\");"
       , "gin_mismatches = gin_mismatches + 1;"
       ]
-    extra t what k = if k > 0 then report t (what <> "=" <> showInt k) else []
+    extra t what k = if k > 0 then report t (what <> "=" <> showT k) else []
     drive n bits =
       unIdent (netName n) <> " = " <> maybe (unknown ty) (valueLiteral ty) bits <> ";"
       where
@@ -141,7 +138,7 @@ renderTestbench dialect m vs =
           [ "$display(\""
               <> mismatchMarker
               <> " cycle="
-              <> showInt t
+              <> showT t
               <> " port="
               <> name
               <> " expected="
@@ -154,7 +151,7 @@ renderTestbench dialect m vs =
     cycles = length (vecCycles vs)
     verdict =
       [ "if (gin_mismatches == 0) begin"
-      , indent ("$display(\"" <> passMarker <> " cycles=" <> showInt cycles <> "\");")
+      , indent ("$display(\"" <> passMarker <> " cycles=" <> showT cycles <> "\");")
       , "end else begin"
       , indent ("$display(\"" <> failMarker <> " mismatches=%0d\", gin_mismatches);")
       , "end"
@@ -180,7 +177,7 @@ valueLiteral = \case
 
 -- | All bits X, at the port's width.
 unknown :: HwType -> Text
-unknown ty = showNat (hwWidth ty) <> "'bx"
+unknown ty = showT (hwWidth ty) <> "'bx"
 
 -- | Each header line as a @//@ comment. Characters that could end the
 -- comment or hide text (Unicode categories Cc, Cf, Zl, Zp, Cs, Co, Cn)
@@ -188,13 +185,7 @@ unknown ty = showNat (hwWidth ty) <> "'bx"
 -- fixed tags the netlist builder adds, so none reads as a tool
 -- directive such as @verilator lint_off@.
 headerComments :: Module -> [Text]
-headerComments = fmap (("// " <>) . Text.map scrub) . modHeader
-  where
-    scrub c
-      | generalCategory c `elem` hidden = '\xFFFD'
-      | otherwise = c
-    hidden =
-      [Control, Format, LineSeparator, ParagraphSeparator, Surrogate, PrivateUse, NotAssigned]
+headerComments = fmap (("// " <>) . replaceInvisible '\xFFFD') . modHeader
 
 -- | A sized constant: @1'b0@ / @1'b1@ for bits, @<w>'h<hex>@ for vectors.
 literal :: HLit -> Text
@@ -204,33 +195,15 @@ literal = \case
 
 -- | @<w>'h<hexDigits w v>@.
 sizedHex :: Natural -> Integer -> Text
-sizedHex w v = showNat w <> "'h" <> hexDigits w v
-
--- | Lowercase hex of @v mod 2^w@, zero-padded to @ceil(w/4)@ digits (at
--- least one).
-hexDigits :: Natural -> Integer -> Text
-hexDigits w v = Text.justifyRight digits '0' (Text.pack (showHex (v `mod` (2 ^ w)) ""))
-  where
-    digits = max 1 (fromIntegral ((w + 3) `div` 4))
+sizedHex w v = showT w <> "'h" <> hexDigits w v
 
 -- | The packed range of a declaration, with a trailing space: empty for
 -- 'HBit', @[n-1:0] @ for @'HVec' n@.
 typeRange :: HwType -> Text
 typeRange = \case
   HBit -> ""
-  HVec n -> "[" <> Text.pack (show (toInteger n - 1)) <> ":0] "
-
--- | Decimal rendering of a width or index.
-showNat :: Natural -> Text
-showNat = Text.pack . show
-
-showInt :: Int -> Text
-showInt = Text.pack . show
+  HVec n -> "[" <> showT (toInteger n - 1) <> ":0] "
 
 -- | Indent one level (two spaces).
 indent :: Text -> Text
 indent = ("  " <>)
-
--- | Append a comma to every line but the last.
-commaSeparated :: [Text] -> [Text]
-commaSeparated ls = zipWith (<>) ls (fmap (const ",") (drop 1 ls) <> [""])

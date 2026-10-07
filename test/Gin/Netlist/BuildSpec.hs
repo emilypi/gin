@@ -36,7 +36,7 @@ import Gin.Examples
 import Gin.Limits (maxNormalBinds)
 import Gin.Netlist.Build (buildNetlist, sanitize)
 import Gin.Netlist.Types
-import Gin.TestUtil (goldenText)
+import Gin.TestUtil (declOperands, goldenText, moduleOperands, tshow)
 import Numeric.Natural (Natural)
 import System.Timeout (timeout)
 import Test.Hspec
@@ -246,9 +246,6 @@ genShortLegal = do
 
 asciiUpper :: Text -> Text
 asciiUpper = Text.map (\c -> if isAsciiLower c then toUpper c else c)
-
-tshow :: (Show a) => a -> Text
-tshow = Text.pack . show
 
 ----------------------------------------------------------------------
 -- bind names
@@ -920,27 +917,6 @@ exprType m = \case
 
 invariantsBroken :: Module -> [Int]
 invariantsBroken = Set.toAscList . Set.fromList . fmap fst . validate
-
-moduleOperands :: Module -> [Operand]
-moduleOperands m = fmap outDriver (modOutputs m) <> concatMap declOperands (modDecls m)
-
-declOperands :: Decl -> [Operand]
-declOperands = \case
-  DReg _ _ o -> [o]
-  DAssign _ e -> exprOperands e
-
-exprOperands :: HExpr -> [Operand]
-exprOperands = \case
-  HOperand o -> [o]
-  HUn _ o -> [o]
-  HBin _ a b -> [a, b]
-  HMux c t e -> [c, t, e]
-  HShl _ o -> [o]
-  HLshr _ o -> [o]
-  HSlice _ _ o -> [o]
-  HConcat a b -> [a, b]
-  HZext _ o -> [o]
-  HBitToVec o -> [o]
 
 ----------------------------------------------------------------------
 -- random normal forms

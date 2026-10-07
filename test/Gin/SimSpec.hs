@@ -18,6 +18,7 @@ import Gin.Error (GinError (..), Stage (..), renderError)
 import Gin.Examples
 import Gin.Sim (isBudgetError, simulateCore, simulateNormal)
 import Gin.Sim.Prim (evalPrim)
+import Gin.TestUtil (tshow)
 import Gin.Vectors (Cycle (..), Vectors (..), maxCycles)
 import Numeric.Natural (Natural)
 import System.Timeout (timeout)
@@ -1116,13 +1117,13 @@ chain :: Text -> Ty -> (Expr -> Expr) -> Int -> Expr -> Expr
 chain prefix ty step n =
   ELet False [Bind (name i) ty (step (EVar (name (i - 1)))) | i <- [1 .. n]]
   where
-    name i = Name (prefix <> Text.pack (show i))
+    name i = Name (prefix <> tshow i)
 
 coreLimitSpec :: Spec
 coreLimitSpec = do
   it "[sim-depth] evaluates a chain of let binds longer than the nesting limit" $ do
     let n = 110000
-        f = ELam [("x0", bv 8)] (chain "x" (bv 8) (EApp (incr 8) . pure) n (var ("x" <> showText n)))
+        f = ELam [("x0", bv 8)] (chain "x" (bv 8) (EApp (incr 8) . pure) n (var ("x" <> tshow n)))
         prog =
           topProgram (bv8Ports ["x"]) (bv8Ports ["o"]) . overPorts (bv8Ports ["x"]) $
             liftE [bv 8] (bv 8) f [var "x"]
@@ -1133,7 +1134,7 @@ coreLimitSpec = do
         next s = liftE [bv 8] (bv 8) (incr 8) [s]
         prog =
           topProgram (bv8Ports ["s0"]) (bv8Ports ["o"]) . overPorts (bv8Ports ["s0"]) $
-            chain "s" (sig (bv 8)) next n (var ("s" <> showText n))
+            chain "s" (sig (bv 8)) next n (var ("s" <> tshow n))
     r <- settled (simulateCore prog [[b8 0], [b8 10]])
     r `shouldBe` Right [[b8 (toInteger n `mod` 256)], [b8 ((toInteger n + 10) `mod` 256)]]
   it "[sim-budget] runs a cycle of about 9 * 2^16 steps, within the 2^20 a cycle may take" $
@@ -1254,8 +1255,6 @@ coreLimitSpec = do
     r `shouldBeSimError` "building the signal network needs more than 268435456 evaluation steps"
     r `shouldBeSimError` "in def T.top"
     either isBudgetError (const False) r `shouldBe` True
-  where
-    showText = Text.pack . show
 
 ----------------------------------------------------------------------
 -- Normal form

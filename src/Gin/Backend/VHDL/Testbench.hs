@@ -32,10 +32,11 @@ module Gin.Backend.VHDL.Testbench
   ) where
 
 import Data.Bits (testBit)
-import Data.Char (GeneralCategory (..), generalCategory, toUpper)
+import Data.Char (GeneralCategory (..), generalCategory)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Gin.Backend.Types (failMarker, mismatchMarker, passMarker)
+import Gin.Core.Utils (hexDigits, punctuate, showT)
 import Gin.Core.Value (Value (..))
 import Gin.Netlist.Types
   ( HLit (..)
@@ -46,7 +47,6 @@ import Gin.Netlist.Types
   , Output (..)
   )
 import Gin.Vectors (Cycle (..), Vectors (..))
-import Numeric (showHex)
 import Numeric.Natural (Natural)
 
 ----------------------------------------------------------------------
@@ -88,7 +88,7 @@ contextClause =
 vhdlType :: HwType -> Text
 vhdlType = \case
   HBit -> "std_logic"
-  HVec n -> "unsigned(" <> tshow (toInteger n - 1) <> " downto 0)"
+  HVec n -> "unsigned(" <> showT (toInteger n - 1) <> " downto 0)"
 
 -- | A constant operand, qualified so that its type never depends on
 -- context: @std_logic'('0')@ / @std_logic'('1')@, or @unsigned'("…")@ with
@@ -109,15 +109,6 @@ binaryDigits w x = Text.pack [if testBit v i then '1' else '0' | i <- [n - 1, n 
   where
     n = fromIntegral w :: Int
     v = x `mod` 2 ^ w
-
--- | Exactly @ceil(w/4)@ uppercase hex digits of @x mod 2^w@.
-hexDigits :: Natural -> Integer -> Text
-hexDigits w x =
-  Text.justifyRight (fromIntegral ((w + 3) `div` 4)) '0' $
-    Text.pack (fmap toUpper (showHex (x `mod` 2 ^ w) ""))
-
-tshow :: (Show a) => a -> Text
-tshow = Text.pack . show
 
 ----------------------------------------------------------------------
 -- Testbench
@@ -160,13 +151,6 @@ renderTestbench m vs =
 indent :: [Text] -> [Text]
 indent = fmap (\l -> if Text.null l then l else "  " <> l)
 
--- | Append a separator to every element but the last.
-punctuate :: Text -> [Text] -> [Text]
-punctuate sep = \case
-  [] -> []
-  [x] -> [x]
-  x : xs -> (x <> sep) : punctuate sep xs
-
 outputNets :: Module -> [Net]
 outputNets = fmap outNet . modOutputs
 
@@ -185,13 +169,13 @@ table m rows =
   ["type gin_row is record"]
     <> indent [name n <> " : " <> vhdlType (netType n) <> ";" | n <- fields]
     <> ["end record gin_row;", "type gin_rows is array (natural range <>) of gin_row;"]
-    <> ["constant gin_vectors : gin_rows(0 to " <> tshow (length rows - 1) <> ") := ("]
+    <> ["constant gin_vectors : gin_rows(0 to " <> showT (length rows - 1) <> ") := ("]
     <> indent (punctuate "," (zipWith row [0 :: Int ..] rows))
     <> [");", ""]
   where
     fields = modInputs m <> outputNets m
     row t c =
-      tshow t <> " => (" <> Text.intercalate ", " (entries c) <> ")"
+      showT t <> " => (" <> Text.intercalate ", " (entries c) <> ")"
     entries c = cells (modInputs m) (cycInputs c) <> cells (outputNets m) (cycOutputs c)
     cells ns vals = zipWith cell ns (vals <> repeat (VBool False))
     cell n v = name n <> " => " <> dataLiteral (netType n) v
@@ -202,7 +186,7 @@ table m rows =
 dataLiteral :: HwType -> Value -> Text
 dataLiteral ty v = case ty of
   HBit -> bitChar (asBit v)
-  HVec w -> tshow w <> "x\"" <> hexDigits w (asInteger v) <> "\""
+  HVec w -> showT w <> "x\"" <> Text.toUpper (hexDigits w (asInteger v)) <> "\""
   where
     asBit = \case
       VBool b -> b
@@ -290,9 +274,9 @@ stimulus m n bad =
         <> verdict
     reportMalformed (k, first) =
       [ "-- Missing, ill-typed or extra values in the vectors: each is a mismatch."
-      , "gin_mismatches := " <> tshow k <> ";"
+      , "gin_mismatches := " <> showT k <> ";"
       , writeText
-          (mismatchMarker <> " malformed-values=" <> tshow k <> " first-cycle=" <> tshow first)
+          (mismatchMarker <> " malformed-values=" <> showT k <> " first-cycle=" <> showT first)
       , "writeline(output, gin_line);"
       ]
     cycles
@@ -300,7 +284,7 @@ stimulus m n bad =
       | otherwise =
           [ "-- Each cycle: drive the inputs with the clock low, compare every"
           , "-- output 1 ns later, then one rising edge."
-          , "for gin_t in 0 to " <> tshow (n - 1) <> " loop"
+          , "for gin_t in 0 to " <> showT (n - 1) <> " loop"
           ]
             <> indent
               ( [sig (netName i) <> " <= " <> field i <> ";" | i <- modInputs m]
@@ -315,7 +299,7 @@ stimulus m n bad =
             <> ["end loop;"]
     verdict =
       [ "if gin_mismatches = 0 then"
-      , "  " <> writeText (passMarker <> " cycles=" <> tshow (max 0 n))
+      , "  " <> writeText (passMarker <> " cycles=" <> showT (max 0 n))
       , "else"
       , "  " <> writeText (failMarker <> " mismatches=")
       , "  write(gin_line, gin_mismatches);"

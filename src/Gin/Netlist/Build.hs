@@ -35,14 +35,7 @@ module Gin.Netlist.Build
   ) where
 
 import Control.Monad (foldM, when)
-import Data.Char
-  ( GeneralCategory (..)
-  , generalCategory
-  , isAsciiLower
-  , isAsciiUpper
-  , isDigit
-  , toLower
-  )
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit, toLower)
 import Data.List (find)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -66,7 +59,8 @@ import Gin.Core.Syntax
   , validValue
   , valueTy
   )
-import Gin.Error (GinError, Stage (..), ginError, withContext)
+import Gin.Core.Utils (failAt, quote, replaceInvisible, showT)
+import Gin.Error (GinError, Stage (..), withContext)
 import Gin.Limits (maxNormalBinds)
 import Gin.Netlist.Types
   ( BinOp (..)
@@ -81,6 +75,7 @@ import Gin.Netlist.Types
   , Output (..)
   , UnOp (..)
   , declNet
+  , exprOperands
   , isLegalIdent
   , reservedWords
   )
@@ -93,8 +88,8 @@ import Numeric.Natural (Natural)
 -- non-combinational primitive) instead of crashing.
 buildNetlist :: NModule -> Either GinError Module
 buildNetlist m = do
-  when (length (nmBinds m) > maxNormalBinds) . Left . netlistError $
-    "more than " <> tshow maxNormalBinds <> " binds"
+  when (length (nmBinds m) > maxNormalBinds) . failAt StNetlist $
+    "more than " <> showT maxNormalBinds <> " binds"
   taken <- reserveInterface m
   inputs <- traverse lowerInput (nmInputs m)
   env <- nameBinds taken (nmInputs m) (nmBinds m)
@@ -138,10 +133,10 @@ reserveInterface m = Map.keysSet <$> foldM reserve Map.empty interface
     reserve :: Map Text Text -> (Text, Text) -> Either GinError (Map Text Text)
     reserve held (what, name)
       | not (isLegalIdent name) =
-          Left . netlistError $
+          failAt StNetlist $
             what <> " " <> quote name <> " is not a legal identifier: " <> legalRule
       | Just holder <- Map.lookup (Text.toLower name) held =
-          Left . netlistError $ what <> " " <> quote name <> " collides with the " <> holder
+          failAt StNetlist $ what <> " " <> quote name <> " collides with the " <> holder
       | otherwise = Right (Map.insert (Text.toLower name) (what <> " " <> quote name) held)
     legalRule =
       "it must match [a-z][a-z0-9_]*, have at most 64 characters, contain no \"__\", \
@@ -159,13 +154,13 @@ nameBinds reserved inputs binds = snd <$> foldM step (Taken reserved Map.empty, 
     inputEnv = Map.fromList [(n, (Ident (unName n), t)) | (n, t) <- inputs]
     step (taken, env) b
       | nbName b `Map.member` env =
-          Left . netlistError $
+          failAt StNetlist $
             "bind name " <> quote (unName (nbName b)) <> " is already an input or a bind"
       | otherwise = case claimName taken (unName (nbName b)) of
           Just (i, taken') ->
             taken' `seq` Right (taken', Map.insert (nbName b) (Ident i, nbTy b) env)
           Nothing ->
-            Left . netlistError $
+            failAt StNetlist $
               "no free legal name for bind " <> quote (unName (nbName b)) <> " (too many names)"
 
 -- | @sanitize taken name@ turns @name@ into a legal identifier
@@ -215,7 +210,7 @@ claimName (Taken names resume) name
     base = baseName name
     start = Map.findWithDefault 1 base resume
     suffixed :: Int -> Text
-    suffixed k = base <> "_" <> tshow k
+    suffixed k = base <> "_" <> showT k
     free k = suffixed k `Set.notMember` names && isLegalIdent (suffixed k)
 
 -- | Steps 1–4 of 'sanitize'.
@@ -295,14 +290,14 @@ lowerPrim env op args = case (op, args) of
   (BvOfBool, [a]) -> HBitToVec <$> opnd a
   _
     | isCombinational op ->
-        Left . netlistError $
-          primName op <> " takes " <> operands (primArity op) <> ", got " <> tshow (length args)
-    | otherwise -> Left (netlistError (primName op <> " is not a combinational primitive"))
+        failAt StNetlist $
+          primName op <> " takes " <> operands (primArity op) <> ", got " <> showT (length args)
+    | otherwise -> failAt StNetlist (primName op <> " is not a combinational primitive")
   where
     opnd = operand env
     operands = \case
       1 -> "1 operand"
-      k -> tshow k <> " operands"
+      k -> showT k <> " operands"
     bin o a b = HBin o <$> opnd a <*> opnd b
     un o a = HUn o <$> opnd a
     shift mk k a = do
@@ -310,8 +305,8 @@ lowerPrim env op args = case (op, args) of
       if k < w then mk k <$> opnd a else Right (HOperand (OConst (HLitVec w 0)))
     extract hi lo a = do
       w <- vectorWidth env a
-      when (hi < lo || hi >= w) . Left . netlistError $
-        "bv.extract " <> tshow hi <> " " <> tshow lo <> " of a " <> tshow w <> "-bit operand"
+      when (hi < lo || hi >= w) . failAt StNetlist $
+        "bv.extract " <> showT hi <> " " <> showT lo <> " of a " <> showT w <> "-bit operand"
       let width = hi - lo + 1
       case a of
         ALit (VBV _ v) ->
@@ -328,7 +323,7 @@ vectorWidth :: Env -> Atom -> Either GinError Natural
 vectorWidth env a =
   atomTy >>= \case
     TBitVec w -> Right w
-    t -> Left (netlistError ("expected a bit-vector operand, got " <> tshow t))
+    t -> failAt StNetlist ("expected a bit-vector operand, got " <> showT t)
   where
     atomTy = case a of
       AVar n -> snd <$> resolve env n
@@ -336,21 +331,21 @@ vectorWidth env a =
 
 resolve :: Env -> Name -> Either GinError (Ident, Ty)
 resolve env n =
-  maybe (Left (netlistError ("unknown variable " <> quote (unName n)))) Right (Map.lookup n env)
+  maybe (failAt StNetlist ("unknown variable " <> quote (unName n))) Right (Map.lookup n env)
 
 literal :: Value -> Either GinError HLit
 literal v
-  | not (validValue v) = Left (netlistError ("invalid literal " <> tshow v))
+  | not (validValue v) = failAt StNetlist ("invalid literal " <> showT v)
   | otherwise = case v of
       VBool b -> Right (HLitBit b)
       VBV w x -> Right (HLitVec w x)
-      VTuple _ -> Left (netlistError ("non-scalar literal " <> tshow v))
+      VTuple _ -> failAt StNetlist ("non-scalar literal " <> showT v)
 
 hwType :: Ty -> Either GinError HwType
 hwType t = case t of
   TBool -> Right HBit
   TBitVec w | isScalar t -> Right (HVec w)
-  _ -> Left (netlistError ("non-scalar type " <> tshow t))
+  _ -> failAt StNetlist ("non-scalar type " <> showT t)
 
 -- | Drop every declaration whose net neither an output nor a remaining
 -- declaration reads, until there is none. Only folding leaves nets unread
@@ -383,19 +378,6 @@ declReads = \case
   DAssign _ e -> concatMap refs (exprOperands e)
   DReg _ _ o -> refs o
 
-exprOperands :: HExpr -> [Operand]
-exprOperands = \case
-  HOperand o -> [o]
-  HUn _ o -> [o]
-  HBin _ a b -> [a, b]
-  HMux c t e -> [c, t, e]
-  HShl _ o -> [o]
-  HLshr _ o -> [o]
-  HSlice _ _ o -> [o]
-  HConcat a b -> [a, b]
-  HZext _ o -> [o]
-  HBitToVec o -> [o]
-
 refs :: Operand -> [Ident]
 refs = \case
   ORef i -> [i]
@@ -411,11 +393,12 @@ refs = \case
 -- specification's hash ('certificateSpecHash'), the axioms of the proof
 -- and of the implementation, and two notices: gin carries the trace but
 -- cannot re-check the proof, and only @gin validate@ compares the
--- generated HDL with the vectors exported from Lean.
+-- generated HDL with the vectors exported from Lean. Every character that
+-- could end a comment line, or hide or reorder its text, becomes @?@.
 certificateHeader :: NModule -> [Text]
 certificateHeader m =
   fmap
-    neutralise
+    (replaceInvisible '?')
     ( [ "generated by gin " <> ginVersion
       , "top: " <> nmName m
       , "theorem: " <> certTheorem cert
@@ -435,31 +418,3 @@ certificateHeader m =
 -- | The package version, as in @gin.cabal@.
 ginVersion :: Text
 ginVersion = "0.1.0.0"
-
--- | Replace every character that could end the comment line, or hide or
--- reorder its text, by @?@.
-neutralise :: Text -> Text
-neutralise = Text.map (\c -> if unsafe (generalCategory c) then '?' else c)
-  where
-    unsafe = \case
-      Control -> True
-      Format -> True
-      LineSeparator -> True
-      ParagraphSeparator -> True
-      Surrogate -> True
-      PrivateUse -> True
-      NotAssigned -> True
-      _ -> False
-
-----------------------------------------------------------------------
--- Helpers
-
-netlistError :: Text -> GinError
-netlistError = ginError StNetlist
-
--- | Quote and escape a name from the IR for an error message.
-quote :: Text -> Text
-quote = tshow
-
-tshow :: (Show a) => a -> Text
-tshow = Text.pack . show

@@ -35,6 +35,7 @@ module Gin.Netlist.Types
   , BinOp (..)
   , HExpr (..)
   , Decl (..)
+  , exprOperands
   , declNet
   , Output (..)
   , Module (..)
@@ -217,6 +218,20 @@ data HExpr
   | HZext !Natural !Operand
   | HBitToVec !Operand
   deriving stock (Eq, Show)
+
+-- | The operands an expression reads, in order.
+exprOperands :: HExpr -> [Operand]
+exprOperands = \case
+  HOperand o -> [o]
+  HUn _ o -> [o]
+  HBin _ a b -> [a, b]
+  HMux c t e -> [c, t, e]
+  HShl _ o -> [o]
+  HLshr _ o -> [o]
+  HSlice _ _ o -> [o]
+  HConcat a b -> [a, b]
+  HZext _ o -> [o]
+  HBitToVec o -> [o]
 
 data Decl
   = -- | Continuous assignment of a combinational net.

@@ -55,7 +55,7 @@ import Gin.Examples
   )
 import Gin.Normalize (checkNormal, normalize)
 import Gin.Sim (simulateCore, simulateNormal)
-import Gin.TestUtil (itWithTools, withTempDir)
+import Gin.TestUtil (itWithTools, tshow, withTempDir)
 import Gin.Vectors (Cycle (..), Vectors (..), maxCycles)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
@@ -232,9 +232,6 @@ renderValue = \case
   VBool b -> if b then "true" else "false"
   VBV _ x -> tshow x
   VTuple vs -> "(" <> Text.intercalate ", " (fmap renderValue vs) <> ")"
-
-tshow :: (Show a) => a -> Text
-tshow = Text.pack . show
 
 ----------------------------------------------------------------------
 -- Reference simulators

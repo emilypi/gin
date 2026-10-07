@@ -76,6 +76,7 @@ import Gin.Backend.VHDL.Testbench
   , renderTestbench
   , vhdlType
   )
+import Gin.Core.Utils (punctuate, showT)
 import Gin.Netlist.Types
   ( BinOp (..)
   , Decl (..)
@@ -89,6 +90,7 @@ import Gin.Netlist.Types
   , Output (..)
   , UnOp (..)
   , declNet
+  , exprOperands
   , hwWidth
   )
 import Numeric.Natural (Natural)
@@ -276,13 +278,6 @@ chunksOf k xs = case splitAt (max 1 k) xs of
   ([], _) -> []
   (chunk, rest) -> chunk : chunksOf k rest
 
--- | Append a separator to every element but the last.
-punctuate :: Text -> [Text] -> [Text]
-punctuate sep = \case
-  [] -> []
-  [x] -> [x]
-  x : xs -> (x <> sep) : punctuate sep xs
-
 -- | An assignment to a net's signal.
 assign :: Ident -> Text -> Text
 assign i rhs = signalName i <> " <= " <> rhs <> ";"
@@ -354,7 +349,7 @@ combinational external budget assigns
     widen a b
       | a == HBit && b == HBit = HBit
       | otherwise = HVec (max (hwWidth a) (hwWidth b))
-    slotName j = "gin_v" <> Text.pack (show j)
+    slotName j = "gin_v" <> showT j
     slotPlace i = case (Map.lookup i position, Map.lookup i types) of
       (Just k, Just ty) ->
         let j = k `mod` d
@@ -366,7 +361,7 @@ combinational external budget assigns
       | held == ty = v
       | otherwise = case ty of
           HBit -> v <> "(0)"
-          HVec w -> v <> "(" <> nat (w - 1) <> " downto 0)"
+          HVec w -> v <> "(" <> showT (w - 1) <> " downto 0)"
     statements k n e
       | i `Set.member` inSlot =
           [held <> " := " <> rhs <> ";"] <> [assign i held | i `Set.member` inSignal]
@@ -397,19 +392,6 @@ dependencyOrder assigns = reverse (snd (foldl' visit (IntSet.empty, []) indexed)
       ORef i -> Map.lookup i byName
       OConst _ -> Nothing
 
-exprOperands :: HExpr -> [Operand]
-exprOperands = \case
-  HOperand o -> [o]
-  HUn _ o -> [o]
-  HBin _ a b -> [a, b]
-  HMux c t e -> [c, t, e]
-  HShl _ o -> [o]
-  HLshr _ o -> [o]
-  HSlice _ _ o -> [o]
-  HConcat a b -> [a, b]
-  HZext _ o -> [o]
-  HBitToVec o -> [o]
-
 -- | One register: rising edge, synchronous active-high reset.
 process :: Module -> Net -> HLit -> Operand -> [Text]
 process m n reset next =
@@ -431,9 +413,6 @@ operand ref = \case
   ORef i -> ref i
   OConst l -> literal l
 
-nat :: Natural -> Text
-nat = Text.pack . show
-
 call :: Text -> [Text] -> Text
 call f args = f <> "(" <> Text.intercalate ", " args <> ")"
 
@@ -446,11 +425,11 @@ expr place ty = \case
   HUn UNeg o -> literal (HLitVec (hwWidth ty) 0) <> " - " <> arg o
   HBin op a b -> binary ty op (arg a) (arg b)
   HMux c t e -> arg t <> " when " <> isHigh c <> " else " <> arg e
-  HShl k o -> call "shift_left" [arg o, nat k]
-  HLshr k o -> call "shift_right" [arg o, nat k]
+  HShl k o -> call "shift_left" [arg o, showT k]
+  HLshr k o -> call "shift_right" [arg o, showT k]
   HSlice hi lo o -> slice (placeObject . place) hi lo o
   HConcat a b -> arg a <> " & " <> arg b
-  HZext w o -> call "resize" [arg o, nat w]
+  HZext w o -> call "resize" [arg o, showT w]
   HBitToVec o -> "unsigned'(0 => " <> arg o <> ")"
   where
     arg = operand (placeValue . place)
@@ -463,7 +442,7 @@ binary ty op a b = case op of
   BXor -> infixOp "xor"
   BAdd -> infixOp "+"
   BSub -> infixOp "-"
-  BMul -> call "resize" [infixOp "*", nat (hwWidth ty)]
+  BMul -> call "resize" [infixOp "*", showT (hwWidth ty)]
   BEq -> flag (infixOp "=")
   BUlt -> flag (infixOp "<")
   BUle -> flag (infixOp "<=")
@@ -476,7 +455,7 @@ binary ty op a b = case op of
 -- too rather than slicing a qualified literal.
 slice :: (Ident -> Text) -> Natural -> Natural -> Operand -> Text
 slice object hi lo = \case
-  ORef i -> object i <> "(" <> nat hi <> " downto " <> nat lo <> ")"
+  ORef i -> object i <> "(" <> showT hi <> " downto " <> showT lo <> ")"
   OConst l -> literal (HLitVec width (value l `shiftR` fromIntegral lo))
   where
     width = fromInteger (max 0 (toInteger hi - toInteger lo + 1))

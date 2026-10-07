@@ -39,7 +39,7 @@ import Gin.Examples
 import Gin.Limits (maxNormalBinds, maxVectorBits)
 import Gin.Netlist.BuildSpec (withSpecCounter)
 import Gin.Netlist.Types
-import Gin.TestUtil (goldenText, itWithTools, runTool, withTempDir)
+import Gin.TestUtil (goldenText, itWithTools, moduleOperands, runTool, tshow, withTempDir)
 import Gin.Vectors (Cycle (..), Vectors (..))
 import Numeric (showHex)
 import Numeric.Natural (Natural)
@@ -351,7 +351,7 @@ shouldPassCycles :: Int -> ToolResult -> Expectation
 shouldPassCycles n r@(code, out, err) =
   unless ok $ expectationFailure (describeRun ("expected " <> Text.unpack passLine) r)
   where
-    passLine = passMarker <> " cycles=" <> Text.pack (show n)
+    passLine = passMarker <> " cycles=" <> tshow n
     ok = code == ExitSuccess && markerLines out == [passLine] && null (markerLines err)
 
 -- | Exactly these marker lines on standard output (case-insensitively, as
@@ -507,22 +507,8 @@ invariantViolations m =
         : modReset m
         : fmap netName (modInputs m <> fmap outNet (modOutputs m) <> fmap declNet (modDecls m))
     lowered = fmap (Text.map toLower . unIdent) idents
-    operands = fmap outDriver (modOutputs m) <> concatMap declOperands (modDecls m)
+    operands = moduleOperands m
     read' = Set.fromList [i | ORef i <- operands]
-    declOperands = \case
-      DReg _ _ o -> [o]
-      DAssign _ e -> exprOperands e
-    exprOperands = \case
-      HOperand o -> [o]
-      HUn _ o -> [o]
-      HBin _ a b -> [a, b]
-      HMux c t e -> [c, t, e]
-      HShl _ o -> [o]
-      HLshr _ o -> [o]
-      HSlice _ _ o -> [o]
-      HConcat a b -> [a, b]
-      HZext _ o -> [o]
-      HBitToVec o -> [o]
 
 ----------------------------------------------------------------------
 -- Reference evaluator (docs/semantics.md)
@@ -1289,6 +1275,3 @@ constantSlice =
     , modOutputs = [Output (net "o" (HVec 4)) (ref "s")]
     , modDecls = [assign "s" (HVec 4) (HSlice 5 2 (kvec 8 0xB4))]
     }
-
-tshow :: (Show a) => a -> Text
-tshow = Text.pack . show

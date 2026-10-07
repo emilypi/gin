@@ -17,7 +17,7 @@ module Gin.Certificate
 import Data.ByteString (StrictByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS8
-import Data.Char (GeneralCategory (..), generalCategory, isSpace)
+import Data.Char (isSpace)
 import Data.Containers.ListUtils (nubOrd)
 import Data.Maybe (fromMaybe)
 import Data.Set (Set)
@@ -26,7 +26,8 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
 import Gin.Core.Syntax (Certificate (..), SpecDef (..))
-import Gin.Error (GinError, Stage (..), ginError)
+import Gin.Core.Utils (failAt, invisible, quote)
+import Gin.Error (GinError, Stage (..))
 import Gin.Hash (sha256Hex)
 
 -- | Identity of the specification a trace claims: SHA-256 (lowercase
@@ -92,7 +93,7 @@ alwaysRejected =
 checkCertificate :: CertPolicy -> Certificate -> Either GinError ()
 checkCertificate policy c = case problems of
   [] -> Right ()
-  ps -> Left (ginError StCertificate (Text.intercalate "; " ps))
+  ps -> failAt StCertificate (Text.intercalate "; " ps)
   where
     problems =
       ["empty theorem name" | blank (certTheorem c)]
@@ -109,7 +110,7 @@ checkCertificate policy c = case problems of
     verdict axiom
       | not (validName axiom) =
           Just
-            ( showT axiom
+            ( quote axiom
             , "is not a valid axiom name: it is empty or contains control or invisible characters"
             )
       | Set.member (looseName axiom) alwaysRejected = Just (axiom, "is never allowed")
@@ -119,7 +120,6 @@ checkCertificate policy c = case problems of
       | Set.member (normalizeName axiom) allowed = Nothing
       | otherwise = Just (axiom, "is not allowed by the axiom policy")
     native = Text.isInfixOf "._native."
-    showT = Text.pack . show
 
 -- | Trim surrounding whitespace, then remove Lean's @«»@ quoting from each
 -- dot-separated component.
@@ -139,10 +139,3 @@ looseName =
 -- | Not empty after normalization, and no control or invisible character.
 validName :: Text -> Bool
 validName name = not (Text.null (normalizeName name)) && not (Text.any invisible name)
-
--- | Characters in the Unicode categories Cc, Cf, Zl, Zp, Cs, Co and Cn: they
--- break lines or hide, reorder or disguise text.
-invisible :: Char -> Bool
-invisible ch =
-  generalCategory ch
-    `elem` [Control, Format, LineSeparator, ParagraphSeparator, Surrogate, PrivateUse, NotAssigned]

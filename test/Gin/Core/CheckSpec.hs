@@ -9,6 +9,7 @@ import Gin.Core.Json (decodeProgram, encodeProgram)
 import Gin.Core.Syntax
 import Gin.Error
 import Gin.Examples
+import Gin.TestUtil (tshow)
 import Numeric.Natural (Natural)
 import System.Timeout (timeout)
 import Test.Hspec
@@ -83,7 +84,7 @@ constantTop ins outs o =
       [] -> constant
       _ ->
         ELam
-          [(Name ("in" <> Text.pack (show i)), sig (portTy p)) | (i, p) <- zip [0 :: Int ..] ins]
+          [(Name ("in" <> tshow i), sig (portTy p)) | (i, p) <- zip [0 :: Int ..] ins]
           constant
 
 threeOutputs :: [Port]

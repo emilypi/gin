@@ -12,12 +12,15 @@ module Gin.Core.Syntax
   , Producer (..)
   , Program (..)
   , lookupDef
+  , globalRefs
   , module Gin.Core.Type
   , module Gin.Core.Value
   , module Gin.Core.Prim
   ) where
 
 import Data.List (find)
+import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.String (IsString)
 import Data.Text (Text)
 import Gin.Core.Prim
@@ -144,3 +147,17 @@ data Program = Program
 
 lookupDef :: Name -> Program -> Maybe Def
 lookupDef n = find ((== n) . defName) . progDefs
+
+-- | Globals an expression refers to.
+globalRefs :: Expr -> Set Name
+globalRefs = \case
+  EVar _ -> Set.empty
+  EGlobal n -> Set.singleton n
+  ELit _ -> Set.empty
+  EPrim _ _ -> Set.empty
+  EApp f args -> foldMap globalRefs (f : args)
+  ELam _ body -> globalRefs body
+  ELet _ binds body -> foldMap (globalRefs . bindExpr) binds <> globalRefs body
+  ETuple es -> foldMap globalRefs es
+  EProj _ e -> globalRefs e
+  EIf c t e -> globalRefs c <> globalRefs t <> globalRefs e

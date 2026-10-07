@@ -102,7 +102,7 @@ import Gin.Netlist.Types
   )
 import Gin.Normalize (checkNormal, normalize)
 import Gin.Sim (isBudgetError, simulateCore, simulateNormal)
-import Gin.TestUtil (itWithTools, runTool, withTempDir)
+import Gin.TestUtil (itWithTools, runTool, tshow, withTempDir)
 import Gin.Vectors (Cycle (..), Vectors (..))
 import Numeric.Natural (Natural)
 import System.Exit (ExitCode (..))
@@ -797,7 +797,7 @@ containsCount :: Text -> Int -> Text -> Bool
 containsCount prefix n line =
   any (followedByCount . Text.drop (Text.length needle) . snd) (Text.breakOnAll needle line)
   where
-    needle = prefix <> Text.pack (show n)
+    needle = prefix <> tshow n
     followedByCount rest = maybe True (not . isDigit . fst) (Text.uncons rest)
 
 -- | The run passes by the pass rule.

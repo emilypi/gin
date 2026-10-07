@@ -16,6 +16,7 @@ import Gin.Core.Syntax
 import Gin.Error
 import Gin.Examples
 import Gin.Limits
+import Gin.TestUtil (tshow)
 import Gin.Vectors
 import Numeric.Natural (Natural)
 import System.Environment (lookupEnv)
@@ -628,7 +629,7 @@ spec = do
       rejectsProgram "1234" (setAt (oneLit <> [K "value"]) (bvValue 4096 huge) counterJson)
     it "[json-limits] accepts the largest 4096-bit value (1234 digits)" $ do
       let largest = 2 ^ (4096 :: Int) - 1 :: Integer
-          digits = Text.pack (show largest)
+          digits = tshow largest
       Text.length digits `shouldBe` maxDecimalDigits
       let doc = setAt (oneLit <> [K "value"]) (bvValue 4096 digits) counterJson
       void (decodeProgram (A.encode doc)) `shouldBe` Right ()

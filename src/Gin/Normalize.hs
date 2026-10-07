@@ -35,7 +35,6 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
-import Data.Text (Text)
 import Gin.Core.Normal (Atom (..), NBind (..), NModule (..), NOutput (..), NRhs (..))
 import Gin.Core.Syntax
   ( Name (..)
@@ -48,11 +47,10 @@ import Gin.Core.Syntax
   , validValue
   , valueTy
   )
-import Gin.Error (GinError, Stage (..), ginError, withContext)
+import Gin.Core.Utils (failAt, showT)
+import Gin.Error (GinError, Stage (..), withContext)
 import Gin.Limits (maxNormalBinds)
 import Gin.Normalize.Internal (buildModule, primResultTy)
-import Gin.Core.Utils (showT)
-
 
 -- | Precondition: 'Gin.Core.Check.checkProgram' succeeded. Inlines
 -- globals, beta-reduces, erases signals, lowers @sig.mealy@ to registers,
@@ -80,7 +78,8 @@ checkNormal m = do
   -- 8: size, first, so the remaining checks run on bounded input.
   let count = length binds
   when (count > maxNormalBinds) $
-    bad ("too many binds: " <> showT count <> " exceeds the limit " <> showT maxNormalBinds)
+    failAt StNormalize
+      ("too many binds: " <> showT count <> " exceeds the limit " <> showT maxNormalBinds)
   -- 1: scalar types.
   for_ inputs $ \(n, t) -> scalar ("input " <> unName n) t
   for_ binds $ \b -> scalar ("bind " <> unName (nbName b)) (nbTy b)
@@ -93,22 +92,23 @@ checkNormal m = do
   for_ binds $ \b ->
     for_ (rhsVars (nbRhs b)) $ \n ->
       unless (Map.member n env) $
-        bad ("undefined variable " <> unName n <> " in bind " <> unName (nbName b))
+        failAt StNormalize ("undefined variable " <> unName n <> " in bind " <> unName (nbName b))
   for_ outputs $ \o ->
     for_ (atomVars (noAtom o)) $ \n ->
       unless (Map.member n env) $
-        bad ("undefined variable " <> unName n <> " in output " <> noName o)
+        failAt StNormalize ("undefined variable " <> unName n <> " in output " <> noName o)
   -- 3 and 6: typing.
   for_ binds (checkBind env)
   for_ outputs $ \o -> do
     t <- atomTy env (noAtom o)
     unless (t == noTy o) $
-      bad ("ill-typed output " <> noName o <> ": " <> showT t <> " instead of " <> showT (noTy o))
+      failAt StNormalize
+        ("ill-typed output " <> noName o <> ": " <> showT t <> " instead of " <> showT (noTy o))
   -- 5: topological order of the combinational dependency graph.
   let step defined b = do
         for_ (combinationalVars (nbRhs b)) $ \n ->
           unless (Set.member n defined) $
-            bad
+            failAt StNormalize
               ( "bind "
                   <> unName (nbName b)
                   <> " reads "
@@ -120,7 +120,8 @@ checkNormal m = do
   foldM_ step inputNames binds
   -- 7: no copies, no dead binds.
   for_ binds $ \b -> case nbRhs b of
-    NAtom _ -> bad ("copy bind " <> unName (nbName b) <> " (copies must be propagated)")
+    NAtom _ ->
+      failAt StNormalize ("copy bind " <> unName (nbName b) <> " (copies must be propagated)")
     _ -> pure ()
   let live =
         reachable
@@ -128,12 +129,13 @@ checkNormal m = do
           (concatMap (atomVars . noAtom) outputs)
   for_ binds $ \b ->
     unless (Set.member (nbName b) live) $
-      bad ("bind " <> unName (nbName b) <> " is unreachable from every output (dead bind)")
+      failAt StNormalize
+        ("bind " <> unName (nbName b) <> " is unreachable from every output (dead bind)")
   where
     scalar what t =
-      unless (isScalar t) $ bad ("type of " <> what <> " is not scalar: " <> showT t)
+      unless (isScalar t) $ failAt StNormalize ("type of " <> what <> " is not scalar: " <> showT t)
     fresh msg seen n
-      | Set.member n seen = bad (msg <> unName n)
+      | Set.member n seen = failAt StNormalize (msg <> unName n)
       | otherwise = Right (Set.insert n seen)
 
 checkBind :: Map Name Ty -> NBind -> Either GinError ()
@@ -157,22 +159,25 @@ checkBind env (NBind n t rhs) = case rhs of
     unless (ta == t && tb == t) $ illTyped ("mux branches have types " <> showT [ta, tb])
   NReg v a -> do
     unless (validValue v && valueTy v == t) $
-      bad ("register " <> unName n <> " has an initial value of the wrong type: " <> showT v)
+      failAt StNormalize
+        ("register " <> unName n <> " has an initial value of the wrong type: " <> showT v)
     ta <- atomTy env a
     unless (ta == t) $ illTyped ("register argument has type " <> showT ta)
   NAtom a -> do
     ta <- atomTy env a
     unless (ta == t) $ illTyped ("copied atom has type " <> showT ta)
   where
-    illTyped msg = bad ("ill-typed bind " <> unName n <> " of type " <> showT t <> ": " <> msg)
+    illTyped msg =
+      failAt StNormalize ("ill-typed bind " <> unName n <> " of type " <> showT t <> ": " <> msg)
 
 -- | Type of an atom whose variable, if any, is in scope.
 atomTy :: Map Name Ty -> Atom -> Either GinError Ty
 atomTy env = \case
-  AVar n -> maybe (bad ("undefined variable " <> unName n)) Right (Map.lookup n env)
+  AVar n -> maybe (failAt StNormalize ("undefined variable " <> unName n)) Right (Map.lookup n env)
   ALit v
     | validValue v && isScalar (valueTy v) -> Right (valueTy v)
-    | otherwise -> bad ("ill-typed literal " <> showT v <> " (literals are valid scalars)")
+    | otherwise ->
+        failAt StNormalize ("ill-typed literal " <> showT v <> " (literals are valid scalars)")
 
 atomVars :: Atom -> [Name]
 atomVars = \case
@@ -204,7 +209,3 @@ reachable rhss = go Set.empty
         | Set.member n seen -> go seen rest
         | Just r <- Map.lookup n rhss -> go (Set.insert n seen) (rhsVars r <> rest)
         | otherwise -> go seen rest
-
-bad :: Text -> Either GinError a
-bad = Left . ginError StNormalize
-

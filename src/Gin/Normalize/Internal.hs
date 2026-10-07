@@ -76,10 +76,9 @@ import Gin.Core.Syntax
   , validValue
   , valueTy
   )
+import Gin.Core.Utils (failAt, showT, withContextM)
 import Gin.Error (GinError, Stage (..), ginError, withContext)
 import Gin.Limits (maxNormalBinds)
-import Gin.Core.Utils (showT)
-
 import Numeric.Natural (Natural)
 
 -- | Evaluation steps (expression visits plus function applications) one
@@ -272,9 +271,6 @@ data St = St
 
 type M = StateT St (Either GinError)
 
-failN :: Text -> M a
-failN msg = StateT (const (Left (ginError StNormalize msg)))
-
 -- | Push an error context for the duration of a computation, up to
 -- 'maxContextDepth' nested contexts.
 inContext :: Text -> M a -> M a
@@ -284,7 +280,7 @@ inContext ctx m = do
     then m
     else do
       modify' (\s -> s {stDepth = depth + 1})
-      r <- StateT (withContext ctx . runStateT m)
+      r <- withContextM ctx m
       modify' (\s -> s {stDepth = depth})
       pure r
 
@@ -303,7 +299,7 @@ spend :: Int -> M ()
 spend k = do
   n <- gets stSteps
   when (n > maxEvalSteps - k) $
-    failN ("normalization exceeds " <> showT maxEvalSteps <> " evaluation steps")
+    failAt StNormalize ("normalization exceeds " <> showT maxEvalSteps <> " evaluation steps")
   modify' (\s -> s {stSteps = n + k})
 
 tick :: M ()
@@ -326,7 +322,7 @@ countBind :: M ()
 countBind = do
   n <- gets stEmitted
   when (n >= maxNormalBinds) $
-    failN ("normal form exceeds " <> showT maxNormalBinds <> " binds while inlining")
+    failAt StNormalize ("normal form exceeds " <> showT maxNormalBinds <> " binds while inlining")
   modify' (\s -> s {stEmitted = n + 1})
 
 -- | Emit a bind for a wire id allocated earlier.
@@ -401,7 +397,7 @@ leaves v0 = go v0 []
       case v of
         SAtom w t -> pure ((w, t) : acc)
         STuple _ vs -> foldrM go acc vs
-        SFun _ _ -> failN "a function value cannot be lowered to wires"
+        SFun _ _ -> failAt StNormalize "a function value cannot be lowered to wires"
 
 ----------------------------------------------------------------------
 -- Evaluation
@@ -412,7 +408,7 @@ eval env expr = do
   case expr of
     IVar x -> case IntMap.lookup x (envVars env) of
       Just v -> pure v
-      Nothing -> sourceName x >>= \n -> failN ("unbound variable " <> n)
+      Nothing -> sourceName x >>= \n -> failAt StNormalize ("unbound variable " <> n)
     IGlobal g -> global g
     ILit v -> literal v
     IPrim op -> pure (primFun op)
@@ -433,14 +429,14 @@ eval env expr = do
           tv <- eval env t
           ev <- eval env e
           mux w tv ev
-        _ -> failN "the condition of an if is not a Bool"
+        _ -> failAt StNormalize "the condition of an if is not a Bool"
 
 apply :: SVal -> SVal -> M SVal
 apply f a = do
   tick
   case f of
     SFun d k -> withDef d (k a)
-    _ -> failN "application of a value that is not a function"
+    _ -> failAt StNormalize "application of a value that is not a function"
 
 -- | Run a function body, adding the definition it was written in to error
 -- contexts when that differs from the definition being evaluated.
@@ -476,8 +472,8 @@ global g = do
       active <- gets (IntSet.member g . stActive)
       name <- sourceName g
       case def of
-        Nothing -> failN ("unknown global " <> name)
-        Just _ | active -> failN ("recursive definition " <> name)
+        Nothing -> failAt StNormalize ("unknown global " <> name)
+        Just _ | active -> failAt StNormalize ("recursive definition " <> name)
         Just body -> do
           modify' (\s -> s {stActive = IntSet.insert g (stActive s)})
           v <- withDef (Just g) (eval (Env IntMap.empty (Just g)) body)
@@ -491,7 +487,7 @@ global g = do
 literal :: Value -> M SVal
 literal v
   | validValue v = spend (size v) >> go v
-  | otherwise = failN ("invalid literal " <> showT v)
+  | otherwise = failAt StNormalize ("invalid literal " <> showT v)
   where
     go = \case
       VTuple vs -> traverse go vs >>= tuple
@@ -532,24 +528,25 @@ placeholder :: Text -> Ty -> M SVal
 placeholder x = \case
   TSignal _ t -> placeholder x t
   TProd ts -> traverse (placeholder x) ts >>= tuple
-  TFun _ _ -> failN ("a recursive let cannot bind the function " <> x)
+  TFun _ _ -> failAt StNormalize ("a recursive let cannot bind the function " <> x)
   t
     | isScalar t -> (`SAtom` t) . WVar <$> freshId
-    | otherwise -> failN ("recursive binding " <> x <> " has a non-scalar type " <> showT t)
+    | otherwise ->
+        failAt StNormalize ("recursive binding " <> x <> " has a non-scalar type " <> showT t)
 
 -- | Tie the wires of a recursive binding @x@ to its value with copies.
 tie :: Text -> SVal -> SVal -> M ()
 tie x hole v = case (hole, v) of
   (SAtom (WVar i) t, SAtom w t') | t == t' -> emitAt i (Text.take maxAliasLength x) t (RCopy w)
   (STuple _ hs, STuple _ vs) | length hs == length vs -> zipWithM_ (tie x) hs vs
-  _ -> failN ("the value of recursive binding " <> x <> " does not match its type")
+  _ -> failAt StNormalize ("the value of recursive binding " <> x <> " does not match its type")
 
 project :: Natural -> SVal -> M SVal
 project i v = do
   spend (fromIntegral (min i (fromIntegral maxEvalSteps)))
   case v of
     STuple _ vs | x : _ <- genericDrop i vs -> pure x
-    _ -> failN ("projection " <> showT i <> " out of a value without that component")
+    _ -> failAt StNormalize ("projection " <> showT i <> " out of a value without that component")
 
 -- | One mux per scalar component where the branches differ. Each pair of
 -- tuples is muxed once and the result reused wherever the pair recurs, so
@@ -561,7 +558,7 @@ mux c a0 b0 = snd <$> go Map.empty a0 b0
     go memo a b =
       tick >> case (a, b) of
         (SAtom x t, SAtom y t')
-          | t /= t' -> failN "the branches of an if have different types"
+          | t /= t' -> failAt StNormalize "the branches of an if have different types"
           | x == y -> pure (memo, a)
           | otherwise -> (\w -> (memo, SAtom w t)) <$> emitShared "mux" t (RMux c x y)
         (STuple i xs, STuple j ys)
@@ -570,9 +567,9 @@ mux c a0 b0 = snd <$> go Map.empty a0 b0
               (memo', rs) <- mapAccumM (\m (x, y) -> go m x y) memo (zip xs ys)
               r <- tuple rs
               pure (Map.insert (i, j) r memo', r)
-        (SFun _ _, _) -> failN "an if whose branches carry a function is not supported"
-        (_, SFun _ _) -> failN "an if whose branches carry a function is not supported"
-        _ -> failN "the branches of an if have different shapes"
+        (SFun _ _, _) -> failAt StNormalize "an if whose branches carry a function is not supported"
+        (_, SFun _ _) -> failAt StNormalize "an if whose branches carry a function is not supported"
+        _ -> failAt StNormalize "the branches of an if have different shapes"
 
 ----------------------------------------------------------------------
 -- Prims
@@ -592,18 +589,18 @@ runPrim op args = case (op, args) of
   (SigMealy v, [f, i]) -> mealy v f i
   _
     | isCombinational op -> combinational op args
-    | otherwise -> failN ("malformed application of " <> primName op)
+    | otherwise -> failAt StNormalize ("malformed application of " <> primName op)
 
 combinational :: PrimOp -> [SVal] -> M SVal
 combinational op args = do
   ws <- traverse scalarArg args
   case primResultTy op (fmap snd ws) of
-    Nothing -> failN ("ill-typed application of " <> primName op)
+    Nothing -> failAt StNormalize ("ill-typed application of " <> primName op)
     Just t -> (`SAtom` t) <$> emitShared (primHint op) t (RPrim op (fmap fst ws))
   where
     scalarArg = \case
       SAtom w t -> pure (w, t)
-      _ -> failN (primName op <> " applied to a value that is not a scalar")
+      _ -> failAt StNormalize (primName op <> " applied to a value that is not a scalar")
 
 -- | @bv.add@ is hinted as @add@.
 primHint :: PrimOp -> Text
@@ -618,7 +615,7 @@ register v s = case (v, s) of
     i <- freshId
     emitAt i "reg" t (RReg v w)
     pure (SAtom (WVar i) t)
-  _ -> failN "the initial value of a register does not match its argument"
+  _ -> failAt StNormalize "the initial value of a register does not match its argument"
 
 -- | State registers are allocated first, so the step function can read
 -- them, and bound to the next state it returns afterwards.
@@ -630,14 +627,17 @@ mealy v f i = do
     STuple _ [next, o] -> do
       ws <- leaves next
       unless (length ws == length regs) $
-        failN "the next state of a mealy machine does not match its initial value"
+        failAt StNormalize "the next state of a mealy machine does not match its initial value"
       zipWithM_ feedBack regs ws
       pure o
-    _ -> failN "the step function of a mealy machine does not return a (state, output) pair"
+    _ ->
+      failAt StNormalize
+        "the step function of a mealy machine does not return a (state, output) pair"
   where
     feedBack (rid, initial) (w, t)
       | valueTy initial == t = emitAt rid "state" t (RReg initial w)
-      | otherwise = failN "the next state of a mealy machine does not match its initial value"
+      | otherwise =
+          failAt StNormalize "the next state of a mealy machine does not match its initial value"
 
 -- | A fresh wire for every scalar component of a mealy machine's initial
 -- state, with the component it starts from, in order.
@@ -690,7 +690,7 @@ buildModule prog = do
 -- inputs and read its outputs.
 elaborate :: TopEntity -> Int -> M [(Port, W)]
 elaborate top topId = inContext ("in top entity " <> topName top) $ do
-  when (null (topOutputs top)) $ failN "the top entity has no outputs"
+  when (null (topOutputs top)) $ failAt StNormalize "the top entity has no outputs"
   f <- global topId
   args <- zipWithM input [0 ..] (topInputs top)
   result <- foldM apply f args
@@ -699,17 +699,20 @@ elaborate top topId = inContext ("in top entity " <> topName top) $ do
   where
     input i port
       | isScalar (portTy port) = pure (SAtom (WVar i) (portTy port))
-      | otherwise = failN ("input port " <> portName port <> " is not scalar")
+      | otherwise = failAt StNormalize ("input port " <> portName port <> " is not scalar")
     output port = \case
       SAtom w t | t == portTy port -> pure (port, w)
-      _ -> failN ("output port " <> portName port <> " is not driven by a " <> showT (portTy port))
+      _ ->
+        failAt StNormalize
+          ("output port " <> portName port <> " is not driven by a " <> showT (portTy port))
 
 -- | Split a result along the right-nested product spine of @n@ outputs.
 spine :: Int -> SVal -> M [SVal]
 spine n v
   | n <= 1 = pure [v]
   | STuple _ [o, rest] <- v = (o :) <$> spine (n - 1) rest
-  | otherwise = failN ("the top entity's result does not have " <> showT n <> " outputs")
+  | otherwise =
+      failAt StNormalize ("the top entity's result does not have " <> showT n <> " outputs")
 
 operands :: RRhs -> [W]
 operands = \case

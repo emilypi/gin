@@ -63,15 +63,14 @@ import Data.Text qualified as Text
 import Gin.Backend.Types (Backend (..), Target (..))
 import Gin.Backend.Verilog.Testbench
   ( Dialect (..)
-  , commaSeparated
   , headerComments
   , indent
   , literal
   , renderTestbench
-  , showNat
   , sizedHex
   , typeRange
   )
+import Gin.Core.Utils (punctuate, showT)
 import Gin.Netlist.Types
 import Numeric.Natural (Natural)
 
@@ -93,7 +92,7 @@ renderDesign dialect m =
   Text.unlines $
     headerComments m
       <> ["module " <> unIdent (modName m) <> " ("]
-      <> concat (zipWith suppressIf portIdents (commaSeparated (fmap indent portLines)))
+      <> concat (zipWith suppressIf portIdents (punctuate "," (fmap indent portLines)))
       <> [");"]
       <> section (concatMap declaration (modDecls m))
       <> section (concatMap statement (modDecls m))
@@ -200,11 +199,11 @@ expression nets = \case
   HShl k o -> operand o <> " << " <> amount k
   HLshr k o -> operand o <> " >> " <> amount k
   HSlice hi lo o -> case o of
-    ORef i -> unIdent i <> "[" <> showNat hi <> ":" <> showNat lo <> "]"
+    ORef i -> unIdent i <> "[" <> showT hi <> ":" <> showT lo <> "]"
     OConst l -> sizedHex (minus (hi + 1) lo) (litBits l `shiftR` fromIntegral lo)
   HConcat a b -> "{" <> operand a <> ", " <> operand b <> "}"
   HZext w o -> case operandWidth o of
-    Just n | w > n -> "{{" <> showNat (w - n) <> "{1'b0}}, " <> operand o <> "}"
+    Just n | w > n -> "{{" <> showT (w - n) <> "{1'b0}}, " <> operand o <> "}"
     _ -> operand o
   HBitToVec o -> operand o
   where
@@ -282,16 +281,3 @@ notFullyRead m =
       _ | next >= w -> True
       [] -> False
       (lo, hi) : rest -> lo <= next && cover w (max next (hi + 1)) rest
-
-exprOperands :: HExpr -> [Operand]
-exprOperands = \case
-  HOperand o -> [o]
-  HUn _ o -> [o]
-  HBin _ a b -> [a, b]
-  HMux c t e -> [c, t, e]
-  HShl _ o -> [o]
-  HLshr _ o -> [o]
-  HSlice _ _ o -> [o]
-  HConcat a b -> [a, b]
-  HZext _ o -> [o]
-  HBitToVec o -> [o]

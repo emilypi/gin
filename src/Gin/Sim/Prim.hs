@@ -11,7 +11,6 @@ module Gin.Sim.Prim
 import Data.Bits (xor, (.&.), (.|.))
 import Data.List (find)
 import Data.Text (Text)
-import Data.Text qualified as Text
 import Gin.Core.Syntax
   ( PrimOp (..)
   , Value (..)
@@ -23,9 +22,8 @@ import Gin.Core.Syntax
   , validValue
   , valueTy
   )
-import Gin.Error (GinError, Stage (StSim), ginError)
-import Gin.Core.Utils (showT)
-
+import Gin.Core.Utils (failAt, showT)
+import Gin.Error (GinError, Stage (StSim))
 
 -- | Apply a combinational prim to exactly 'primArity' argument values.
 -- Errors ('StSim') on a signal prim, wrong arity or ill-typed arguments.
@@ -45,7 +43,7 @@ evalPrim op args
       failure ("argument " <> showT bad <> " is not a valid value")
   | otherwise = either failure Right (apply op args)
   where
-    failure msg = Left (ginError StSim (primName op <> " " <> msg))
+    failure msg = failAt StSim (primName op <> " " <> msg)
 
 -- | The primitive table. 'Left' carries the reason an application is
 -- ill-typed; arity, validity and signal prims are handled by 'evalPrim'.

@@ -20,6 +20,7 @@ import Gin.Examples
 import Gin.Limits (maxNormalBinds)
 import Gin.Normalize (checkNormal, normalize)
 import Gin.Sim (simulateCore, simulateNormal)
+import Gin.TestUtil (tshow)
 import System.Timeout (timeout)
 import Test.Hspec
 
@@ -268,7 +269,7 @@ chainProgramOf ty n base step =
   program "chain" [Port "x" ty] [Port "y" ty] (top : Def (g 0) fTy base : defs)
   where
     g :: Int -> Name
-    g i = Name ("Chain.g" <> Text.pack (show i))
+    g i = Name ("Chain.g" <> tshow i)
     fTy = TFun ty ty
     level i = Def (g (i + 1)) fTy (ELam [("x", ty)] (step (EGlobal (g i)) (var "x")))
     defs = fmap level [0 .. n - 1]
@@ -346,7 +347,7 @@ doubledTy k = foldr (\_ t -> TProd [t, t]) TBool [1 .. k]
 doublings :: Text -> Expr -> Int -> [Bind]
 doublings name base k = [Bind (n i) (doubledTy i) (rhs i) | i <- [0 .. k]]
   where
-    n i = Name (name <> Text.pack (show i))
+    n i = Name (name <> tshow i)
     rhs i = if i == 0 then base else ETuple [EVar (n (i - 1)), EVar (n (i - 1))]
 
 -- | Component 0, @k@ times over.
@@ -361,7 +362,7 @@ sharedTuple :: Int -> Program
 sharedTuple k =
   program "shared" [Port "b" TBool] [Port "o" TBool] [mkTop [("b", TBool)] TBool body]
   where
-    tk = var ("t" <> Text.pack (show k))
+    tk = var ("t" <> tshow k)
     f = ELam [("c", TBool)] (ELet False (doublings "t" (var "c") k) (firsts k tk))
     body = lift [TBool] TBool f [var "b"]
 
@@ -375,7 +376,7 @@ sharedIf :: Expr -> Int -> Program
 sharedIf base k =
   program "sharedif" [Port "b" TBool] [Port "o" TBool] [mkTop [("b", TBool)] TBool body]
   where
-    final name = var (name <> Text.pack (show k))
+    final name = var (name <> tshow k)
     binds = doublings "t" (var "c") k <> doublings "u" base k
     chosen = EIf (var "c") (final "t") (final "u")
     f = ELam [("c", TBool)] (ELet False binds (firsts k chosen))
@@ -389,7 +390,7 @@ longNames :: Int -> Int -> Program
 longNames len k = withBody "long" (ELet False (bind1 : fmap bindI [2 .. k]) applied)
   where
     prefix = Text.replicate len "p"
-    f i = Name (prefix <> "f" <> Text.pack (show i))
+    f i = Name (prefix <> "f" <> tshow i)
     x = Name (prefix <> "x")
     fTy = TFun (bv 8) (bv 8)
     bind1 = Bind (f (1 :: Int)) fTy (ELam [(x, bv 8)] (EVar x))
@@ -418,7 +419,7 @@ notChain k =
     }
   where
     b :: Int -> Name
-    b i = Name ("b" <> Text.pack (show i))
+    b i = Name ("b" <> tshow i)
     prev i = if i == 0 then "en" else b (i - 1)
 
 ----------------------------------------------------------------------
@@ -462,7 +463,7 @@ canonical m =
           foldl' visit (Map.insert n (Map.size seen) seen) [x | AVar x <- rhsAtoms r]
       | otherwise = seen
     rename n = maybe n label (Map.lookup n labels)
-    label k = Name ("#" <> Text.justifyRight 6 '0' (Text.pack (show (k :: Int))))
+    label k = Name ("#" <> Text.justifyRight 6 '0' (tshow (k :: Int)))
     renameAtom = \case
       AVar n -> AVar (rename n)
       a -> a
@@ -797,9 +798,9 @@ spec = do
 
     describe "limits" $ do
       it "[norm-limit] stops exponential inlining once it exceeds maxNormalBinds" $
-        shouldTripLimit (nestedChain 40) (Text.pack (show maxNormalBinds))
+        shouldTripLimit (nestedChain 40) (tshow maxNormalBinds)
       it "[norm-limit] counts binds that duplicate earlier ones while inlining" $
-        shouldTripLimit (sharedChain 60) (Text.pack (show maxNormalBinds))
+        shouldTripLimit (sharedChain 60) (tshow maxNormalBinds)
       it "[norm-limit] bounds exponential inlining that emits no binds" $
         shouldTripLimit (identityChain 60) "steps"
       it "[norm-limit] charges work on wide tuples to the evaluation budget" $
@@ -809,7 +810,7 @@ spec = do
         length (nmBinds m) `shouldBe` maxNormalBinds
         checkNormal m `shouldBe` Right ()
       it "[norm-limit] rejects a program with one level more" $
-        shouldTripLimit (nestedChain 17) (Text.pack (show maxNormalBinds))
+        shouldTripLimit (nestedChain 17) (tshow maxNormalBinds)
       it "[norm-limit] charges evaluation steps at a cost independent of name length" $
         shouldTripLimit (longNames 100000 24) "steps"
       it "[norm-limit] lowers a deeply nested mealy state in time linear in its depth" $ do

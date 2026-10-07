@@ -4,15 +4,15 @@ Circuits are written and proved in Lean; the exporter turns them into the
 core IR and test vectors that the Haskell side of gin compiles to HDL
 (formats in `docs/file-formats.md`, semantics in `docs/semantics.md`).
 
-| Path                     | Contents                                                        |
-| ------------------------ | --------------------------------------------------------------- |
-| `Gin/Signal.lean`        | The DSL: `Signal`, `register`, `mealy`, `lift`…                 |
-| `Gin/Examples/`          | `counter`, `detector`, `mac` with refinement theorems           |
-| `Gin/Export/`            | Translator, certificate policy, vectors, export table, CLI      |
-| `GinCheckExport.lean`    | Root of `gin-check-export`, the checks; links no design         |
-| `GinExport.lean`         | Root of `gin-export`, which links the designs                   |
-| `GinTest/`               | Tests, run by `lake build`                                      |
-| `GinReject/`             | Designs the exporter must refuse, not built by default          |
+| Path                     | Contents                                                          |
+| ------------------------ | ----------------------------------------------------------------- |
+| `Gin/Signal.lean`        | The DSL: `Signal`, `register`, `mealy`, `lift`…                   |
+| `Gin/Examples/`          | `counter`, `detector`, `mac` with refinement theorems             |
+| `Gin/Export/`            | Translator, `Certificate.lean` policy, vectors, export table, CLI |
+| `GinCheckExport.lean`    | Root of `gin-check-export`, the checks; links no design           |
+| `GinExport.lean`         | Root of `gin-export`, which links the designs                     |
+| `GinTest/`               | Tests, run by `lake build`                                        |
+| `GinReject/`             | Designs the exporter must refuse, not built by default            |
 
 ## Workflow
 
@@ -44,22 +44,24 @@ them together with the Lean change that produced them.
 
 ## Trust
 
-What a reviewer reads in a certificate is what the kernel checked:
+What you read in the trace (`Certificate` in the code, `"certificate"` in
+the JSON) is what the kernel checked:
 
 - The statement and every definition it depends on (`specDefinitions`)
   are rendered by the exporter's own printer (`Gin/Export/Print.lean`),
   which prints fully qualified names and explicit applications and never
   consults notation, delaborators or unexpanders declared by a design.
-  Every certificate field is printable ASCII, and the export is refused
+  Every trace field is printable ASCII, and the export is refused
   otherwise: the syntax is written `forall`, `->` and `{{x : α}}`, a name
   component that is not a plain identifier is written `<<…>>` (Lean's
   `«…»`) with `\u{XXXX}` escapes, and so is every character of a string
   literal outside printable ASCII, so that no confusable letter, invisible
-  character or bidirectional override reaches a reviewer. Names are never
-  printed alike: names with macro scopes or numeric components (which would
-  read as projections or numerals), inaccessible names (`✝`) and duplicate
-  definition names are refused, and a constant Lean would read as an alias
-  (a root `true`) is printed `_root_.true` (`GinTest/Names.lean`).
+  character or bidirectional override reaches the text you review. Names
+  are never printed alike: names with macro scopes or numeric components
+  (which would read as projections or numerals), inaccessible names (`✝`)
+  and duplicate definition names are refused, and a constant Lean would
+  read as an alias (a root `true`) is printed `_root_.true`
+  (`GinTest/Names.lean`).
 - The export script replays through the kernel, with `leanchecker`,
   exactly the modules the export loads outside the Lean toolchain
   and the modules `gin-export` links
@@ -76,7 +78,7 @@ What a reviewer reads in a certificate is what the kernel checked:
 - The checks run in `gin-check-export`, which links only the exporter
   and the DSL, no design, and imports the environment without its
   extensions, so no code of a design runs while the modules, the axioms
-  and the theorem shape are checked and the certificate is rendered. It
+  and the theorem shape are checked and the trace is rendered. It
   refuses any project module that registers an IO initializer
   (`initialize`, `builtin_initialize`, `@[init]`), among the modules the
   circuits load and those `gin-export` links. It also refuses every
@@ -89,7 +91,7 @@ What a reviewer reads in a certificate is what the kernel checked:
   `Gin/Export/Compiled.lean`) are exempt; they are part of the trusted
   base.
 - Vectors come from the compiled code of a design, the IR and the
-  certificate from its definitions. Both tools refuse a design whose
+  trace from its definitions. Both tools refuse a design whose
   compiled code may differ from its definitions: a project constant it
   runs that is `@[implemented_by]` or `@[extern]`, or a project `@[csimp]`
   theorem that rewrites any constant it may reach, core library included
@@ -107,22 +109,22 @@ What a reviewer reads in a certificate is what the kernel checked:
   `gin-check-export` first and never starts `gin-export` when it fails
   (`GinReject/Hooked.lean`). `gin-export` repeats the checks, but they
   cannot stop code that has already run: run it only through the script.
-- The checker's certificate is the authority. `gin-check-export
-  --certificates DIR` writes the certificate it rendered for each circuit,
+- The checker's trace is the authority. `gin-check-export
+  --certificates DIR` writes the trace it rendered for each circuit,
   without linking or running any design, and the export script writes
   gin-export's output to a temporary directory and refuses it unless every
-  `.gin.json` file ends, byte for byte, in that certificate and has no key
-  twice in one object, so it holds no second certificate. Only then is it
+  `.gin.json` file ends, byte for byte, in that trace and has no key
+  twice in one object, so it holds no second trace. Only then is it
   copied into `examples/` (`GinReject/ForgedExport.lean`). Linked code
   that escapes the checks can still corrupt the IR or the vectors, which
   gin checks against each other, or write any file the user can write.
   Export designs you did not write only in a sandbox (a container or VM
   without your credentials and without write access to anything but its
-  output directory), and trust the certificate the checker computed, not
+  output directory), and trust the trace the checker computed, not
   the process that wrote the file.
 
-The Lake configuration (`lean/lakefile.toml`) is trusted, like the
-toolchain: `gin-check-export` checks the import closures of what
+I treat the Lake configuration (`lean/lakefile.toml`) as trusted, like
+the toolchain: `gin-check-export` checks the import closures of what
 `gin-export` links, and a link input declared in the lakefile
 (`moreLinkArgs`, `moreLinkObjs`, an `extern_lib`, a required package)
 would add native code it does not see. The export script therefore

@@ -5,7 +5,7 @@ exporter:
 
 | File                  | Contents                                    | Format tag      |
 | --------------------- | ------------------------------------------- | --------------- |
-| `<name>.gin.json`     | The core IR program and its certificate     | `gin-ir/1`      |
+| `<name>.gin.json`     | The core IR program and its trace           | `gin-ir/1`      |
 | `<name>.vectors.json` | Cycle-by-cycle test vectors from Lean       | `gin-vectors/1` |
 
 Both are UTF-8 JSON. The Haskell types they decode to live in
@@ -80,7 +80,8 @@ shape required of the top-level definition is documented on
 
 ### Certificate
 
-The certificate records what was proved, for review:
+The trace (`Certificate` in the code, `"certificate"` in the JSON) records
+what was proved, for review:
 
 - `theorem` — the fully qualified name of the refinement theorem.
 - `statement` — its type, rendered by the exporter's fixed printer:
@@ -90,15 +91,16 @@ The certificate records what was proved, for review:
 - `specDefinitions` — every definition the statement depends on
   transitively, other than the implementation, gin's signal DSL and
   Lean's core library, each rendered by the same printer as
-  `name : type := body`. A reviewer judges the specification from these,
-  not from its name.
+  `name : type := body`. You judge the specification from these, not
+  from its name: this is where you answer "does the specification say
+  what I want?".
 - `axioms`, `implAxioms` — the axioms the proof and the implementation
   depend on.
 
 gin derives the specification's identity from these fields
 (`Gin.Certificate.certificateSpecHash`, SHA-256 over the theorem name,
 the statement and the definitions); `--spec-hash` checks it against a
-value a reviewer pinned. The exporter emits `specDefinitions` always;
+value you pinned. The exporter emits `specDefinitions` always;
 the decoder treats a missing field as an empty list.
 
 ### Decoding rules

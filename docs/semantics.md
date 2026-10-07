@@ -3,7 +3,9 @@
 Every representation gin handles — the Lean model, the core IR, the
 normal form, the netlist and the generated HDL — must agree with the
 definitions on this page. The reference simulators (`Gin.Sim`) are a
-direct transcription of them.
+direct transcription of them. These definitions are the operational
+semantics we rely on for the README's third question: does the generated
+hardware still implement the functionality described by Lean?
 
 ## Cycles
 

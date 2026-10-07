@@ -1,5 +1,10 @@
 # gin
 
+I provide the Gin, Lean 4 provides the juice. That's why it's called Lean!
+
+
+Gin is a toy Lean-aware, typed VHDL language for interacting with Verilog specs adn deriving interesting and hopefully useful circuits a spec.
+
 ## What gin is
 
 gin compiles synchronous circuits written in Lean 4 to Verilog-2005,

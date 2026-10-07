@@ -7,13 +7,13 @@ Gin is a toy Lean-aware, typed VHDL language for interacting with Verilog specs 
 ## What it does
 
 `gin` compiles (synchronous) circuits written in Lean 4 to your choice of Verilog-2005,
-SystemVerilog and VHDL-2008, a la [Clash](https://clash-lang.org/): a circuit is an
+SystemVerilog and VHDL-2008, à la [Clash](https://clash-lang.org/): a circuit is an
 ordinary Lean function of Clash-style signals. The type of signals in `Clash`, `Signal dom α` (i.e. the stream of values a
 wire carries at each clock cycle), can be built from `register`, `mealy`, `lift`
 and combinatory functions on `Bool`, `BitVec n` and pairs.
 
 Every circuit comes with a theorem, proved in Lean and checked
-by the kernel, providing an attestation with respect to the fidelity between the  implementation and specification at every cycle and for every input stream:
+by the kernel, providing an attestation with respect to the fidelity between the implementation and specification at every cycle and for every input stream:
 
 i.e.
 
@@ -30,7 +30,7 @@ theorem counter_correct : ∀ en t, counter en t = spec en t := by …
 The Lean exporter translates the implementation to a small typed core IR
 and records some values in a trace: the theorem's name, its statement and the axioms
 the proof depends upon. It also runs the compiled Lean definition on seeded
-inputs to produce test vectors. The actaul compiler, `gin`, is written in Haskell and checks the trace against an axiom policy, normalizes the IR to a first-order
+inputs to produce test vectors. The actual compiler, `gin`, is written in Haskell and checks the trace against an axiom policy, normalizes the IR to a first-order
 netlist, renders HDL with the theorem statement in every file header, and
 generates self-checking testbenches that replay the Lean vectors.
 
@@ -44,11 +44,11 @@ specification in trusted environments (i.e. Lean and Verilog). The contributor n
    theorem statement and every definition it depends on
    (`specDefinitions`), printed by the exporter's printer into every
    generated HDL file, together with their hash. I can review them once, then pin
-   the hash with `--spec-hash` so that any later change fails a hash consistency check
+   the hash with `--spec-hash` so that any later change fails a hash consistency check.
 2. Does the proof check? The Lean kernel decides this. The exporter refuses
    proofs that rely on `sorry`, `native_decide`, `bv_decide` or any axiom
-   beyond Lean's standard three, and `gin` checks the same policy again. Now the,  big TODO here is to expand the set of admissible axioms to be user-defined as   well, so that any Lean 4 code may be trusted as long as there are no unsafe assertions!
-3. Does the generated hardware still the functionality described by Lean?
+   beyond Lean's standard three, and `gin` checks the same policy again. Now, the big TODO here is to expand the set of admissible axioms to be user-defined as well, so that any Lean 4 code may be trusted as long as there are no unsafe assertions!
+3. Does the generated hardware still implement the functionality described by Lean?
    We validate the translation: the Lean model along with `gin`'s NF spec and the HDL simulators must produce identical outputs, cycle
    for cycle, on the same vectors, and so must the core IR simulator
    unless its evaluation budget makes it report an inconclusive `SKIP`.
@@ -63,9 +63,9 @@ kernel replay and the exporter's checks, and the exporter links the
 design.
 
 Sandboxes protect your machine but not the results of compilation: code that runs at
-build time can do anything and claim anything, but the certificate, IR and vectors
+build time can do anything and claim anything, the certificate, IR and vectors
 included, and re-checking the certificate elsewhere would not secure the
-IR and vectors. So, for a design you did not write, a `PASS` value is evidence about the HDL only if it also incluedes the requisite Lean sources (i.e. the spec only make sense if it's proof-preserving, and in a sense, what we're trying to build here are proof-carrying circuits). 
+IR and vectors. So, for a design you did not write, a `PASS` value is evidence about the HDL only if it also includes the requisite Lean sources (i.e. the spec only makes sense if it's proof-preserving, and in a sense, what we're trying to build here are proof-carrying circuits). 
 
 I provide an export script via (`lean/Gin/Export/`,
 `lean/GinExport.lean`, `lean/GinCheckExport.lean`, including each entry's

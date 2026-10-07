@@ -9,11 +9,15 @@
 -- mismatches), and apply one rising edge. It prints one
 -- 'Gin.Backend.Types.mismatchMarker' line per differing port and finally
 -- exactly one 'Gin.Backend.Types.passMarker' or
--- 'Gin.Backend.Types.failMarker' line, then calls @$finish@.
+-- 'Gin.Backend.Types.failMarker' line, then calls @$finish@. That
+-- verdict is how a simulator tells you, cycle for cycle on the Lean
+-- vectors, whether the generated hardware still implements what Lean
+-- describes.
 --
--- Expected values appear only as text inside @$display@ format strings,
--- computed here; no literal is ever passed as a @$display@ argument
--- (Icarus Verilog 13 aborts on literal arguments of 4090 bits or more).
+-- I compute expected values here and print them only as text inside
+-- @$display@ format strings: no literal is ever passed as a @$display@
+-- argument (Icarus Verilog 13 aborts on literal arguments of 4090 bits or
+-- more).
 -- Straight-line code stays fast at the largest vector payload gin
 -- accepts ('Gin.Limits.maxVectorBits'): 100000 one-bit cycles compile
 -- and run in a few seconds under Icarus Verilog.

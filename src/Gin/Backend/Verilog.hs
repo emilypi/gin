@@ -28,7 +28,7 @@
 --   (a net assigned a literal, @b & 0@, @a ^ a@, a folded comparison
 --   widened and negated, and so on), so a net can supply the zero or the
 --   all ones as well. Rather than predict which nets it proves constant,
---   every comparison still printed as one is wrapped in
+--   I wrap every comparison still printed as one in
 --   @verilator lint_off UNSIGNED@ and @lint_off CMPCONST@ pragmas, closed
 --   by the matching @lint_on@ right after its @assign@
 --   ('comparisonPragmas').
@@ -41,9 +41,9 @@
 -- out. Exactly those declarations are wrapped in
 -- @verilator lint_off UNUSEDSIGNAL@ / @lint_on@ pragmas. Every
 -- suppression covers one declaration or one statement; nothing is
--- suppressed file-wide. That constants propagated into any operator
--- other than a comparison raise no warning is measured, not derived: the
--- test suite lints nets holding 0, 1 and all ones fed into every
+-- suppressed file-wide. I measured, rather than derived, that constants
+-- propagated into any operator other than a comparison raise no warning:
+-- the test suite lints nets holding 0, 1 and all ones fed into every
 -- operator at widths 1, 8 and 4096.
 module Gin.Backend.Verilog
   ( verilog

@@ -1,4 +1,7 @@
--- | VHDL-2008 backend.
+-- | VHDL-2008 backend. Like the Verilog and SystemVerilog backends, it
+-- exists so that a simulator can answer the README's third question:
+-- does the generated hardware still implement the functionality
+-- described by Lean?
 --
 -- A netlist becomes one design file holding one entity named after the
 -- module, with ports in the order clock, reset, inputs, outputs
@@ -41,8 +44,8 @@
 -- The design references no predeclared name outside
 -- 'Gin.Netlist.Types.reservedWords', so no net can shadow one, and the only
 -- identifiers it introduces are @gin_rtl@ and the @gin_v\<k\>@ variables,
--- whose prefix no net may use. Register signals deliberately have no
--- initial value: the testbench must see the reset load it. (Until the first
+-- whose prefix no net may use. I give register signals no initial value
+-- on purpose: the testbench must see the reset load it. (Until the first
 -- rising edge they are @'U'@, so nvc may print @numeric_std@ metavalue
 -- warnings at time 0 on standard error; the protocol never reads standard
 -- error.)
@@ -234,11 +237,12 @@ variableBudget = 2 ^ (23 :: Int)
 -- more for the rest. When the needs add up to at most @total@, every
 -- process gets its need.
 --
--- An equal share for every process would leave a process holding many wide
--- nets a short window even when the other processes need little: measured
--- with the run command, 2017 nets of 4096 bits next to a chain of 63000
--- 8-bit nets ran 2000 cycles in 63 s with every net in a variable and in
--- 788 s with equal shares, reading most wide nets through their signals.
+-- I share by need rather than equally: an equal share for every process
+-- would leave a process holding many wide nets a short window even when the
+-- other processes need little. Measured with the run command, 2017 nets
+-- of 4096 bits next to a chain of 63000 8-bit nets ran 2000 cycles in 63 s
+-- with every net in a variable and in 788 s with equal shares, reading most
+-- wide nets through their signals.
 shareByNeed :: Int -> [Int] -> [Int]
 shareByNeed total needs = IntMap.elems (snd (foldl' give (total, IntMap.empty) ordered))
   where

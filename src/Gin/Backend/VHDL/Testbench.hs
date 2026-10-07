@@ -4,9 +4,9 @@
 -- The testbench is table-driven: a record type with one field per input and
 -- output port, a constant array of those records holding every cycle, and a
 -- single loop that follows the testbench protocol of @docs/semantics.md@.
--- Straight-line stimulus is avoided on purpose: nvc 1.23 cannot elaborate
--- it beyond roughly 2000 cycles, while a 25000-row table runs in well under
--- a second.
+-- I avoid straight-line stimulus on purpose: nvc 1.23 cannot elaborate it
+-- past roughly 2000 cycles, while a 25000-row table runs in well under a
+-- second.
 --
 -- Protocol lines are written to standard output with @std.textio@
 -- (@write@, then @writeline(output, …)@). They are never carried by

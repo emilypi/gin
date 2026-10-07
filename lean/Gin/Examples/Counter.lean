@@ -5,6 +5,10 @@ import Gin.Signal
 
 An 8-bit counter that increments on every cycle its enable input is high.
 The output during cycle `t` is the count before cycle `t`'s increment.
+
+This is the README's running example: to answer "does the specification say
+what I want?", you review `spec` and the statement of `counter_correct`, not
+the body of `counter`.
 -/
 
 open Gin

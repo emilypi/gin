@@ -4,12 +4,13 @@
 A shallow embedding of synchronous circuits. A `Signal dom α` is the stream
 of values a wire carries at clock cycles `0, 1, 2, …` of the clock domain
 `dom`; circuits are ordinary Lean functions between signals, built from the
-combinators below. The definitions transcribe `docs/semantics.md` directly,
-so a theorem about a circuit is a theorem about the cycle semantics every
-later stage of gin must preserve.
+combinators below. I transcribe `docs/semantics.md` directly here, so a
+theorem about a circuit is a theorem about the cycle semantics every later
+stage of gin must preserve.
 
 Only the combinators in this file, plus combinational functions on `Bool`,
 `BitVec n` and products, are understood by the exporter (`Gin.Export`).
+The spec hash does not cover this file: a change to it needs re-review.
 -/
 
 namespace Gin
@@ -28,7 +29,7 @@ def System : Domain := ⟨"System", 10000⟩
 
 /-- The values a wire in domain `dom` carries at cycles `0, 1, 2, …`.
 
-This is a plain definition rather than an abbreviation on purpose: the
+I made this a plain definition rather than an abbreviation on purpose: the
 exporter recognises it by name and must never see it unfolded to a function
 type. -/
 def Signal (_dom : Domain) (α : Type) := Nat → α

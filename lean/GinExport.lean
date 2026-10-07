@@ -1,8 +1,8 @@
 import Gin.Export.Main
 import Gin.Export.Table
 
-/-! Root of `gin-export`. It links every design (`Gin.Export.Table`); run
-`gin-check-export` first (`scripts/export-examples.sh`). -/
+/-! Root of `gin-export`. It links every design (`Gin.Export.Table`), so
+run `gin-check-export` first, as `scripts/export-examples.sh` does. -/
 
 /-- Entry point of `lake exe gin-export`. -/
 unsafe def main (args : List String) : IO UInt32 :=

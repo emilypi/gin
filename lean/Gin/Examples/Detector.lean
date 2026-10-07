@@ -4,7 +4,7 @@ import Gin.Signal
 # "101" sequence detector
 
 A Mealy machine that raises its output in the cycle that completes the bit
-pattern `1 0 1` on its input. Matches may overlap: `1 0 1 0 1` hits twice.
+pattern `1 0 1` on its input. Matches may overlap: `1 0 1 0 1` hits twice!
 -/
 
 open Gin

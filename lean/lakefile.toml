@@ -43,7 +43,8 @@ root = "GinReject.HookedExport"
 supportInterpreter = true
 
 # Reject fixture, not a default target: gin-export followed by code that
-# changes the certificate it wrote (GinReject/ForgedExport.lean).
+# changes the trace it wrote (GinReject/ForgedExport.lean). The trace is
+# `Certificate` in the code and "certificate" in the JSON.
 [[lean_exe]]
 name = "gin-export-forged"
 root = "GinReject.ForgedExport"

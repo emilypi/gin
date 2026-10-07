@@ -9,8 +9,9 @@ import Gin.Export.Print
 `translateDef` turns the elaborated body of a Lean definition into a core IR
 definition (`docs/file-formats.md`). The translation is syntactic and
 total on a small fragment; anything outside it is an error that names the
-offending constant or term. It never guesses: a silent mistranslation would
-make the refinement theorem say nothing about the generated hardware.
+offending constant or term. It never guesses: I would rather it refuse a term
+than let a silent mistranslation make the refinement theorem say nothing
+about the generated hardware.
 
 ## Supported fragment
 
@@ -78,9 +79,10 @@ structure TrState where
 /-- The translation monad. -/
 abbrev TrM := ReaderT TrContext (StateRefT TrState MetaM)
 
-/-- The IR name of the exported definition `n`: its name as the certificate
-prints it (`Print.name`), which no other name shares. Names with macro
-scopes or numeric components and inaccessible names are refused. -/
+/-- The IR name of the exported definition `n`: its name as `Print.name`
+prints it in the trace (`Certificate` in the code, `"certificate"` in the
+JSON), which no other name shares. Names with macro scopes or numeric
+components and inaccessible names are refused. -/
 def irName (n : Name) : MetaM String :=
   match Print.name n with
   | .ok s => pure s

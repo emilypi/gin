@@ -7,7 +7,9 @@ import Gin.Export.Ir
 Vectors are computed by running the Lean definition of a circuit on
 pseudo-random inputs from a fixed seed. They are the reference every later
 stage of gin is checked against, so they come from the definition the
-theorem is about, never from the exported IR.
+theorem is about, never from the exported IR. They are how we validate the
+translation: they answer "does the generated hardware still implement the
+functionality described by Lean?"
 -/
 
 namespace Gin.Export
@@ -177,8 +179,8 @@ def VectorSource.of3 {dom : Domain} {α β γ ο : Type} [PortValue α] [Inhabit
 
 Uniform inputs rarely reach the corners of the examples: an 8-bit counter
 with a fair enable needs about 512 cycles to wrap, and small products keep an
-accumulator far from overflow. These generators bias the inputs towards that
-behaviour while staying reproducible from the seed. -/
+accumulator far from overflow. I bias the inputs towards that behaviour with
+these generators, which stay reproducible from the seed. -/
 
 /-- Enable inputs in runs: a high run of 1 to 512 cycles, then a low run of
 1 to 8 cycles, repeated. Long high runs wrap an 8-bit counter. -/

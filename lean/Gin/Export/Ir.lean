@@ -228,7 +228,8 @@ structure SpecDef where
   body : String
   deriving BEq, Repr, Inhabited
 
-/-- Evidence that the implementation was proven against a specification. -/
+/-- The trace (`Certificate` in the code, `"certificate"` in the JSON):
+evidence that the implementation was proven against a specification. -/
 structure Certificate where
   /-- Fully qualified name of the refinement theorem. -/
   theorem_ : String
@@ -259,7 +260,7 @@ structure Program where
   top : Top
   /-- Every definition the top definition refers to, and itself. -/
   defs : List Def
-  /-- Proof certificate of the top definition. -/
+  /-- Trace of the top definition. -/
   certificate : Certificate
   deriving BEq, Repr, Inhabited
 

@@ -4,8 +4,8 @@ import Gin.Export.Program
 # Export entries
 
 The circuits the exporter knows about, as data: names, modules, port names
-and seeds, but no vector sources. Port names are given here explicitly
-rather than taken from Lean binder names: they are part of the generated
+and seeds, but no vector sources. I give port names here explicitly rather
+than take them from Lean binder names: they are part of the generated
 hardware interface. Constants are named, not referenced, so this module
 imports no design: `gin-check-export`, which checks the modules, the
 initializers, the axioms and the theorem shape of an export, links only

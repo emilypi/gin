@@ -66,7 +66,8 @@ partial def Expr.toDoc : Expr → JsonDoc
 /-- Encode a port. -/
 def Port.toDoc (p : Port) : JsonDoc := obj [("name", str p.name), ("type", p.type.toDoc)]
 
-/-- Encode a certificate. -/
+/-- Encode the trace (`Certificate` in the code,
+`"certificate"` in the JSON). -/
 def Certificate.toDoc (c : Certificate) : JsonDoc :=
   obj [
     ("theorem", str c.theorem_),
@@ -76,8 +77,8 @@ def Certificate.toDoc (c : Certificate) : JsonDoc :=
     ("specDefinitions", arr (c.specDefinitions.map fun d =>
       obj [("name", str d.name), ("body", str d.body)]))]
 
-/-- Encode a program file. Its last member is the certificate, so that the
-file ends in `certificateTail`. -/
+/-- Encode a program file. Its last member is the trace, so that the file
+ends in `certificateTail`. -/
 def Program.toDoc (p : Program) : JsonDoc :=
   obj [
     ("format", str irFormat),
@@ -103,8 +104,8 @@ def Vectors.toDoc (v : Vectors) : JsonDoc :=
       obj [("in", arr (c.inputs.map Value.toDoc)), ("out", arr (c.outputs.map Value.toDoc))]))]
 
 /-- Check a file of `bytes` bytes holding `doc` against the limits gin
-enforces on every file it reads (`docs/file-formats.md`, "Resource limits"),
-so that the exporter refuses a design instead of writing a file gin rejects.
+enforces on every file it reads (`docs/file-formats.md`, "Resource limits"):
+I'd rather the exporter refuse a design than write a file gin rejects.
 Widths, value ranges and the vector payload are checked where they arise. -/
 def checkLimits (doc : JsonDoc) (bytes : Nat) : Except String Unit := do
   if let some (path, n) := doc.numberAbove? maxJsonNumber then
@@ -121,8 +122,8 @@ def renderFile (doc : JsonDoc) : Except String String := do
   checkLimits doc text.utf8ByteSize
   return text
 
-/-- The last bytes of every program file with certificate `c` that
-`renderFile` writes: the certificate, the last member of the top-level
+/-- The last bytes of every program file with trace `c` that
+`renderFile` writes: the trace, the last member of the top-level
 object, laid out as `JsonDoc.render` lays it out there, and the closing
 brace. `gin-check-export --certificates`, which links no design, writes it
 for each circuit, and `scripts/export-examples.sh` refuses a `.gin.json`

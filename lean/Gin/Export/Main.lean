@@ -13,12 +13,15 @@ delaborator, unexpander or other code a module registers). It refuses
 project modules that register IO initializers or are named like toolchain
 modules, in the modules the named circuits load and in those `gin-export`
 links (its root module, `--exporter`), and then checks and renders every
-certificate; `collectAxioms` walks the proofs themselves instead of
-trusting axiom summaries stored by the modules. With `--certificates DIR`
-it writes each certificate as it must end the circuit's `.gin.json` file
-(`certificateTail`); the export script refuses a file from `gin-export`
-that does not end in exactly those bytes, so the checker's certificate,
-not the one `gin-export` wrote, is the authority.
+trace (`Certificate` in the code, `"certificate"` in the JSON);
+`collectAxioms` walks the proofs themselves instead of trusting axiom
+summaries stored by the modules. With `--certificates DIR` it writes each
+trace as it must end the circuit's `.gin.json` file (`certificateTail`);
+the export script refuses a file from `gin-export` that does not end in
+exactly those bytes, so the checker's trace, not the one `gin-export`
+wrote, is the authority. I split the export this way so that, for a design
+you did not write, the axiom check and the trace that `gin-export` must
+reproduce come from a process in which none of the design's code ran.
 
 `gin-export` links the designs, to compute vectors by running them. Their
 code runs when it starts, before any check (the initializers and closed
@@ -78,7 +81,7 @@ structure CliOptions where
   /-- Root module of the exporter whose linked modules are checked
   (`gin-check-export`). -/
   exporter : Name := `GinExport
-  /-- Where to write the certificate tail of each circuit
+  /-- Where to write the trace tail (`certificateTail`) of each circuit
   (`gin-check-export`). -/
   certificates : Option FilePath := none
 
@@ -114,7 +117,7 @@ def runMeta {α : Type} (env : Environment) (x : MetaM α) : IO α := do
   return a
 
 /-- Refuse an environment with a project module named like a toolchain
-module (it could hide definitions from the certificate), a project module
+module (it could hide definitions from the trace), a project module
 that registers IO initializers, or one outside the exporter that declares
 `unsafe`, `@[extern]` or `@[implemented_by]` code (`linkedCodeOverrides`),
 all of which may run when `gin-export` starts (`lean/README.md`, "Trust"). -/
@@ -182,7 +185,7 @@ loaded), refuse shadowed toolchain modules and IO initializers, refuse a
 circuit that is not a reject fixture but loads one, refuse a circuit whose
 compiled code may differ from its definitions (`checkCompiledCode`) or
 whose translation may run compiled code (`checkNoNativeReduction`), and
-check and render every certificate. Returns the data environment and the certificates. -/
+check and render every trace. Returns the data environment and the traces. -/
 def gate (entries : Array Entry) (linked : Array Name := #[]) :
     IO (Environment × Array Certificate) := do
   initSearchPath (← findSysroot)

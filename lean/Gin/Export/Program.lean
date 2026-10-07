@@ -10,8 +10,9 @@ import Gin.Export.Vectors
 
 An `Entry` says what to export for one circuit: its definitions, its
 refinement theorem, its port names and how to compute its vectors.
-`exportProgram` checks the certificate, translates the definitions and
-derives the top entity; `exportVectors` evaluates the circuit.
+`exportProgram` checks the trace (`Certificate` in the code, `"certificate"`
+in the JSON), translates the definitions and derives the top entity;
+`exportVectors` evaluates the circuit.
 -/
 
 open Lean Meta

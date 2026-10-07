@@ -33,6 +33,8 @@
 -- and an @if@ muxes each pair of tuples once, so a value whose components
 -- share tuples (@t1 = (t0, t0)@, @t2 = (t1, t1)@, ..) costs time linear in
 -- the number of tuples, not in the size of the value written out as a tree.
+-- I bound both budgets rather than trust a design you did not write to be
+-- small.
 module Gin.Normalize.Internal
   ( buildModule
   , primResultTy

@@ -1,9 +1,11 @@
--- | Reference simulators, used for translation validation.
+-- | Reference simulators, used for translation validation. They are how I
+-- answer the README's third question: does the generated hardware still
+-- implement the functionality described by Lean?
 --
--- Both simulators transcribe @docs/semantics.md@. They are written
--- independently of the normalizer so that agreement between them (and
--- with the Lean model and the HDL simulation) is evidence that the
--- compiler preserved the meaning of the program.
+-- Both simulators transcribe @docs/semantics.md@. I keep them independent
+-- of the normalizer so that agreement between them (and with the Lean
+-- model and the HDL simulation) is evidence that the compiler preserved
+-- the meaning of the program.
 --
 -- 'simulateCore' is an interpreter of the core IR. It first applies the
 -- top entity to its input signals, which builds the network of signals
@@ -163,7 +165,8 @@ budgetError = simError . (budgetPrefix <>)
 -- | Did 'simulateCore' stop because it exceeded one of its bounds
 -- (evaluation steps, network nodes, nesting depth)? Such a result is
 -- inconclusive: it says nothing about whether the program agrees with
--- its vectors.
+-- its vectors. I would rather report it as @SKIP@ ("Gin.Driver") than
+-- count it as a disagreement.
 isBudgetError :: GinError -> Bool
 isBudgetError e = errStage e == StSim && budgetPrefix `Text.isPrefixOf` errMessage e
 

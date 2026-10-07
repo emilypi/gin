@@ -1,4 +1,10 @@
--- | Certificate policy: which axioms a proof may depend on.
+-- | Axiom policy for the trace ('Certificate' in the code, @"certificate"@
+-- in the JSON): which axioms a proof may depend on.
+--
+-- Does the proof check? The Lean kernel decides this. The exporter refuses
+-- proofs that rely on any axiom beyond Lean's standard three, and @gin@
+-- checks that policy again here; @--allow-axiom@ can widen it, but never
+-- to an axiom in 'alwaysRejected' or one containing @._native.@.
 module Gin.Certificate
   ( CertPolicy (..)
   , defaultPolicy
@@ -23,10 +29,11 @@ import Gin.Core.Syntax (Certificate (..), SpecDef (..))
 import Gin.Error (GinError, Stage (..), ginError)
 import Gin.Hash (sha256Hex)
 
--- | Identity of the specification a certificate claims: SHA-256 (lowercase
--- hex) of 'specCanonicalBytes'. Axioms are not part of it. A reviewer pins
--- this value once the theorem and its definitions are approved; any later
--- change to the claim changes it.
+-- | Identity of the specification a trace claims: SHA-256 (lowercase
+-- hex) of 'specCanonicalBytes'. Axioms are not part of it. Does the
+-- specification say what I want? I review the theorem and its definitions
+-- once, then pin this value (@--spec-hash@); any later change to the claim
+-- changes it.
 certificateSpecHash :: Certificate -> Text
 certificateSpecHash = sha256Hex . specCanonicalBytes
 
@@ -41,7 +48,7 @@ specCanonicalBytes c =
   where
     field t = let b = Text.encodeUtf8 t in BS8.pack (show (BS.length b)) <> ":" <> b
 
--- | The axioms a certificate may name. A policy can only widen what is
+-- | The axioms a trace may name. A policy can only widen what is
 -- accepted up to 'alwaysRejected', which no policy admits.
 newtype CertPolicy = CertPolicy
   { allowedAxioms :: Set Text

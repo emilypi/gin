@@ -1,4 +1,4 @@
--- | Normalization: core IR to normal form ("Gin.Core.Normal").
+-- | Normalization: core IR to normal form (NF), defined in "Gin.Core.Normal".
 --
 -- = Supported fragment
 --
@@ -20,7 +20,8 @@
 --   * a loop through a branch of an @if@ that the input rows never take.
 --
 -- Translation validation does not cover such programs: they are not
--- compiled. On every program 'normalize' accepts, the two simulators
+-- compiled. I would rather refuse them than emit HDL with a combinational
+-- loop in it. On every program 'normalize' accepts, the two simulators
 -- agree.
 module Gin.Normalize
   ( normalize

@@ -1,21 +1,21 @@
 # gin
 
-I provide the Gin, Lean 4 provides the juice. That's why it's called Lean!
+I provide the Gin, Lean 4 provides the juice. That's why it's called Lean! Sippin on Gin and Juice while building circuits 🥴
 
+Gin is a toy Lean-aware, typed VHDL language for interacting with Verilog specs and deriving interesting, ideally *useful* circuit specs.
 
-Gin is a toy Lean-aware, typed VHDL language for interacting with Verilog specs adn deriving interesting and hopefully useful circuits a spec.
+## What it does
 
-## What gin is
+`gin` compiles (synchronous) circuits written in Lean 4 to your choice of Verilog-2005,
+SystemVerilog and VHDL-2008, a la [Clash](https://clash-lang.org/): a circuit is an
+ordinary Lean function of Clash-style signals. The type of signals in `Clash`, `Signal dom α` (i.e. the stream of values a
+wire carries at each clock cycle), can be built from `register`, `mealy`, `lift`
+and combinatory functions on `Bool`, `BitVec n` and pairs.
 
-gin compiles synchronous circuits written in Lean 4 to Verilog-2005,
-SystemVerilog and VHDL-2008, in the style of Clash: a circuit is an
-ordinary Lean function on signals (`Signal dom α`, the stream of values a
-wire carries at each clock cycle), built from `register`, `mealy`, `lift`
-and combinational functions on `Bool`, `BitVec n` and pairs.
+Every circuit comes with a theorem, proved in Lean and checked
+by the kernel, providing an attestation with respect to the fidelity between the  implementation and specification at every cycle and for every input stream:
 
-Every circuit comes with a refinement theorem, proved in Lean and checked
-by the kernel, stating that the implementation agrees with an independent
-specification at every cycle and for every input stream:
+i.e.
 
 ```lean
 def counter (en : Signal System Bool) : Signal System (BitVec 8) :=
@@ -28,54 +28,50 @@ theorem counter_correct : ∀ en t, counter en t = spec en t := by …
 ```
 
 The Lean exporter translates the implementation to a small typed core IR
-and records a certificate: the theorem's name, its statement and the axioms
-its proof depends on. It also runs the compiled Lean definition on seeded
-inputs to produce test vectors. gin, written in Haskell, checks the
-certificate against an axiom policy, normalizes the IR to a first-order
+and records some values in a trace: the theorem's name, its statement and the axioms
+the proof depends upon. It also runs the compiled Lean definition on seeded
+inputs to produce test vectors. The actaul compiler, `gin`, is written in Haskell and checks the trace against an axiom policy, normalizes the IR to a first-order
 netlist, renders HDL with the theorem statement in every file header, and
 generates self-checking testbenches that replay the Lean vectors.
 
 ## Why
 
-A circuit is only as trustworthy as the reason to believe it does what it
-should. gin moves that reason from the implementation to its
-specification. Whether the implementation was written by a hardware
-engineer, a contributor you have never met or a language model, a reviewer
-answers three small questions about the result, provided it was built
-from trusted tooling as described below:
+A circuit is only as trustworthy as the proof that it does what it
+should, whether it's upfront or post-hoc through validation. `gin` moves some of the guessing game from the implementation to its
+specification in trusted environments (i.e. Lean and Verilog). The contributor need not be trusted: I, as the reviewer, only need to answer questions about the result, provided it was built from a trusted tooling as described below:
 
-1. Does the specification say what I want? The certificate carries the
+1. Does the specification say what I want? The trace carries the
    theorem statement and every definition it depends on
-   (`specDefinitions`), printed by the exporter's fixed printer into every
-   generated HDL file, together with their hash. Review them once, then pin
-   the hash with `--spec-hash` so that any later change to the printed claim
-   fails.
-2. Does the proof check? The Lean kernel decides. The exporter refuses
+   (`specDefinitions`), printed by the exporter's printer into every
+   generated HDL file, together with their hash. I can review them once, then pin
+   the hash with `--spec-hash` so that any later change fails a hash consistency check
+2. Does the proof check? The Lean kernel decides this. The exporter refuses
    proofs that rely on `sorry`, `native_decide`, `bv_decide` or any axiom
-   beyond Lean's standard three, and gin checks the same policy again.
-3. Does the generated hardware still mean the proven Lean definition?
-   Translation validation answers that: the Lean model, gin's normal-form
-   simulator and the HDL simulators must produce identical outputs, cycle
+   beyond Lean's standard three, and `gin` checks the same policy again. Now the,  big TODO here is to expand the set of admissible axioms to be user-defined as   well, so that any Lean 4 code may be trusted as long as there are no unsafe assertions!
+3. Does the generated hardware still the functionality described by Lean?
+   We validate the translation: the Lean model along with `gin`'s NF spec and the HDL simulators must produce identical outputs, cycle
    for cycle, on the same vectors, and so must the core IR simulator
    unless its evaluation budget makes it report an inconclusive `SKIP`.
+   In that sense, we rely heavily on the operational semantics of the circuit.
 
-The implementation itself can be as clever or as obscure as it likes: its
-behaviour is covered by the proof, so once its theorem is reviewed and
+The implementation itself can be as clever as anyone cares to make it: its
+behaviour is proven, so once its theorem is reviewed and
 validation passes, you do not need to read its logic to know what it
 computes. Building it, however, runs its code: Lean executes `#eval`,
 `run_cmd`, macros and elaborators at build time, before and alongside the
 kernel replay and the exporter's checks, and the exporter links the
-design. A sandbox protects your machine, not the result: code that runs at
-build time can forge every output, the certificate, IR and vectors
+design.
+
+Sandboxes protect your machine but not the results of compilation: code that runs at
+build time can do anything and claim anything, but the certificate, IR and vectors
 included, and re-checking the certificate elsewhere would not secure the
-IR and vectors, which are not bound to it. For a design you did not write,
-a PASS is evidence about the HDL only if its Lean sources were read for
-build-time code and the export script, exporter (`lean/Gin/Export/`,
+IR and vectors. So, for a design you did not write, a `PASS` value is evidence about the HDL only if it also incluedes the requisite Lean sources (i.e. the spec only make sense if it's proof-preserving, and in a sense, what we're trying to build here are proof-carrying circuits). 
+
+I provide an export script, exporter (`lean/Gin/Export/`,
 `lean/GinExport.lean`, `lean/GinCheckExport.lean`, including each entry's
-vector source), lakefile, DSL and toolchain pin came from a reviewed
-revision of gin. The spec hash also does not
-cover gin's signal DSL or Lean's core library; changes to
-`lean/Gin/Signal.lean` and `lean/lean-toolchain` need review. See
+vector source), lakefile, DSL and toolchain pin came from `gin`. The spec hash does not
+cover `gin`'s signal DSL or Lean's core library; changes to
+`lean/Gin/Signal.lean` and `lean/lean-toolchain` need re-review. See
 [docs/trust-model.md](docs/trust-model.md).
 
 ## Quickstart
@@ -93,8 +89,7 @@ cover gin's signal DSL or Lean's core library; changes to
 | hlint          | 3.3.4          | linting the Haskell sources                 |
 
 These are the versions gin is tested with. `elan` installs the Lean
-version pinned in `lean/lean-toolchain` on first use. The Lean package has
-no dependencies outside the Lean distribution.
+version pinned in `lean/lean-toolchain` on first use. 
 
 ### Build, test and validate
 
@@ -108,8 +103,8 @@ scripts/validate.sh              # the whole pipeline, from the Lean sources to 
 through the kernel with `leanchecker`, regenerates `examples/` and checks
 that the result is byte for byte what is committed, runs `gin validate` on
 every example for all three targets, and checks that designs proved with
-`sorry` or `native_decide` are refused. It stops at the first failure. A
-missing HDL tool is a failure.
+`sorry` or `native_decide` are refused. It stops at the first failure, so make sure you 
+have your toolchain in order. 
 
 ### The `gin` command
 

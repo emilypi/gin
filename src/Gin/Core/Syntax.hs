@@ -107,7 +107,7 @@ data SpecDef = SpecDef
   }
   deriving stock (Eq, Show)
 
--- | The trace ('Certificate' in the code, @"certificate"@ in the JSON):
+-- | The trace (@Certificate@ in the code, @"certificate"@ in the JSON):
 -- evidence, produced by the Lean exporter, that the implementation was
 -- proven against a specification. gin cannot re-check the proof: it
 -- enforces a policy on these fields ('Gin.Certificate') and carries the

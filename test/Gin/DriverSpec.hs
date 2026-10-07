@@ -270,7 +270,7 @@ compileFilesSpec = describe "compile and testbench output" $ do
       listDirectory out `shouldReturn` ["counter.v"]
 
 ----------------------------------------------------------------------
--- Traces ('Certificate' in the code, @"certificate"@ in the JSON)
+-- Traces (@Certificate@ in the code, @"certificate"@ in the JSON)
 
 certificateSpec :: Spec
 certificateSpec = describe "certificate policy" $ do

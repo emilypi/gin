@@ -251,7 +251,7 @@ spaces n = LBS8.replicate (fromIntegral n) ' '
 bvValue :: Integer -> Text -> A.Value
 bvValue w s = A.object ["bv" A..= w, "val" A..= s]
 
--- | counter whose trace ('Certificate' in the code, @"certificate"@ in the
+-- | counter whose trace (@Certificate@ in the code, @"certificate"@ in the
 -- JSON) lists the definitions its statement depends on, as the exporter
 -- renders them: several lines, Unicode, and a string literal whose quotes
 -- and backslash must be escaped.

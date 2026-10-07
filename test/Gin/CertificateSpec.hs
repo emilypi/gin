@@ -18,7 +18,7 @@ import Test.Hspec
 standardAxioms :: [Text]
 standardAxioms = ["propext", "Classical.choice", "Quot.sound"]
 
--- | A well-formed trace ('Certificate' in the code, @"certificate"@ in
+-- | A well-formed trace (@Certificate@ in the code, @"certificate"@ in
 -- the JSON) with the given axiom lists.
 cert :: [Text] -> [Text] -> Certificate
 cert axioms impl =

@@ -1,4 +1,4 @@
--- | Axiom policy for the trace ('Certificate' in the code, @"certificate"@
+-- | Axiom policy for the trace (@Certificate@ in the code, @"certificate"@
 -- in the JSON): which axioms a proof may depend on.
 --
 -- Does the proof check? The Lean kernel decides this. The exporter refuses

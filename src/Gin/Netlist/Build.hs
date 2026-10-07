@@ -16,7 +16,7 @@
 --   that folding leaves unread are then dropped, repeatedly, until every
 --   declared net is read by a declaration or an output.
 --
--- [Header] 'modHeader' puts provenance and the trace ('Certificate' in
+-- [Header] 'modHeader' puts provenance and the trace (@Certificate@ in
 --   the code, @"certificate"@ in the JSON) in front of every reviewer of
 --   the generated files. From the trace it takes the theorem name, the
 --   statement, the definitions of the specification, its hash and the

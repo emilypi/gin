@@ -8,7 +8,7 @@
 -- from @test/fixtures/ir/counter.gin.json@, and a circuit with no inputs,
 -- two outputs of widths 1 and 4096 and state that starts from nonzero
 -- values go through every stage the compiler runs: JSON decoding, type
--- checking, the trace check ('Certificate' in the code, @"certificate"@
+-- checking, the trace check (@Certificate@ in the code, @"certificate"@
 -- in the JSON) against the axiom policy, normalization, the netlist
 -- builder and all three backends. Each generated design must pass its
 -- backend's lint commands, and each generated testbench must pass on the

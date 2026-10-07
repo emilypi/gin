@@ -15,18 +15,19 @@
 --
 -- Every command first loads the IR file: it reads at most
 -- 'maxInputBytes' (plus one, to detect a larger file), decodes it
--- ('decodeProgram'), type checks it ('checkProgram') and checks its
--- certificate ('checkCertificate') against 'defaultPolicy' extended with
--- the @--allow-axiom@ names. No flag admits an axiom in
+-- ('decodeProgram'), type checks it ('checkProgram') and checks its trace
+-- (@Certificate@ in the code, @"certificate"@ in the JSON) with
+-- 'checkCertificate' against 'defaultPolicy' extended with the
+-- @--allow-axiom@ names. No flag admits an axiom in
 -- 'Gin.Certificate.alwaysRejected' or one containing @._native.@, however
 -- it is spelled; an @--allow-axiom@ name that is empty or contains control
 -- or invisible characters is a usage error. With @--spec-hash@, the
--- certificate's 'certificateSpecHash' must equal the given value (in either
--- case): a reviewer pins the specification once and every later run checks
--- that the claim is still the reviewed one. Commands that take @--vectors@
--- then decode the vectors and reject them unless their top name and their
--- input and output ports (names, types and order) equal the program's top
--- entity.
+-- trace's 'certificateSpecHash' must equal the given value (in either
+-- case): you pin the specification once, and every later run checks that
+-- the claim is still the one you reviewed. Commands that
+-- take @--vectors@ then decode the vectors and reject them unless their
+-- top name and their input and output ports (names, types and order)
+-- equal the program's top entity.
 --
 -- [@check@] Stops after loading.
 --
@@ -51,12 +52,12 @@
 --   @true@ and @false@ or as the decimal value of a bit vector, as in the
 --   vectors file. When the core simulator stops at one of its bounds
 --   ('isBudgetError') it prints @sim-core: SKIP(inconclusive: <message>)@,
---   which is not a failure: the normal-form simulator and the HDL runs
+--   which is not a failure: the normal form (NF) simulator and the HDL runs
 --   still check the circuit against the vectors, only the localization of
 --   a disagreement is lost. Each simulator runs for at most
 --   @--sim-timeout@ seconds ('defaultSimTimeoutSeconds' by default); a core
 --   simulation that takes longer is inconclusive in the same way
---   (@sim-core: SKIP(inconclusive: timeout after <s> s)@), a normal-form
+--   (@sim-core: SKIP(inconclusive: timeout after <s> s)@), an NF
 --   simulation that takes longer fails (@sim-normal: FAIL timeout after
 --   <s> s@).
 --
@@ -78,7 +79,7 @@
 --   not found fails its check, or skips it with @--allow-missing-tools@.
 --
 -- Exit status: 0 on success, 1 when a check, compile or validation fails
--- (errors are printed with 'renderError', so a certificate error starts
+-- (errors are printed with 'renderError', so a trace error starts
 -- with @certificate error:@), 2 on a usage error.
 --
 -- External tools are looked up in the directories of the @PATH@ of the
@@ -273,7 +274,7 @@ data Command
   | SimCmd !Inputs !FilePath !SimOptions
   | ValidateCmd !Inputs !FilePath !Outputs !ValidateOptions
 
--- | The IR file, the axioms its certificate may use beyond
+-- | The IR file, the axioms its trace may use beyond
 -- 'defaultPolicy', and the specification hash it must have.
 data Inputs = Inputs
   { inFile :: !FilePath
@@ -539,7 +540,7 @@ backendFor = \case
 ----------------------------------------------------------------------
 -- Loading
 
--- | Read, decode and check the IR file, including its certificate and,
+-- | Read, decode and check the IR file, including its trace and,
 -- if one is given, its specification hash.
 loadProgram :: Inputs -> Pipe Program
 loadProgram ins = do
@@ -552,7 +553,7 @@ loadProgram ins = do
     traverse_ (checkSpecHash (progCertificate prog)) (inSpecHash ins)
     pure prog
 
--- | The certificate's 'certificateSpecHash' must be the expected one,
+-- | The trace's 'certificateSpecHash' must be the expected one,
 -- compared without regard to case.
 checkSpecHash :: Certificate -> Text -> Either GinError ()
 checkSpecHash cert expected =
@@ -690,9 +691,10 @@ generatedFiles m mvecs b =
 -- every file of the group is complete are they renamed into place, in
 -- order. If a rename fails, the files of the group already renamed are
 -- removed again, so the group is either wholly in place or absent (an
--- earlier file it replaced is gone either way); the temporary files are
--- always removed. Renaming replaces an existing file or symbolic link
--- instead of writing through it.
+-- earlier file it replaced is gone either way). I would rather a group be
+-- absent than partly renamed into place. The temporary files are always
+-- removed. Renaming replaces an existing file or symbolic link instead of
+-- writing through it.
 writeGroup :: FilePath -> [(FilePath, Text)] -> Pipe ()
 writeGroup dir files =
   liftIO (tryIO (createDirectoryIfMissing True dir >> stage files [])) >>= \case
@@ -1105,10 +1107,11 @@ superviseTool seconds group ph hin hout herr = do
 -- is awake; 'Nothing' if it has not finished by then. The clock behind
 -- 'timeout' keeps running while the machine sleeps, so after a suspend a
 -- plain 'timeout' would stop runs that have had almost no time at all.
--- Waiting in slices of at most a second and counting each slice as no more
--- than twice its length leaves a suspend out of the budget while still
--- counting a busy scheduler's delays. The action may be restarted, so it
--- must be safe to interrupt and repeat.
+-- I count awake time, not wall time: waiting in slices of at most a
+-- second and counting each slice as no more than twice its length leaves
+-- a suspend out of the budget while still counting a busy scheduler's
+-- delays. The action may be restarted, so it must be safe to interrupt
+-- and repeat.
 awakeTimeout :: Int -> IO a -> IO (Maybe a)
 awakeTimeout seconds act = go 0
   where

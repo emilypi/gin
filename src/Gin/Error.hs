@@ -1,6 +1,8 @@
 -- | Uniform error type for every compiler stage.
 --
--- Every stage function returns @Either GinError a@; stages never throw.
+-- Every stage function returns @Either GinError a@; stages never throw. I
+-- want every failure to say which stage it came from, so the CLI can name
+-- where the pipeline stopped.
 module Gin.Error
   ( Stage (..)
   , GinError (..)

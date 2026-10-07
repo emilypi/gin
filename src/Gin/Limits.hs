@@ -1,4 +1,4 @@
--- | Resource bounds on untrusted input. Every bound is checked before the
+-- | Resource bounds on untrusted input. I check every bound before the
 -- work it guards, so hostile files fail fast with a decode or normalize
 -- error instead of exhausting memory or time.
 module Gin.Limits

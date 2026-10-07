@@ -3,11 +3,12 @@ name:               gin
 version:            0.1.0.0
 synopsis:           A Clash-style hardware compiler for proof-carrying Lean 4 circuits
 description:
-  gin compiles circuits written in a Lean 4 embedded DSL to Verilog-2005,
-  SystemVerilog and VHDL-2008. The Lean side exports a typed core IR
-  together with a certificate naming the kernel-checked theorem that
-  relates the implementation to its specification; gin checks the
-  certificate policy, normalizes the IR to a first-order netlist, and
+  gin compiles circuits written in a Lean 4 embedded DSL to your choice of
+  Verilog-2005, SystemVerilog and VHDL-2008. The Lean side exports a typed
+  core IR together with a trace (@Certificate@ in the code,
+  @"certificate"@ in the JSON) naming the kernel-checked theorem that
+  relates the implementation to its specification; gin checks the trace
+  against an axiom policy, normalizes the IR to a first-order netlist, and
   renders HDL plus self-checking testbenches for translation validation.
 license:            BSD-3-Clause
 license-file:       LICENSE.md

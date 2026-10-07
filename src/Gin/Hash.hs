@@ -1,7 +1,9 @@
 -- | SHA-256 (FIPS 180-4), used to give a reviewed specification a stable
--- identity ('Gin.Certificate.certificateSpecHash'). A small pure
--- implementation keeps the dependency footprint unchanged; inputs are a
--- few kilobytes of certificate text.
+-- identity ('Gin.Certificate.certificateSpecHash'): once you have answered
+-- "does the specification say what I want?", you pin it with
+-- @--spec-hash@. I use a small pure implementation to keep the
+-- dependency footprint unchanged; inputs are a few kilobytes of trace
+-- text (@Certificate@ in the code, @"certificate"@ in the JSON).
 module Gin.Hash
   ( sha256
   , sha256Hex

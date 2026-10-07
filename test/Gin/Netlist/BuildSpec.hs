@@ -1,6 +1,8 @@
 -- | Tests for "Gin.Netlist.Build". Every netlist the builder produces is
 -- checked against the invariants documented in "Gin.Netlist.Types" by
--- 'validate', a validator local to this module.
+-- 'validate', a validator local to this module. I keep it here,
+-- independent of the builder, so that a mistake in the builder cannot
+-- repeat itself in the check.
 module Gin.Netlist.BuildSpec
   ( spec
 
@@ -1166,7 +1168,7 @@ shouldFailMentioning result needle = case result of
   Right m -> expectationFailure ("expected a netlist error, got " <> show m)
 
 ----------------------------------------------------------------------
--- certificate header
+-- trace header
 
 headerSpec :: Spec
 headerSpec = do
@@ -1337,9 +1339,10 @@ notices =
   , "validation: run gin validate with the exported vectors"
   ]
 
--- | The counter's certificate as the Lean exporter would write it: the
--- statement and every definition it depends on, each definition rendered
--- as @name : type := value@ over several lines.
+-- | The counter's trace (@Certificate@ in the code, @"certificate"@ in
+-- the JSON) as the Lean exporter would write it: the statement and every
+-- definition it depends on, each definition rendered as
+-- @name : type := value@ over several lines.
 specCertificate :: Certificate
 specCertificate =
   Certificate
@@ -1369,11 +1372,11 @@ withSpecCounter check = case buildNetlist counterNormal {nmCertificate = specCer
   Left e -> expectationFailure (show e)
   Right m -> check m
 
--- | The header of the counter carrying the given certificate.
+-- | The header of the counter carrying the given trace.
 headerFor :: Certificate -> Either GinError [Text]
 headerFor cert = modHeader <$> buildNetlist counterNormal {nmCertificate = cert}
 
--- | Certificates whose text mixes arbitrary Unicode with line breaks,
+-- | Traces whose text mixes arbitrary Unicode with line breaks,
 -- controls, bidirectional overrides, separators, private-use and
 -- unassigned characters, comment delimiters and tool directives. At most
 -- four, shorter, spec definitions keep the specification small enough to

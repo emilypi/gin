@@ -1,4 +1,7 @@
--- | Tests for the Verilog-2005 backend.
+-- | Tests for the Verilog-2005 backend. They answer the README's third
+-- question for Verilog and, through 'familySpec', SystemVerilog: does
+-- the generated hardware still implement the functionality described by
+-- Lean?
 --
 -- The tool-checked tests are shared with "Gin.Backend.SystemVerilogSpec"
 -- through 'familySpec', which runs them against one 'Flavour' (backend,
@@ -427,8 +430,8 @@ simulateText = simulateTextWith runTool
 -- The testbench with the most cycles allowed compiles and runs in about
 -- 7 s on an idle machine, but under heavy load (many simulators and
 -- compilers sharing the host) it has hit the 300 s limit, which made the
--- test fail without any fault in the testbench. It gets a limit long
--- enough for a loaded machine; a real hang still fails, only later.
+-- test fail without any fault in the testbench. I give it a limit long
+-- enough for a loaded machine: a real hang still fails, only later.
 simulateWithin :: Int -> Flavour -> Module -> Vectors -> IO (ExitCode, Text, Text)
 simulateWithin seconds fl m vs =
   simulateTextWith

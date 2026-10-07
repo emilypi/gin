@@ -1,4 +1,6 @@
--- | Tests for the VHDL-2008 backend.
+-- | Tests for the VHDL-2008 backend. They answer the README's third
+-- question for VHDL: does the generated hardware still implement the
+-- functionality described by Lean?
 --
 -- Design files are compared against golden files under @test/golden/vhdl@
 -- and analysed with nvc; testbenches are simulated with nvc and must print

@@ -10,11 +10,12 @@
 -- and products of data) in the top entity's domain.
 --
 -- Checking takes time and memory close to linear in the size of the
--- program as written (its JSON encoding), even for hostile input. An
--- inferred type can be far larger than the expression it comes from: a
--- tuple of @k@ copies of a variable whose type has @m@ components has a
--- type of @k * m@ components. The checker therefore never walks an
--- inferred type. It hash-conses types ('TyRef'), so that comparing two
+-- program as written (its JSON encoding), even for hostile input: I want
+-- to be able to check the IR of a design you did not write. An inferred
+-- type can be far larger than the expression it comes from: a tuple of
+-- @k@ copies of a variable whose type has @m@ components has a type of
+-- @k * m@ components. The checker therefore never walks an inferred
+-- type. It hash-conses types ('TyRef'), so that comparing two
 -- types, or asking whether one is data, takes constant time; and an error
 -- message shows at most 'renderBudget' characters of any type or value.
 module Gin.Core.Check

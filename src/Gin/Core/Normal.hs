@@ -1,5 +1,5 @@
--- | Normal form: the first-order, signal-erased, tuple-free program the
--- normalizer produces and the netlist builder consumes.
+-- | Normal form (NF): the first-order, signal-erased, tuple-free program
+-- the normalizer produces and the netlist builder consumes.
 --
 -- Invariants, checked by 'Gin.Normalize.checkNormal':
 --

@@ -1,9 +1,9 @@
 -- | JSON encoding of the core IR and test vectors, as specified in
--- @docs/file-formats.md@. Explicit functions rather than instances, so
--- the core types carry no aeson dependency and no orphan instances.
+-- @docs/file-formats.md@. I use explicit functions rather than instances,
+-- so the core types carry no aeson dependency and no orphan instances.
 --
--- Input is untrusted, so decoding is staged so that each step bounds the
--- work of the next (the bounds are in "Gin.Limits"):
+-- Input is untrusted, so decoding is staged: each step bounds the work of
+-- the next (the bounds are in "Gin.Limits"):
 --
 --   1. The input size is checked by reading at most @'maxInputBytes' + 1@
 --      bytes.

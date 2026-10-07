@@ -1,4 +1,4 @@
--- | Normal form ("Gin.Core.Normal") to netlist ("Gin.Netlist.Types").
+-- | Normal form (NF, "Gin.Core.Normal") to netlist ("Gin.Netlist.Types").
 --
 -- 'buildNetlist' emits at most one declaration per normal-form bind, in
 -- bind order, and establishes every invariant listed in
@@ -16,14 +16,17 @@
 --   that folding leaves unread are then dropped, repeatedly, until every
 --   declared net is read by a declaration or an output.
 --
--- [Header] 'modHeader' puts provenance and the certificate (theorem name,
+-- [Header] 'modHeader' puts provenance and the trace ('Certificate' in
+--   the code, @"certificate"@ in the JSON) in front of every reviewer of
+--   the generated files. From the trace it takes the theorem name, the
 --   statement, the definitions of the specification, its hash and the
---   axioms) in front of every reviewer of the generated files, and says
---   what gin did not check. Every line starts with a fixed tag, so text
---   from the IR can never begin a comment and be read as a tool directive
+--   axioms, and it also says what gin did not check. I put it there so
+--   that the generated files themselves answer "does the specification
+--   say what I want?". Every line starts with a fixed tag, so text from
+--   the IR can never begin a comment and be read as a tool directive
 --   (such as @verilator lint_off@), and every character in the Unicode
---   categories Cc, Cf, Zl, Zp, Cs, Co and Cn becomes @?@, so it can neither
---   break out of its line nor hide or reorder text (bidirectional
+--   categories Cc, Cf, Zl, Zp, Cs, Co and Cn becomes @?@, so it can
+--   neither break out of its line nor hide or reorder text (bidirectional
 --   overrides). Lines may still contain comment delimiters such as @*/@:
 --   emit each one as a line comment.
 module Gin.Netlist.Build
@@ -406,9 +409,9 @@ refs = \case
 -- specification (the Lean exporter renders each as @name : type :=
 -- value@, so a definition's first line starts with its name), the
 -- specification's hash ('certificateSpecHash'), the axioms of the proof
--- and of the implementation, and two notices: gin carries the
--- certificate but cannot re-check the proof, and only @gin validate@
--- compares the generated HDL with the vectors exported from Lean.
+-- and of the implementation, and two notices: gin carries the trace but
+-- cannot re-check the proof, and only @gin validate@ compares the
+-- generated HDL with the vectors exported from Lean.
 certificateHeader :: NModule -> [Text]
 certificateHeader m =
   fmap

@@ -98,16 +98,18 @@ data TopEntity = TopEntity
   deriving stock (Eq, Show)
 
 -- | A definition the theorem statement depends on, rendered by the
--- exporter's fixed printer (fully qualified names, no user notation), so a
--- reviewer reads what the kernel checked rather than a name.
+-- exporter's fixed printer (fully qualified names, no user notation), so you
+-- read what the kernel checked rather than a name. This is what answers
+-- "does the specification say what I want?".
 data SpecDef = SpecDef
   { specDefName :: !Text
   , specDefBody :: !Text
   }
   deriving stock (Eq, Show)
 
--- | Evidence, produced by the Lean exporter, that the implementation was
--- proven against a specification. gin cannot re-check the proof; it
+-- | The trace ('Certificate' in the code, @"certificate"@ in the JSON):
+-- evidence, produced by the Lean exporter, that the implementation was
+-- proven against a specification. gin cannot re-check the proof: it
 -- enforces a policy on these fields ('Gin.Certificate') and carries the
 -- statement, the specification's definitions and their hash into
 -- generated HDL headers for human review.

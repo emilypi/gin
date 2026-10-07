@@ -241,7 +241,8 @@ data Module = Module
   { modName :: !Ident
   , modHeader :: ![Text]
   -- ^ Comment lines (no comment markers) emitted at the top of every
-  -- generated file: provenance and the certificate statement.
+  -- generated file: provenance and the statement from the trace
+  -- ('Gin.Core.Syntax.Certificate' in the code, @"certificate"@ in the JSON).
   , modClock :: !Ident
   , modReset :: !Ident
   , modInputs :: ![Net]

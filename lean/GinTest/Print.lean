@@ -4,9 +4,12 @@ import Gin.Export.Print
 import GinTest.Util
 
 /-!
-The fixed printer of certificates: full names, every argument, numerals as
-values, binders with their types, and nothing a design declares (notation,
-unexpanders, delaborators) can change its output.
+The fixed printer of the trace (`Certificate` in the code, `"certificate"`
+in the JSON): full names, every argument, numerals as values, binders with
+their types, and nothing a design declares (notation, unexpanders,
+delaborators) can change its output.
+You answer the first question (does the specification say what I want?)
+by reading this text, so I want it to show the term the kernel checked.
 -/
 
 open Lean Meta Gin

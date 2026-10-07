@@ -10,7 +10,8 @@ vectors, may differ from its definitions: a project constant it runs is
 `@[implemented_by]` or `@[extern]`, or a project `@[csimp]` theorem
 rewrites a constant it may reach. It also refuses, before translating, a
 design whose reduction would run compiled code (`Lean.reduceBool`,
-`Lean.reduceNat`).
+`Lean.reduceNat`). I'd rather refuse such a design than replay vectors
+that the theorem says nothing about.
 -/
 
 open Lean Meta Gin.Export GinTest

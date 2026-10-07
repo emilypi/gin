@@ -124,8 +124,9 @@ def programWithPeriod (period : Nat) : Program :=
                      implAxioms := [],
                      specDefinitions := [{ name := "M.s", body := "M.s : Nat := 0" }] } }
 
--- [lean-specdefs] The certificate lists its fields in the order of
--- docs/file-formats.md, specDefinitions last, each as {"name", "body"}.
+-- [lean-specdefs] The trace (`Certificate` in the code, `"certificate"`
+-- in the JSON) lists its fields in the order of docs/file-formats.md,
+-- specDefinitions last, each as {"name", "body"}.
 #guard match (programWithPeriod 10000).toDoc with
   | .obj kvs => match kvs.lookup "certificate" with
     | some cert => cert.compact ==
@@ -134,15 +135,15 @@ def programWithPeriod (period : Nat) : Program :=
     | none => false
   | _ => false
 
-/-- `programWithPeriod 10000` with a certificate too long for one line. -/
+/-- `programWithPeriod 10000` with a trace too long for one line. -/
 def programWithLongCertificate : Program :=
   let p := programWithPeriod 10000
   { p with certificate := { p.certificate with
       specDefinitions := (List.range 4).map fun i =>
         { name := s!"M.s{i}", body := s!"M.s{i} : Nat := {"".pushn '1' 60}" } } }
 
--- [lean-certificate-authority] a program file ends in the certificate tail
--- that `gin-check-export --certificates` writes, whether the certificate
+-- [lean-certificate-authority] a program file ends in the trace tail
+-- that `gin-check-export --certificates` writes, whether the trace's
 -- definitions fit on one line or not
 #guard (programWithPeriod 10000).toDoc.render.endsWith
   (certificateTail (programWithPeriod 10000).certificate)

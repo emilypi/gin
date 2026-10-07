@@ -5,12 +5,14 @@ import Gin.Export.Translate
 import GinTest.Util
 
 /-!
-Certificates are unambiguous: two different names never print the same
-text, every printed text is printable ASCII (names, string literals and the
-fixed syntax), names that hide their meaning (macro scopes, inaccessible
-names, numeric components) are refused, names Lean reads as aliases get
-`_root_.`, and `@` is printed whenever a binder of a head's type is not
-seen to be explicit.
+The trace (`Certificate` in the code, `"certificate"` in the JSON) is
+unambiguous: two different names never print the same text, every printed
+text is printable ASCII (names, string literals and the fixed syntax), names
+that hide their meaning (macro scopes, inaccessible names, numeric
+components) are refused, names Lean reads as aliases get `_root_.`, and `@`
+is printed whenever a binder of a head's type is not seen to be explicit.
+An ambiguous trace could have you review a specification other than the
+one the kernel checked.
 
 The attacks below were found in review. Each passed every check of the
 exporter: the first two while names were printed with `Name.toString`, the
@@ -149,7 +151,7 @@ end GinTest.Names
 open GinTest.Names
 open Gin.Export.Print (name component expr decl stringLit)
 
-/-- A certificate of theorem `T` with the statement and definitions given. -/
+/-- A trace of theorem `T` with the statement and definitions given. -/
 def cert (statement : String) (defs : List (String × String)) : Gin.Export.Certificate :=
   { theorem_ := "T", statement, axioms := [], implAxioms := [],
     specDefinitions := defs.map fun (name, body) => { name, body } }
@@ -190,7 +192,7 @@ run_meta do
   let s := text (expr (← getEnv) (mkStrLit "a\u202Eb"))
   unless s == "\"a\\u{202E}b\"" do throwError "printed {s}"
 
--- [lean-names] A certificate with a field that is not printable ASCII is
+-- [lean-names] A trace with a field that is not printable ASCII is
 -- refused, whichever field it is.
 #guard asciiCertificate (cert "forall (t : Nat), t = t" [("S", "S : Nat := 0")])
 #guard !asciiCertificate (cert "∀ (t : Nat), t = t" [])
@@ -199,7 +201,7 @@ run_meta do
 #guard !asciiCertificate { cert "s" [] with axioms := ["prop\u202Eext"] }
 
 -- [lean-names] The inaccessible name is refused, so the colliding
--- certificate is never written.
+-- trace is never written.
 run_meta do
   GinTest.expectError (Gin.Export.certify ``Atk2.counter_correct ``Atk2.counter [``Atk2.counter])
     ["cannot print", "inaccessible", "refusing to export"]
@@ -294,7 +296,7 @@ run_meta do
   unless s2 == "fun (t : Nat) (<<t\\u{002E}succ>> : Nat) => <<t\\u{002E}succ>>" do
     throwError "printed {s2}"
 
--- [lean-names] The certificate is refused if two definitions print the same
+-- [lean-names] The trace is refused if two definitions print the same
 -- name, or a bound variable prints like a constant of its term.
 #guard (Gin.Export.checkDistinctNames ["A.s", "B.s", "A.s"]) matches .error _
 #guard (Gin.Export.checkDistinctNames ["A.s", "B.s"]) matches .ok _

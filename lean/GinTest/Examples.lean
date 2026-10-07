@@ -5,7 +5,10 @@ import GinTest.Util
 /-!
 The shipped export table: each example certifies, translates to IR that
 agrees with its Lean vectors on all 1024 cycles, and has the interface the
-rest of gin expects. Also covers the top-entity checks.
+rest of gin expects. Also covers the top-entity checks. The IR agreement
+is the exporter's share of the third question (does the generated hardware
+still implement the functionality described by Lean?): it checks the
+translation to IR before `gin` sees it.
 -/
 
 open Lean Meta Gin.Export GinTest

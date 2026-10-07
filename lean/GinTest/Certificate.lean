@@ -3,12 +3,15 @@ import Gin.Export.Certificate
 import GinTest.Util
 
 /-!
-The certificate policy: only `propext`, `Classical.choice` and `Quot.sound`
-are allowed, in the theorem and in the exported definitions; the theorem
-must have the refinement shape; and the certificate shows the statement and
-the definitions it depends on. The `sorryAx`, `native_decide` and other
-reject cases that cannot live in a warning-free build are the reject
-fixtures of `scripts/export-examples.sh --check-rejects`.
+The trace's policy (`Certificate` in the code, `"certificate"` in the
+JSON): only `propext`, `Classical.choice` and `Quot.sound` are allowed, in
+the theorem and in the exported definitions; the theorem must have the
+refinement shape; and the trace shows the statement and the definitions it
+depends on. Does the proof check? The kernel decides that, but a proof
+resting on `sorryAx` or an unvetted axiom type-checks all the same, so I
+refuse any other axiom. The `sorryAx`, `native_decide` and other reject
+cases that cannot live in a warning-free build are the reject fixtures of
+`scripts/export-examples.sh --check-rejects`.
 -/
 
 open Gin
@@ -134,7 +137,7 @@ def diamond (en : Signal System Bool) (t : Nat) : Byte :=
 
 end GinTest.Certificate
 
--- [lean-specdefs] The certificate of a sound proof: the statement is printed
+-- [lean-specdefs] The trace of a sound proof: the statement is printed
 -- with full names, and the specification's definition is listed.
 /--
 info: { theorem_ := "Counter.counter_correct",

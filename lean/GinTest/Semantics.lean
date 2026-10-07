@@ -2,7 +2,10 @@ import Gin.Signal
 
 /-!
 Checks that the signal combinators satisfy the equations of
-`docs/semantics.md`, both symbolically and on concrete streams.
+`docs/semantics.md`, both symbolically and on concrete streams. These
+equations are the operational semantics of the circuit: every
+representation gin handles (the Lean model, IR, normal form, netlist and
+HDL) must agree with them.
 -/
 
 open Gin

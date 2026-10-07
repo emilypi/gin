@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Reproduce the whole pipeline, from the Lean sources to HDL simulation.
+# Step 3 is where we answer the README's third question: does the generated
+# hardware still implement the functionality described by Lean?
 #
 #   scripts/validate.sh
 #

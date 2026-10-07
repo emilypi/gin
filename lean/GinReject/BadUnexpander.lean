@@ -8,9 +8,12 @@ Not part of the default build. The theorem compares the implementation
 with `specR`, which says the output is always 0, but an `app_unexpander`
 makes Lean's pretty printer show `specR en t` as `BadUnexpander.spec en t`,
 the honest enable-counter specification. The exporter does not refuse
-this design: its certificate is rendered by a printer that ignores
-unexpanders, so it names `specR` and lists `specR`'s definition, and a
-reviewer sees the real claim. `GinReject.UnexpanderCheck` checks this.
+this design: its trace (`Certificate` in the code, `"certificate"` in the
+JSON) is rendered by a printer that ignores unexpanders, so it names
+`specR` and lists `specR`'s definition, so you see the real claim.
+That matters for the README's first question: "does the specification
+say what I want?" can only be answered from the claim that was proved.
+`GinReject.UnexpanderCheck` checks this.
 -/
 
 open Gin

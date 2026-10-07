@@ -3,11 +3,12 @@ import Gin.Export.Certificate
 import GinReject.BadUnexpander
 
 /-!
-# The certificate of `GinReject.BadUnexpander` shows the real claim
+# The trace of `GinReject.BadUnexpander` shows the real claim
 
 Lean's pretty printer, fooled by the fixture's `app_unexpander`, shows the
-specification as `BadUnexpander.spec`. The certificate's fixed printer
-names `BadUnexpander.specR` and lists its definition. Built by
+specification as `BadUnexpander.spec`. The trace (`Certificate` in the
+code, `"certificate"` in the JSON) has its own fixed printer, which names
+`BadUnexpander.specR` and lists its definition. Built by
 `scripts/export-examples.sh --check-rejects`; the build fails if a check
 does.
 -/
@@ -15,8 +16,7 @@ does.
 open Lean Meta
 
 -- [lean-printer] The unexpander fools the pretty printer, but not the
--- certificate: its statement names specR and its definitions show specR's
--- body.
+-- trace: its statement names specR and its definitions show specR's body.
 run_meta do
   let thm := ``BadUnexpander.bad_correct
   let pp := toString (← ppExpr (← getConstInfo thm).type)

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Regenerate the exported examples from the Lean sources.
+# Regenerate the exported examples from the Lean sources. The kernel replay
+# and gin-check-export's axiom policy below answer the README's second
+# question (does the proof check?) for every exported circuit.
 #
 #   scripts/export-examples.sh                  build, re-check and export
 #   scripts/export-examples.sh --check-rejects  check that unproven designs are refused
@@ -17,13 +19,14 @@
 # Every export runs gin-check-export first and stops if it fails:
 # gin-export links the design code, which runs as soon as it starts
 # (initializers and closed terms of every linked module), so it never starts
-# for circuits the checker, which links no design, refuses. The checker's
-# certificate is the authority: gin-export writes into a temporary
-# directory, and its output is refused unless every certificate in it is,
-# byte for byte, the one gin-check-export computed; only then is it copied
-# into examples/. Linked design code can still write any file the user can,
-# so export designs you did not write only in a sandbox (lean/README.md,
-# "Trust"). A second export must reproduce the files byte for byte.
+# for circuits the checker, which links no design, refuses. I take the
+# checker's trace (Certificate in the code, "certificate" in the JSON) as
+# the authority: gin-export writes into a temporary directory, and its
+# output is refused unless every trace in it is, byte for byte, the one
+# gin-check-export computed; only then is it copied into examples/. Linked
+# design code can still write any file the user can, so export designs you
+# did not write only in a sandbox (lean/README.md, "Trust"). A second export
+# must reproduce the files byte for byte.
 #
 # --check-rejects builds the reject fixtures under lean/GinReject, which are
 # not part of the default build, and checks that each one is refused for its
@@ -33,11 +36,10 @@
 # that may run IO when gin-export starts (@[implemented_by], an unsafe
 # closed term, foreign code), a translation that would run compiled code
 # (Lean.reduceBool), a design that is not a reject fixture but loads one,
-# a certificate in gin-export's output other than the checker's, or a
-# link input added to (a copy of) the lakefile. The
-# unexpander fixture is not refused; its check module verifies that the
-# certificate shows the real specification. Nothing under examples/ may
-# change.
+# a trace in gin-export's output other than the checker's, or a link input
+# added to (a copy of) the lakefile. The unexpander fixture is not refused;
+# its check module verifies that the trace shows the real specification.
+# Nothing under examples/ may change.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -92,9 +94,9 @@ loaded_modules() {
 
 # check_certificates CERTS OUT NAME...: for each named circuit,
 # OUT/NAME/NAME.gin.json ends, byte for byte, in CERTS/NAME.certificate,
-# the certificate as gin-check-export rendered it (the last member of the
+# the trace as gin-check-export rendered it (the last member of the
 # top-level object and the closing brace), and no object in the file has a
-# key twice, so the file holds no other certificate that a reader could
+# key twice, so the file holds no other trace that a reader could
 # take instead.
 check_certificates() {
   local certs=$1 out=$2 n
@@ -136,11 +138,11 @@ PY
 # export_with EXE ROOT OUT NAME...: export the named circuits into OUT with
 # the exporter EXE, whose root module is ROOT, only after gin-check-export
 # has accepted them and the modules of ROOT, and accept the export only if
-# every certificate EXE wrote is, byte for byte, the one gin-check-export
+# every trace EXE wrote is, byte for byte, the one gin-check-export
 # computed. The checker links no design and runs none of their code; EXE
 # links the designs, and their code runs as soon as it starts (initializers,
 # closed terms), so it must not start before the checks pass, and its
-# certificates are only accepted when they match the checker's.
+# traces are only accepted when they match the checker's.
 export_with() {
   local exe=$1 root=$2 out=$3 certs
   shift 3
@@ -246,9 +248,9 @@ check_replay_covers() {
 # lakefile.toml (no lakefile.lean, whose Lean code would run on every lake
 # command), requires no package, declares no extern_lib or other target, and
 # its libraries and executables set only the options listed below (no
-# moreLinkArgs, moreLinkObjs, moreLinkLibs, extraDepTargets, ...). The
-# lakefile itself is trusted, like the toolchain: this check only stops a
-# link input from being added to it unnoticed.
+# moreLinkArgs, moreLinkObjs, moreLinkLibs, extraDepTargets, ...). I trust
+# the lakefile itself, like the toolchain: this check only stops a link
+# input from being added to it unnoticed.
 check_lakefile() {
   local dir=$1
   [ ! -e "$dir/lakefile.lean" ] || die "$dir/lakefile.lean exists; the package must be configured by lakefile.toml only"
@@ -337,7 +339,7 @@ export_examples() {
   check_replay_covers "${mods[@]}"
   replay "$tmp/replay" "${mods[@]}"
   # [lean-certificate-authority] exported into a temporary directory and
-  # copied into examples/ only once every certificate matches the checker's
+  # copied into examples/ only once every trace matches the checker's
   export_to "$tmp/export" "${examples[@]}" || die "the export of ${examples[*]} failed"
   for n in "${examples[@]}"; do
     mkdir -p "examples/$n"
@@ -441,11 +443,11 @@ check_stale_olean() {
   echo "export-examples: a stale .olean is not replayed"
 }
 
-# gin-export-forged changes the certificates it wrote after exporting, as
+# gin-export-forged changes the traces it wrote after exporting, as
 # code linked into gin-export that gin-check-export does not see could; the
-# export pipeline refuses its output, whose certificate is not the one the
-# checker computed. A file that ends in the checker's certificate but holds
-# a second, forged certificate member earlier is refused too.
+# export pipeline refuses its output, whose trace is not the one the
+# checker computed. A file that ends in the checker's trace but holds a
+# second, forged "certificate" member earlier is refused too.
 check_forged_certificate() {
   local out
   out=$(lake -d lean build gin-export-forged 2>&1) || die "gin-export-forged does not build:"$'\n'"$out"
@@ -497,7 +499,7 @@ check_rejects() {
   check_lakefile_rejects
   check_reject GinReject.BadReduceBool bad_reduce_bool \
     "BadReduceBool.hooked refers to Lean.reduceBool" "a translation that would run compiled code"
-  # [lean-printer] not refused: the certificate names specR and lists its body
+  # [lean-printer] not refused: the trace names specR and lists its body
   build_fixture GinReject.BadUnexpander
   build_fixture GinReject.UnexpanderCheck
   echo "export-examples: GinReject.BadUnexpander certificate shows specR"

@@ -13,7 +13,8 @@ exit. `scripts/export-examples.sh --check-rejects` checks that the
 initializer does run when `gin-export-hooked` starts, and that the export
 pipeline, which runs `gin-check-export` (which links no design) first,
 refuses the circuit without starting `gin-export-hooked`: the marker is
-not written.
+not written. I run the checker first because once `gin-export-hooked`
+has started, a refusal would come too late.
 -/
 
 open Gin

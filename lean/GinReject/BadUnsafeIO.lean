@@ -7,11 +7,12 @@ Not part of the default build. The design and its proof are sound, but
 the module also declares `cached`, an `unsafe` closed term that no design
 uses and that runs IO through `unsafeIO`. Lean evaluates the closed terms
 of every module linked into an executable when it starts, so linked into
-`gin-export` it would run before any check and could write a forged
-certificate (here it only writes a marker, at the path in
-`GIN_HOOK_MARKER`). `gin-check-export` must refuse the module, naming the
-constant, and so must `gin-export`. `scripts/export-examples.sh
---check-rejects` checks the refusals and that nothing is written.
+`gin-export` it would run before any check and could write a forged trace
+(`Certificate` in the code, `"certificate"` in the JSON). Here it only
+writes a marker, at the path in `GIN_HOOK_MARKER`. `gin-check-export`
+must refuse the module, naming the constant, and so must `gin-export`.
+`scripts/export-examples.sh --check-rejects` checks the refusals and that
+nothing is written.
 -/
 
 open Gin

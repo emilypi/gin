@@ -6,10 +6,10 @@ import Gin.Signal
 Not part of the default build. The design and its proof are sound, but
 the increment it uses is `@[implemented_by]` a function that adds two, so
 its compiled code, which would compute the vectors, does not compute what
-the certificate and the IR describe. `gin-check-export` must refuse it,
-naming the constant, and so must `gin-export`.
-`scripts/export-examples.sh --check-rejects` checks the refusals and that
-nothing is written.
+the trace (`Certificate` in the code, `"certificate"` in the JSON) and the
+IR describe. `gin-check-export` must refuse it, naming the constant, and
+so must `gin-export`. `scripts/export-examples.sh --check-rejects` checks
+the refusals and that nothing is written.
 -/
 
 open Gin

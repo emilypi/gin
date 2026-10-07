@@ -67,9 +67,9 @@ build time can do anything and claim anything, but the certificate, IR and vecto
 included, and re-checking the certificate elsewhere would not secure the
 IR and vectors. So, for a design you did not write, a `PASS` value is evidence about the HDL only if it also incluedes the requisite Lean sources (i.e. the spec only make sense if it's proof-preserving, and in a sense, what we're trying to build here are proof-carrying circuits). 
 
-I provide an export script, exporter (`lean/Gin/Export/`,
+I provide an export script via (`lean/Gin/Export/`,
 `lean/GinExport.lean`, `lean/GinCheckExport.lean`, including each entry's
-vector source), lakefile, DSL and toolchain pin came from `gin`. The spec hash does not
+vector source), that attests that any lakefile, DSL and toolchain pin came from `gin`. The spec hash does not
 cover `gin`'s signal DSL or Lean's core library; changes to
 `lean/Gin/Signal.lean` and `lean/lean-toolchain` need re-review. See
 [docs/trust-model.md](docs/trust-model.md).

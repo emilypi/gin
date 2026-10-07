@@ -270,7 +270,7 @@ compileFilesSpec = describe "compile and testbench output" $ do
       listDirectory out `shouldReturn` ["counter.v"]
 
 ----------------------------------------------------------------------
--- Certificates
+-- Traces ('Certificate' in the code, @"certificate"@ in the JSON)
 
 certificateSpec :: Spec
 certificateSpec = describe "certificate policy" $ do
@@ -1231,7 +1231,7 @@ everyCommand file vecs out =
   , ["validate", file, "--vectors", vecs, "-o", out, "--allow-missing-tools"]
   ]
 
--- | counter with a certificate that lists its specification's definitions
+-- | counter with a trace that lists its specification's definitions
 -- (canonical encoding).
 specFixture :: FilePath
 specFixture = "test/fixtures/ir/counter-spec.canonical.json"

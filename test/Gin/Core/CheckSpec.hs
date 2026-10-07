@@ -276,8 +276,9 @@ bools n = TProd (replicate n TBool)
 
 -- | Components in each hostile program below. Their JSON encodings are
 -- 1.5 to 4.5 MB, well under the input limit, yet a checker that walks a
--- type at each use takes about a billion steps on each of them, which is
--- far longer than 'promptly' allows (or more memory than a test has).
+-- type at each use takes about a billion steps on each of them: far longer
+-- than 'promptly' allows (or more memory than a test has). That is the
+-- checker I want these programs to catch.
 hostileSize :: Int
 hostileSize = 32000
 

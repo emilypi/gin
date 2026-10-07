@@ -1,8 +1,9 @@
 -- | Hand-written example circuits at every pipeline level, shared by all
--- component test suites so packages can be tested in isolation.
+-- component test suites: I keep them here so each package can be tested in
+-- isolation.
 --
--- These mirror, but are not
--- byte-identical to, what the Lean exporter emits for the same circuits.
+-- These mirror, but are not byte-identical to, what the Lean exporter emits
+-- for the same circuits.
 module Gin.Examples
   ( -- * Shared
     sysDomain

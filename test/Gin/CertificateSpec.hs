@@ -18,7 +18,8 @@ import Test.Hspec
 standardAxioms :: [Text]
 standardAxioms = ["propext", "Classical.choice", "Quot.sound"]
 
--- | A well-formed certificate with the given axiom lists.
+-- | A well-formed trace ('Certificate' in the code, @"certificate"@ in
+-- the JSON) with the given axiom lists.
 cert :: [Text] -> [Text] -> Certificate
 cert axioms impl =
   (testCertificate "Counter.counter_correct"){certAxioms = axioms, certImplAxioms = impl}
@@ -27,7 +28,7 @@ cert axioms impl =
 allowing :: [Text] -> CertPolicy
 allowing extra = CertPolicy (allowedAxioms defaultPolicy <> Set.fromList extra)
 
--- | A certificate-stage error whose message mentions every fragment.
+-- | A @certificate@-stage error whose message mentions every fragment.
 rejectedNaming :: [Text] -> Either GinError () -> Expectation
 rejectedNaming fragments = \case
   Left e -> do

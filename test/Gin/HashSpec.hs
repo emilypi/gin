@@ -1,4 +1,5 @@
--- | SHA-256 against the FIPS 180-4 / NIST example vectors.
+-- | SHA-256 against the FIPS 180-4 / NIST example vectors: the spec hash
+-- you pin with @--spec-hash@ is only as good as this digest.
 module Gin.HashSpec (spec) where
 
 import Data.ByteString.Char8 qualified as BS8

@@ -121,7 +121,8 @@ gin validate  examples/counter/counter.gin.json --vectors examples/counter/count
 
 From a checkout, run them as `cabal run -v0 gin -- check …`.
 
-- `check` decodes and type checks the program and checks its certificate.
+- `check` decodes and type checks the program and checks its trace
+  (`Certificate` in the code, `"certificate"` in the JSON).
 - `compile` writes the design for each target; `testbench` also writes
   `<top>_tb.<ext>`. `--target verilog|systemverilog|vhdl` (repeatable)
   selects targets; the default is all three.
@@ -133,7 +134,7 @@ From a checkout, run them as `cabal run -v0 gin -- check …`.
   `--allow-missing-tools` skips checks whose tool is not installed;
   `--tool-timeout SECONDS` bounds each tool run (default 300) and
   `--sim-timeout SECONDS` each reference simulation (default 600).
-- `--spec-hash HEX` (every command) fails unless the certificate's spec
+- `--spec-hash HEX` (every command) fails unless the trace's spec
   hash, printed in every generated HDL header, is `HEX`.
 - `--allow-axiom NAME` admits an extra axiom. `sorryAx`, the
   `Lean.ofReduce*` and `Lean.trustCompiler` axioms and any `._native.`
@@ -151,12 +152,12 @@ To add a circuit of your own, follow "Adding a circuit" in
 | --- | --- | --- |
 | The Lean implementation meets its specification | Proven | The refinement theorem, checked by the Lean kernel, for every cycle and every input stream. `leanchecker` replays every declaration, catching any that was added without kernel checking. |
 | The proof takes no unsound shortcuts | Checked | The exporter refuses, and gin by default rejects, any axiom other than `propext`, `Classical.choice` and `Quot.sound`, in the theorem and in the implementation. |
-| The specification is the one you meant | Reviewed | By you. The certificate carries the statement and every definition it depends on (`specDefinitions`), rendered by the exporter's fixed printer and printed into every generated HDL file with their hash; `--spec-hash` pins the reviewed version. |
+| The specification is the one you meant | Reviewed | By you. The trace carries the statement and every definition it depends on (`specDefinitions`), rendered by the exporter's fixed printer and printed into every generated HDL file with their hash; `--spec-hash` pins the reviewed version. |
 | The core IR means the Lean definition | Validated | The vectors come from running compiled Lean code (the entry's vector source, reviewed to apply the top definition), never from the IR, and gin's core IR simulator must reproduce them unless it reports an inconclusive `SKIP`. |
 | Normalization preserves meaning | Validated | The normal-form simulator must reproduce the same vectors, and the normal form is checked against its invariants. |
 | The netlist and the generated HDL preserve meaning | Validated | Verilog and SystemVerilog designs must pass Verilator's `-Wall` lint and compile under Icarus Verilog, VHDL designs must analyse under nvc, and every generated testbench must reproduce the vectors under Icarus Verilog or nvc. |
-| The exporter's translation and certificate are faithful | Trusted | gin cannot re-check a Lean proof. It trusts that the IR is the definition the theorem is about, and that the certificate's statement, definitions and axiom lists are the theorem's. Validation checks the first point only on the vectors' inputs. |
-| The design's code is harmless to run | Trusted | Building a design runs its code, and the exporter links it; the exporter's checks refuse initializers and code that could run at start-up. Designs you did not write belong in a sandbox, which protects your machine but not the result: unless their sources were read for build-time code, their build can forge the certificate, IR and vectors (see `docs/trust-model.md`). |
+| The exporter's translation and trace are faithful | Trusted | gin cannot re-check a Lean proof. It trusts that the IR is the definition the theorem is about, and that the trace's statement, definitions and axiom lists are the theorem's. Validation checks the first point only on the vectors' inputs. |
+| The design's code is harmless to run | Trusted | Building a design runs its code, and the exporter links it; the exporter's checks refuse initializers and code that could run at start-up. Designs you did not write belong in a sandbox, which protects your machine but not the result: unless their sources were read for build-time code, their build can forge the trace, IR and vectors (see `docs/trust-model.md`). |
 | The tools are correct | Trusted | The Lean kernel and `leanchecker`, the Lean compiler (the vectors come from compiled code), GHC, the HDL tools, and whatever synthesis tool consumes the generated HDL. |
 
 Validation is evidence, not proof: it shows that every stage agrees with
@@ -165,7 +166,7 @@ every input, and neither the proofs nor the testbenches cover asserting
 reset in the middle of a run. The meaning every stage must preserve is
 defined in [docs/semantics.md](docs/semantics.md).
 [docs/trust-model.md](docs/trust-model.md) gives the full trust model: the
-trusted base, the threat model and a recommended CI setup.
+trusted base, the threat model and the CI setup I recommend.
 
 ## Repository layout
 

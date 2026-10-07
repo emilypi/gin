@@ -1,5 +1,9 @@
 -- | Translation validation of the circuits exported from Lean.
 --
+-- These tests answer the README's third question for Lean exports: does
+-- the generated hardware still implement the functionality described by
+-- Lean? The Lean vectors are the reference, cycle for cycle.
+--
 -- Each example under @examples/<name>/@ is the output of
 -- @scripts/export-examples.sh@: the core IR of a Lean definition whose
 -- refinement theorem the kernel checked (@<name>.gin.json@), and test

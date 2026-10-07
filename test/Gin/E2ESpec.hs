@@ -1,19 +1,26 @@
 -- | End-to-end tests of the compiler pipeline, through the library API.
 --
+-- They put a version of the README's third question to the compiler
+-- itself: does the generated hardware still implement the program it was
+-- given?
+--
 -- Every hand-written example circuit ("Gin.Examples"), the counter read
 -- from @test/fixtures/ir/counter.gin.json@, and a circuit with no inputs,
 -- two outputs of widths 1 and 4096 and state that starts from nonzero
 -- values go through every stage the compiler runs: JSON decoding, type
--- checking, the certificate policy, normalization, the netlist builder and
--- all three backends. Each generated design must pass its backend's lint
--- commands, and each generated testbench must pass on the circuit's
--- vectors under the real HDL simulators (Icarus Verilog for Verilog and
--- SystemVerilog, nvc for VHDL), by the pass rule of @docs/semantics.md@.
--- Both reference simulators ("Gin.Sim") must reproduce the vectors, and
--- they must agree with each other on random input rows.
+-- checking, the trace check ('Certificate' in the code, @"certificate"@
+-- in the JSON) against the axiom policy, normalization, the netlist
+-- builder and all three backends. Each generated design must pass its
+-- backend's lint commands, and each generated testbench must pass on the
+-- circuit's vectors under the real HDL simulators (Icarus Verilog for
+-- Verilog and SystemVerilog, nvc for VHDL), by the pass rule of
+-- @docs/semantics.md@. Both reference simulators ("Gin.Sim") must
+-- reproduce the vectors, and they must agree with each other on random
+-- input rows.
 --
--- Fault injection then checks that a fault is caught at the level where
--- it is introduced:
+-- A pass is only evidence if the same check can fail, so I also inject
+-- faults and check that each is caught at the level where it is
+-- introduced:
 --
 --   * a fault in the core IR program makes 'simulateCore' disagree with
 --     the vectors (and the compiled program carries the same fault);

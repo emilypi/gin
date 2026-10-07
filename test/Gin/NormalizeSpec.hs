@@ -1,9 +1,10 @@
--- | Tests for the normalizer and for the normal-form invariant checker.
+-- | Tests for the normalizer and for the normal form (NF) invariant
+-- checker.
 --
 -- Semantic equivalence with the reference simulators is tested end to
--- end elsewhere; here every result is checked against the invariants of
--- "Gin.Core.Normal" and, where a hand-written normal form exists,
--- compared with it up to bind names and bind order.
+-- end elsewhere. Here I care about shape: every result is checked
+-- against the invariants of "Gin.Core.Normal" and, where a hand-written
+-- NF exists, compared with it up to bind names and bind order.
 module Gin.NormalizeSpec (spec) where
 
 import Control.Exception (evaluate)

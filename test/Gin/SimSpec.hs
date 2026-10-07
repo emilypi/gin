@@ -1,5 +1,9 @@
 -- | Tests for the reference simulators ('Gin.Sim') and the primitive
 -- semantics ('Gin.Sim.Prim') specified in @docs/semantics.md@.
+--
+-- The simulators are my direct transcription of the operational
+-- semantics: the generated HDL must match them later, so they have to
+-- match @docs/semantics.md@ first.
 module Gin.SimSpec (spec) where
 
 import Control.Exception (evaluate)
@@ -496,9 +500,9 @@ settled x =
       x <$ expectationFailure ("simulation did not finish within " <> show timeLimit <> " s")
 
 -- | Seconds a simulation in these tests may take. The slowest takes a few
--- seconds when built without optimization and far less with it; the bound
--- is generous so that only a simulation that does not end, or one that
--- became far slower, fails, even on a loaded machine.
+-- seconds when built without optimization and far less with it. I keep
+-- the bound generous so that only a simulation that does not end, or one
+-- that became far slower, fails, even on a loaded machine.
 timeLimit :: Int
 timeLimit = 60
 

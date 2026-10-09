@@ -34,50 +34,69 @@ newtype Name = Name {unName :: Text}
   deriving stock (Show)
   deriving newtype (Eq, Ord, IsString)
 
-data Expr
+data Expr ty name
   = -- | Lambda- or let-bound variable.
-    EVar !Name
+    EVar !name
   | -- | Reference to a 'Def' in 'progDefs'.
-    EGlobal !Name
-  | ELit !Value
+    EGlobal !name
+  | ELit !Value 
   | -- | Primitive together with its full instantiated type.
-    EPrim !PrimOp !Ty
+    EPrim !PrimOp !ty
   | -- | Curried n-ary application, n >= 1. Partial application is allowed.
-    EApp !Expr ![Expr]
+    EApp !(Expr ty name) ![Expr ty name]
   | -- | Curried n-ary lambda, n >= 1.
-    ELam ![(Name, Ty)] !Expr
-  | -- | @ELet isRec binds body@. Non-recursive lets scope sequentially
-    -- (each bind sees the earlier ones); recursive lets scope every bind
-    -- over all binds and the body.
-    ELet !Bool ![Bind] !Expr
-  | -- | Tuple of two or more components.
-    ETuple ![Expr]
-  | -- | Zero-based projection out of a tuple.
-    EProj !Natural !Expr
+    ELam ![(name, ty)] !(Expr ty name)
+  | -- | @ELet binds body@. Non-recursive lets scope sequentially
+    -- (each bind sees the earlier ones); 
+    ELet ![Bind ty name] !(Expr ty name)
+  | -- | @ELetRec binds body@ recursive lets scope every bind
+    -- over all binds and the body. Separate from ELet because 
+    -- personally I want to know when I am in a recursive block. 
+    ELetRec ![Bind ty name] !(Expr ty name)
+  | -- | Tuple of two or more components. Projections are keys. 
+    ETuple !(IntMap (Expr ty name))
   | -- | Combinational choice; the condition is a 'TBool' value, never a signal.
-    EIf !Expr !Expr !Expr
+    -- This is the standard MultiWayIf implementation.
+    EIf ![(Expr ty name, Expr ty name)] 
   deriving stock (Eq, Show)
 
-data Bind = Bind
-  { bindName :: !Name
-  , bindTy :: !Ty
-  , bindExpr :: !Expr
+instance Functor (Expr ty) where 
+  fmap f = \case 
+    EVar n = EVar (f n)
+    EGlobal n = EGlobal (f n)
+    EApp e es = EApp (f <$> e) (fmap (f <$>) es)
+    ELam bindings e = (first f <$> bindings) (f <$> e)
+    ELet bs e = ELet (fmap (f <$>) bs) (f <$> e)
+    ELetRec bs e = ELetRec (fmap (f <$>) bs) (f <$> e)
+    ETuple t = ETuple (f <$> t)
+    EIf bs = EIf (bimap f f <$> bs)
+    expr -> expr
+
+
+data Bind ty name = Bind
+  { bindName :: !name 
+  , bindTy :: !ty
+  , bindExpr :: !(Expr ty name)
   }
   deriving stock (Eq, Show)
 
-data Def = Def
-  { defName :: !Name
-  , defTy :: !Ty
-  , defBody :: !Expr
+instance Functor (Bind ty) where 
+  fmap f (Bind n ty e) = Bind (f n) ty (f <$> e)
+
+data Def ty name = Def
+  { defName :: !name
+  , defTy :: !ty
+  , defBody :: !(Expr ty name)
   }
   deriving stock (Eq, Show)
 
 -- | A top-entity port. 'portTy' is always scalar ('isScalar').
-data Port = Port
+data Port ty = Port
   { portName :: !Text
-  , portTy :: !Ty
+  , portTy :: !ty
   }
   deriving stock (Eq, Show)
+  deriving Functor via Identity 
 
 -- | The circuit to synthesise. The type of 'topDef' must be
 --
@@ -90,13 +109,13 @@ data Port = Port
 -- @o1 × o2 × … × on@); output j is read by projecting along that spine.
 -- k may be 0. 'topName' satisfies 'Gin.Netlist.Types.isLegalIdent', and
 -- port names are pairwise distinct.
-data TopEntity = TopEntity
+data TopEntity name = TopEntity
   { topName :: !Text
   , topDomain :: !Domain
   , topInputs :: ![Port]
   , topOutputs :: ![Port]
   -- ^ Non-empty.
-  , topDef :: !Name
+  , topDef :: !name
   }
   deriving stock (Eq, Show)
 
@@ -145,11 +164,11 @@ data Program = Program
   }
   deriving stock (Eq, Show)
 
-lookupDef :: Name -> Program -> Maybe Def
+lookupDef :: Eq name => name -> Program -> Maybe Def
 lookupDef n = find ((== n) . defName) . progDefs
 
 -- | Globals an expression refers to.
-globalRefs :: Expr -> Set Name
+globalRefs :: Ord name => Expr -> Set name
 globalRefs = \case
   EVar _ -> Set.empty
   EGlobal n -> Set.singleton n

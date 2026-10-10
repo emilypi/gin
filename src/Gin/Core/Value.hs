@@ -1,3 +1,5 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 -- | Runtime values shared by literals, register initialisers, simulation
 -- and test vectors.
 module Gin.Core.Value
@@ -5,8 +7,14 @@ module Gin.Core.Value
   , mkBV
   , valueTy
   , validValue
+
+    -- * Optics
+  , _VBool
+  , _VBV
+  , _VTuple
   ) where
 
+import Control.Lens (Plated (..), makePrisms)
 import Gin.Core.Type (Ty (..), maxWidth)
 import Numeric.Natural (Natural)
 
@@ -36,3 +44,14 @@ validValue = \case
   VBool _ -> True
   VBV w v -> w >= 1 && w <= maxWidth && v >= 0 && v < 2 ^ w
   VTuple vs -> length vs >= 2 && all validValue vs
+
+----------------------------------------------------------------------
+-- Optics
+
+makePrisms ''Value
+
+-- | The components of a tuple; scalars have none.
+instance Plated Value where
+  plate f = \case
+    VTuple vs -> VTuple <$> traverse f vs
+    v -> pure v

@@ -1,3 +1,5 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 -- | Normal form (NF): the first-order, signal-erased, tuple-free program
 -- the normalizer produces and the netlist builder consumes.
 --
@@ -31,9 +33,32 @@ module Gin.Core.Normal
   , NBind (..)
   , NOutput (..)
   , NModule (..)
+
+    -- * Optics
+  , rhsAtoms
+  , _AVar
+  , _ALit
+  , _NPrim
+  , _NMux
+  , _NReg
+  , _NAtom
+  , nbNameL
+  , nbTyL
+  , nbRhsL
+  , noNameL
+  , noTyL
+  , noAtomL
+  , nmNameL
+  , nmDomainL
+  , nmInputsL
+  , nmOutputsL
+  , nmBindsL
+  , nmCertificateL
   ) where
 
+import Control.Lens (Traversal', makePrisms)
 import Data.Text (Text)
+import Gin.Core.Optics (makeFieldLenses)
 import Gin.Core.Syntax (Certificate, Domain, Name, PrimOp, Ty, Value)
 
 data Atom
@@ -77,3 +102,20 @@ data NModule = NModule
   , nmCertificate :: !Certificate
   }
   deriving stock (Eq, Show)
+
+----------------------------------------------------------------------
+-- Optics
+
+makePrisms ''Atom
+makePrisms ''NRhs
+makeFieldLenses ''NBind
+makeFieldLenses ''NOutput
+makeFieldLenses ''NModule
+
+-- | The atoms a right-hand side reads, in order.
+rhsAtoms :: Traversal' NRhs Atom
+rhsAtoms f = \case
+  NPrim op as -> NPrim op <$> traverse f as
+  NMux c t e -> NMux <$> f c <*> f t <*> f e
+  NReg v a -> NReg v <$> f a
+  NAtom a -> NAtom <$> f a

@@ -28,6 +28,7 @@ module Gin.Normalize
   , checkNormal
   ) where
 
+import Control.Lens (toListOf)
 import Control.Monad (foldM, foldM_, unless, when)
 import Data.Foldable (for_)
 import Data.List (genericLength)
@@ -35,7 +36,15 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
-import Gin.Core.Normal (Atom (..), NBind (..), NModule (..), NOutput (..), NRhs (..))
+import Gin.Core.Normal
+  ( Atom (..)
+  , NBind (..)
+  , NModule (..)
+  , NOutput (..)
+  , NRhs (..)
+  , rhsAtoms
+  , _AVar
+  )
 import Gin.Core.Syntax
   ( Name (..)
   , Program
@@ -180,19 +189,10 @@ atomTy env = \case
         failAt StNormalize ("ill-typed literal " <> showT v <> " (literals are valid scalars)")
 
 atomVars :: Atom -> [Name]
-atomVars = \case
-  AVar n -> [n]
-  ALit _ -> []
-
-rhsAtoms :: NRhs -> [Atom]
-rhsAtoms = \case
-  NPrim _ as -> as
-  NMux c a b -> [c, a, b]
-  NReg _ a -> [a]
-  NAtom a -> [a]
+atomVars = toListOf _AVar
 
 rhsVars :: NRhs -> [Name]
-rhsVars = concatMap atomVars . rhsAtoms
+rhsVars = toListOf (rhsAtoms . _AVar)
 
 -- | Variables read within the cycle: all but a register's argument.
 combinationalVars :: NRhs -> [Name]

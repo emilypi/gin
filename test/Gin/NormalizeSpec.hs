@@ -8,6 +8,7 @@
 module Gin.NormalizeSpec (spec) where
 
 import Control.Exception (evaluate)
+import Control.Lens (toListOf)
 import Data.Foldable (for_)
 import Data.List (sortOn)
 import Data.Map.Strict qualified as Map
@@ -435,13 +436,6 @@ shouldFailWith r needle = case r of
     errStage e `shouldBe` StNormalize
     Text.unpack (errMessage e) `shouldContain` Text.unpack needle
 
-rhsAtoms :: NRhs -> [Atom]
-rhsAtoms = \case
-  NPrim _ as -> as
-  NMux c a b -> [c, a, b]
-  NReg _ a -> [a]
-  NAtom a -> [a]
-
 -- | Rename binds by first visit in a depth-first walk from the outputs (in
 -- port order, operands left to right) and sort them, so modules that differ
 -- only in bind names and bind order become equal. Binds the walk does not
@@ -458,7 +452,7 @@ canonical m =
     visit seen n
       | Map.member n seen = seen
       | Just r <- Map.lookup n rhss =
-          foldl' visit (Map.insert n (Map.size seen) seen) [x | AVar x <- rhsAtoms r]
+          foldl' visit (Map.insert n (Map.size seen) seen) (toListOf (rhsAtoms . _AVar) r)
       | otherwise = seen
     rename n = maybe n label (Map.lookup n labels)
     label k = Name ("#" <> Text.justifyRight 6 '0' (tshow (k :: Int)))

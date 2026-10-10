@@ -12,6 +12,7 @@ module Gin.Netlist.BuildSpec
   ) where
 
 import Control.Exception (evaluate)
+import Control.Lens (toListOf)
 import Control.Monad (guard, unless)
 import Data.Bits (testBit)
 import Data.Char (GeneralCategory (..), chr, generalCategory, isAsciiLower, toUpper)
@@ -1085,20 +1086,13 @@ closeRegister scope b = case nbRhs b of
 pruneDead :: [NOutput] -> [NBind] -> [NBind]
 pruneDead outputs binds = filter ((`Set.member` live) . nbName) binds
   where
-    deps = Map.fromList [(nbName b, [n | AVar n <- rhsAtoms (nbRhs b)]) | b <- binds]
+    deps = Map.fromList [(nbName b, toListOf (nbRhsL . rhsAtoms . _AVar) b) | b <- binds]
     live = reach Set.empty [n | NOutput _ _ (AVar n) <- outputs]
     reach seen = \case
       [] -> seen
       n : rest
         | n `Set.member` seen -> reach seen rest
         | otherwise -> reach (Set.insert n seen) (Map.findWithDefault [] n deps <> rest)
-
-rhsAtoms :: NRhs -> [Atom]
-rhsAtoms = \case
-  NPrim _ as -> as
-  NMux c t e -> [c, t, e]
-  NReg _ a -> [a]
-  NAtom a -> [a]
 
 ----------------------------------------------------------------------
 -- precondition violations

@@ -1,3 +1,5 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 -- | Uniform error type for every compiler stage.
 --
 -- Every stage function returns @Either GinError a@; stages never throw. I
@@ -12,11 +14,26 @@ module Gin.Error
   , safeLine
   , maxRenderedLine
   , invisible
+
+    -- * Optics
+  , _StDecode
+  , _StCheck
+  , _StCertificate
+  , _StNormalize
+  , _StNetlist
+  , _StBackend
+  , _StSim
+  , _StDriver
+  , errStageL
+  , errMessageL
+  , errContextL
   ) where
 
+import Control.Lens (makePrisms)
 import Data.Char (GeneralCategory (..), generalCategory, ord)
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Gin.Core.Optics (makeFieldLenses)
 import Numeric (showHex)
 
 -- | The pipeline stage that produced an error.
@@ -95,3 +112,9 @@ invisible :: Char -> Bool
 invisible c =
   generalCategory c
     `elem` [Control, Format, LineSeparator, ParagraphSeparator, Surrogate, PrivateUse, NotAssigned]
+
+----------------------------------------------------------------------
+-- Optics
+
+makePrisms ''Stage
+makeFieldLenses ''GinError

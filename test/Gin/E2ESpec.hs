@@ -71,12 +71,14 @@ import Gin.Core.Syntax
   , Def (..)
   , Domain (..)
   , Expr (..)
+  , Name
   , Port (..)
   , PrimOp (..)
   , Program (..)
   , TopEntity (..)
   , Ty (..)
   , Value (..)
+  , mkTuple
   , tFuns
   , validValue
   , valueTy
@@ -102,7 +104,7 @@ import Gin.Netlist.Types
   )
 import Gin.Normalize (checkNormal, normalize)
 import Gin.Sim (isBudgetError, simulateCore, simulateNormal)
-import Gin.TestUtil (itWithTools, runTool, tshow, withTempDir)
+import Gin.TestUtil (ifE, itWithTools, runTool, tshow, withTempDir)
 import Gin.Vectors (Cycle (..), Vectors (..))
 import Numeric.Natural (Natural)
 import System.Exit (ExitCode (..))
@@ -202,7 +204,7 @@ circuitSpec c = do
 
 -- | A program fault is caught by the core IR simulator, and normalization
 -- carries the fault into the normal form unchanged.
-coreFaultSpec :: String -> (Program -> Program) -> Example -> Spec
+coreFaultSpec :: String -> (Program Ty Name -> Program Ty Name) -> Example -> Spec
 coreFaultSpec tag fault ex = do
   it ("[" <> tag <> "] " <> exName ex <> ": simulateCore disagrees with the vectors") $ do
     faulty `shouldNotBe` p
@@ -281,7 +283,7 @@ data Example = Example
   { exName :: !String
   , exTag :: !String
   -- ^ The tag of the pipeline items run on it.
-  , exProgram :: !Program
+  , exProgram :: !(Program Ty Name)
   , exVectors :: !Vectors
   }
 
@@ -317,7 +319,7 @@ wideStepTrue, wideStepFalse :: Integer
 wideStepTrue = 1
 wideStepFalse = 2 ^ (wideWidth - 1) + 5
 
-wideProgram :: Program
+wideProgram :: Program Ty Name
 wideProgram =
   Program
     { progProducer = progProducer counterProgram
@@ -347,14 +349,13 @@ wideProgram =
     step =
       ELam [("st", stateTy), ("unused", TBool)] $
         ELet
-          False
           [Bind "f" TBool (EProj 0 (EVar "st")), Bind "a" accTy (EProj 1 (EVar "st"))]
-          ( ETuple
-              [ ETuple
+          ( mkTuple
+              [ mkTuple
                   [ EApp (prim BoolNot [TBool] TBool) [EVar "f"]
-                  , EIf (EVar "f") (add wideStepTrue) (add wideStepFalse)
+                  , ifE (EVar "f") (add wideStepTrue) (add wideStepFalse)
                   ]
-              , ETuple [EVar "f", EVar "a"]
+              , mkTuple [EVar "f", EVar "a"]
               ]
           )
     add k = EApp (prim BvAdd [accTy, accTy] accTy) [EVar "a", ELit (VBV wideWidth k)]
@@ -404,7 +405,7 @@ data Compiled = Compiled
   }
 
 -- | Every stage after decoding, in the order the compiler runs them.
-compile :: Program -> Either GinError Compiled
+compile :: Program Ty Name -> Either GinError Compiled
 compile p = do
   checkProgram p
   checkCertificate defaultPolicy (progCertificate p)
@@ -419,20 +420,20 @@ stage what result k = case result of
   Right a -> k a
 
 -- | Decode a circuit's program and vectors.
-withDecoded :: Circuit -> (Program -> Vectors -> Expectation) -> Expectation
+withDecoded :: Circuit -> (Program Ty Name -> Vectors -> Expectation) -> Expectation
 withDecoded c k = do
   (programJson, vectorsJson) <- circLoad c
   stage "decoding the program" (decodeProgram programJson) $ \p ->
     stage "decoding the vectors" (decodeVectors vectorsJson) (k p)
 
 -- | Decode and compile a circuit.
-withCompiled :: Circuit -> (Program -> Vectors -> Compiled -> Expectation) -> Expectation
+withCompiled :: Circuit -> (Program Ty Name -> Vectors -> Compiled -> Expectation) -> Expectation
 withCompiled c k = withDecoded c $ \p vs -> stage "compiling" (compile p) (k p vs)
 
 -- | The vectors describe the program's top entity, and the netlist keeps
 -- its name and ports unchanged (they are the hardware interface), as the
 -- testbench generators require.
-interfaceAgrees :: Program -> Vectors -> Compiled -> Expectation
+interfaceAgrees :: Program Ty Name -> Vectors -> Compiled -> Expectation
 interfaceAgrees p vs comp = do
   vecTop vs `shouldBe` topName top
   vecInputs vs `shouldBe` topInputs top
@@ -463,7 +464,7 @@ cycleCount = length . vecCycles
 -- | 'simulateCore' with its error rendered. An inconclusive result (the
 -- simulator exceeded a bound, 'isBudgetError') is labelled as such; the
 -- examples are far inside the bounds, so any error fails a test.
-runCore :: Program -> [[Value]] -> Either Text [[Value]]
+runCore :: Program Ty Name -> [[Value]] -> Either Text [[Value]]
 runCore p rows = first describeError (simulateCore p rows)
   where
     describeError e
@@ -475,7 +476,7 @@ runNormal :: NModule -> [[Value]] -> Either Text [[Value]]
 runNormal m rows = first renderError (simulateNormal m rows)
 
 -- | Both reference simulators reproduce the expected output rows.
-simulatorsReproduce :: Program -> NModule -> Vectors -> Expectation
+simulatorsReproduce :: Program Ty Name -> NModule -> Vectors -> Expectation
 simulatorsReproduce p m vs = do
   runCore p (inputRows vs) `shouldBe` Right (outputRows vs)
   runNormal m (inputRows vs) `shouldBe` Right (outputRows vs)
@@ -492,7 +493,7 @@ disagrees expected = \case
 -- | On random input rows, the core IR simulator gives the same output rows
 -- as the normal-form simulator on the normalized program, one row per
 -- input row, each of the output port types.
-coreAgreesWithNormal :: Program -> Property
+coreAgreesWithNormal :: Program Ty Name -> Property
 coreAgreesWithNormal p = case normalize p of
   Left e -> counterexample (Text.unpack (renderError e)) False
   Right m ->
@@ -513,7 +514,7 @@ coreAgreesWithNormal p = case normalize p of
 
 -- | Run a property on a generator of input rows for these ports, or fail
 -- if a port type has no generator (ports are always scalar).
-withRowGen :: [Port] -> (Gen [[Value]] -> Property) -> Property
+withRowGen :: [Port Ty] -> (Gen [[Value]] -> Property) -> Property
 withRowGen ports k = case traverse (portValue . portTy) ports of
   Nothing -> counterexample "a port type is not scalar" False
   Just values -> k (sized (\n -> choose (0, min 64 n)) >>= \len -> vectorOf len (sequence values))
@@ -549,7 +550,7 @@ shrinkValue = \case
 
 -- | Replace every @bv.add@ by @bv.sub@ at the same type: still well typed,
 -- but a different circuit.
-addBecomesSub :: Program -> Program
+addBecomesSub :: Program Ty Name -> Program Ty Name
 addBecomesSub p = p {progDefs = fmap mutate (progDefs p)}
   where
     mutate d = d {defBody = rewrite toSub (defBody d)}
@@ -558,7 +559,7 @@ addBecomesSub p = p {progDefs = fmap mutate (progDefs p)}
       e -> e
 
 -- | Apply a function to every subexpression, innermost first.
-rewrite :: (Expr -> Expr) -> Expr -> Expr
+rewrite :: (Expr Ty Name -> Expr Ty Name) -> Expr Ty Name -> Expr Ty Name
 rewrite f = go
   where
     go e = f $ case e of
@@ -568,10 +569,12 @@ rewrite f = go
       EPrim _ _ -> e
       EApp g args -> EApp (go g) (fmap go args)
       ELam binders body -> ELam binders (go body)
-      ELet isRec binds body -> ELet isRec [b {bindExpr = go (bindExpr b)} | b <- binds] (go body)
+      ELet binds body -> ELet (fmap goBind binds) (go body)
+      ELetRec binds body -> ELetRec (fmap goBind binds) (go body)
       ETuple es -> ETuple (fmap go es)
       EProj i x -> EProj i (go x)
-      EIf c t x -> EIf (go c) (go t) (go x)
+      EIf arms x -> EIf [(go c, go t) | (c, t) <- arms] (go x)
+    goBind b = b {bindExpr = go (bindExpr b)}
 
 -- | Swap the branches of the first mux, in bind order.
 swapFirstMux :: NModule -> Maybe NModule
@@ -587,7 +590,7 @@ swapFirstMux m = case break isMux (nmBinds m) of
 -- | Replace the initial value of every register and Mealy machine with
 -- zero (all bits clear) at the same type: still well typed, but a
 -- different circuit unless every initial value was already zero.
-initsZeroedProgram :: Program -> Program
+initsZeroedProgram :: Program Ty Name -> Program Ty Name
 initsZeroedProgram p = p {progDefs = fmap mutate (progDefs p)}
   where
     mutate d = d {defBody = rewrite toZero (defBody d)}
@@ -826,7 +829,7 @@ shouldFailWith what n expected result@(_, out, _) =
 
 -- | The (cycle, port) pairs at which the actual output rows differ from
 -- the expected ones, in cycle order and port order within a cycle.
-mismatches :: [Port] -> [[Value]] -> [[Value]] -> [(Int, Text)]
+mismatches :: [Port Ty] -> [[Value]] -> [[Value]] -> [(Int, Text)]
 mismatches ports expected actual =
   [ (t, portName port)
   | (t, want, got) <- zip3 [0 ..] expected actual

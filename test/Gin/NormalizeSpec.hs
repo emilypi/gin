@@ -20,45 +20,45 @@ import Gin.Examples
 import Gin.Limits (maxNormalBinds)
 import Gin.Normalize (checkNormal, normalize)
 import Gin.Sim (simulateCore, simulateNormal)
-import Gin.TestUtil (tshow)
+import Gin.TestUtil (ifE, tshow)
 import System.Timeout (timeout)
 import Test.Hspec
 
 ----------------------------------------------------------------------
 -- Building programs
 
-prim :: PrimOp -> [Ty] -> Ty -> Expr
+prim :: PrimOp -> [Ty] -> Ty -> Expr Ty Name
 prim op args res = EPrim op (tFuns args res)
 
-var :: Text -> Expr
+var :: Text -> Expr Ty Name
 var = EVar . Name
 
-lit8 :: Integer -> Expr
+lit8 :: Integer -> Expr Ty Name
 lit8 = ELit . VBV 8
 
-bin8 :: PrimOp -> Expr -> Expr -> Expr
+bin8 :: PrimOp -> Expr Ty Name -> Expr Ty Name -> Expr Ty Name
 bin8 op a b = EApp (prim op [bv 8, bv 8] (bv 8)) [a, b]
 
-not8 :: Expr -> Expr
+not8 :: Expr Ty Name -> Expr Ty Name
 not8 a = EApp (prim BvNot [bv 8] (bv 8)) [a]
 
-eq8 :: Expr -> Expr -> Expr
+eq8 :: Expr Ty Name -> Expr Ty Name -> Expr Ty Name
 eq8 a b = EApp (prim BvEq [bv 8, bv 8] TBool) [a, b]
 
 -- | @\\z -> z + k@ on 8-bit vectors.
-addK :: Integer -> Expr
+addK :: Integer -> Expr Ty Name
 addK k = ELam [("z", bv 8)] (bin8 BvAdd (var "z") (lit8 k))
 
 -- | @sig.lift k f s1 .. sk@ for argument types @as@ and result type @r@.
-lift :: [Ty] -> Ty -> Expr -> [Expr] -> Expr
+lift :: [Ty] -> Ty -> Expr Ty Name -> [Expr Ty Name] -> Expr Ty Name
 lift as r f ss =
   EApp (prim (SigLift (fromIntegral (length as))) (tFuns as r : fmap sig as) (sig r)) (f : ss)
 
-register :: Value -> Expr -> Expr
+register :: Value -> Expr Ty Name -> Expr Ty Name
 register v s = EApp (prim (SigRegister v) [sig (valueTy v)] (sig (valueTy v))) [s]
 
 -- | A program whose top entity is the definition @Test.top@.
-program :: Text -> [Port] -> [Port] -> [Def] -> Program
+program :: Text -> [Port Ty] -> [Port Ty] -> [Def Ty Name] -> Program Ty Name
 program name ins outs defs =
   Program
     { progProducer = Producer "gin-test" "n/a"
@@ -75,7 +75,7 @@ program name ins outs defs =
     }
 
 -- | @Test.top@ as a lambda over input signals named like the ports.
-mkTop :: [(Text, Ty)] -> Ty -> Expr -> Def
+mkTop :: [(Text, Ty)] -> Ty -> Expr Ty Name -> Def Ty Name
 mkTop ins out body = Def "Test.top" (tFuns (fmap (sig . snd) ins) (sig out)) lams
   where
     lams = case ins of
@@ -100,48 +100,47 @@ normalForm name ins outs binds =
 -- > counter en = let rec c = register 0 (lift2 (\e v -> if e then v + 1 else v) en c) in c
 --
 -- Without the register, @c@ depends on itself within the cycle.
-recCounter :: Bool -> Program
+recCounter :: Bool -> Program Ty Name
 recCounter withRegister =
   program "counter" [Port "en" TBool] [Port "count" (bv 8)] [mkTop [("en", TBool)] (bv 8) body]
   where
-    step = ELam [("e", TBool), ("v", bv 8)] (EIf (var "e") (EApp (addK 1) [var "v"]) (var "v"))
+    step = ELam [("e", TBool), ("v", bv 8)] (ifE (var "e") (EApp (addK 1) [var "v"]) (var "v"))
     lifted = lift [TBool, bv 8] (bv 8) step [var "en", var "c"]
     next = if withRegister then register (VBV 8 0) lifted else lifted
-    body = ELet True [Bind "c" (sig (bv 8)) next] (var "c")
+    body = ELetRec [Bind "c" (sig (bv 8)) next] (var "c")
 
 -- | 'counterNormal' as produced from a program built with 'program'.
 recCounterNormal :: NModule
 recCounterNormal = counterNormal {nmCertificate = testCertificate "Test.top_correct"}
 
 -- > a = lift (+ 1) b; b = lift (+ 1) a   (or b = register 0 a)
-mutualRec :: Bool -> Program
+mutualRec :: Bool -> Program Ty Name
 mutualRec withRegister =
   program "mutual" [Port "x" (bv 8)] [Port "y" (bv 8)] [mkTop [("x", bv 8)] (bv 8) body]
   where
     a = lift [bv 8] (bv 8) (addK 1) [var "b"]
     b = if withRegister then register (VBV 8 0) (var "a") else lift [bv 8] (bv 8) (addK 1) [var "a"]
-    body = ELet True [Bind "a" (sig (bv 8)) a, Bind "b" (sig (bv 8)) b] (var "a")
+    body = ELetRec [Bind "a" (sig (bv 8)) a, Bind "b" (sig (bv 8)) b] (var "a")
 
 -- > free = let rec c = register 0 (lift (+ 1) c) in c   -- no inputs at all
-freeCounter :: Program
+freeCounter :: Program Ty Name
 freeCounter =
   program "free" [] [Port "count" (bv 8)] [Def "Test.top" (sig (bv 8)) body]
   where
     body =
-      ELet
-        True
+      ELetRec
         [Bind "c" (sig (bv 8)) (register (VBV 8 0) (lift [bv 8] (bv 8) (addK 1) [var "c"]))]
         (var "c")
 
 -- > fib _ = mealy (\st _ -> ((st.1, st.0 + st.1), st.0)) (0, 1)
-fibProgram :: Program
+fibProgram :: Program Ty Name
 fibProgram = program "fib" [Port "en" TBool] [Port "f" (bv 8)] [mkTop [("en", TBool)] (bv 8) body]
   where
     stTy = TProd [bv 8, bv 8]
     st i = EProj i (var "st")
     step =
       ELam [("st", stTy), ("e", TBool)] $
-        ETuple [ETuple [st 1, bin8 BvAdd (st 0) (st 1)], st 0]
+        mkTuple [mkTuple [st 1, bin8 BvAdd (st 0) (st 1)], st 0]
     mealyTy = [tFuns [stTy, TBool] (TProd [stTy, bv 8]), sig TBool]
     body = EApp (prim (SigMealy (VTuple [VBV 8 0, VBV 8 1])) mealyTy (sig (bv 8))) [step, var "en"]
 
@@ -157,7 +156,7 @@ fibNormal =
     ]
 
 -- > pairReg x b = register (0, true) (lift2 (,) x b)
-pairRegister :: Program
+pairRegister :: Program Ty Name
 pairRegister =
   program
     "pairreg"
@@ -166,7 +165,7 @@ pairRegister =
     [mkTop [("x", bv 8), ("b", TBool)] pairTy body]
   where
     pairTy = TProd [bv 8, TBool]
-    pair = ELam [("u", bv 8), ("c", TBool)] (ETuple [var "u", var "c"])
+    pair = ELam [("u", bv 8), ("c", TBool)] (mkTuple [var "u", var "c"])
     paired = lift [bv 8, TBool] pairTy pair [var "x", var "b"]
     body = register (VTuple [VBV 8 0, VBool True]) paired
 
@@ -183,18 +182,17 @@ pairRegisterNormal =
 -- | Bodies for 'withBody' that return the input @x@ next to a recursive
 -- binding that depends on itself within the cycle but that no output
 -- reads.
-deadLoops :: [(String, Expr)]
+deadLoops :: [(String, Expr Ty Name)]
 deadLoops =
-  [ ("a binding defined as itself", ELet True [Bind "d" (sig (bv 8)) (var "d")] (var "x"))
+  [ ("a binding defined as itself", ELetRec [Bind "d" (sig (bv 8)) (var "d")] (var "x"))
   ,
     ( "a combinational loop through sig.lift"
-    , ELet True [Bind "d" (sig (bv 8)) (lift [bv 8] (bv 8) (addK 1) [var "d"])] (var "x")
+    , ELetRec [Bind "d" (sig (bv 8)) (lift [bv 8] (bv 8) (addK 1) [var "d"])] (var "x")
     )
   ,
     ( "a tuple component defined as itself"
-    , ELet
-        True
-        [Bind "p" (TProd [sig (bv 8), sig (bv 8)]) (ETuple [var "x", EProj 1 (var "p")])]
+    , ELetRec
+        [Bind "p" (TProd [sig (bv 8), sig (bv 8)]) (mkTuple [var "x", EProj 1 (var "p")])]
         (EProj 0 (var "p"))
     )
   ]
@@ -205,18 +203,18 @@ rows8 = [[VBV 8 1], [VBV 8 255], [VBV 8 0]]
 
 -- | A program from 8-bit input @x@ to 8-bit output @y@ whose top
 -- definition has the given type and body.
-withTop :: Text -> Ty -> Expr -> Program
+withTop :: Text -> Ty -> Expr Ty Name -> Program Ty Name
 withTop name ty body = program name [Port "x" (bv 8)] [Port "y" (bv 8)] [Def "Test.top" ty body]
 
 -- | Like 'withTop', with the body under a lambda binding the input signal @x@.
-withBody :: Text -> Expr -> Program
+withBody :: Text -> Expr Ty Name -> Program Ty Name
 withBody name body = withTop name sigFun8 (ELam [("x", sig (bv 8))] body)
 
 sigFun8 :: Ty
 sigFun8 = TFun (sig (bv 8)) (sig (bv 8))
 
 -- | A one-input, one-output program applying @f@ pointwise.
-pointwise :: Text -> Expr -> Program
+pointwise :: Text -> Expr Ty Name -> Program Ty Name
 pointwise name f =
   program
     name
@@ -225,7 +223,7 @@ pointwise name f =
     [mkTop [("x", bv 8)] (bv 8) (lift [bv 8] (bv 8) f [var "x"])]
 
 -- > lift2 (\a b -> (a + b, a - b)) x y
-twoOutputs :: Program
+twoOutputs :: Program Ty Name
 twoOutputs =
   program
     "two"
@@ -237,13 +235,13 @@ twoOutputs =
     f =
       ELam
         [("a", bv 8), ("b", bv 8)]
-        (ETuple [bin8 BvAdd (var "a") (var "b"), bin8 BvSub (var "a") (var "b")])
+        (mkTuple [bin8 BvAdd (var "a") (var "b"), bin8 BvSub (var "a") (var "b")])
     body = lift [bv 8, bv 8] resTy f [var "x", var "y"]
 
 -- > lift2 (\a b -> (a + b, (a == b, a))) x y
 --
 -- With @flat@, the result is the (ill-formed) flat triple @(a + b, a == b, a)@.
-threeOutputs :: Bool -> Program
+threeOutputs :: Bool -> Program Ty Name
 threeOutputs flat =
   program
     "three"
@@ -254,17 +252,17 @@ threeOutputs flat =
     s = bin8 BvAdd (var "a") (var "b")
     e = eq8 (var "a") (var "b")
     (resTy, result)
-      | flat = (TProd [bv 8, TBool, bv 8], ETuple [s, e, var "a"])
-      | otherwise = (TProd [bv 8, TProd [TBool, bv 8]], ETuple [s, ETuple [e, var "a"]])
+      | flat = (TProd [bv 8, TBool, bv 8], mkTuple [s, e, var "a"])
+      | otherwise = (TProd [bv 8, TProd [TBool, bv 8]], mkTuple [s, mkTuple [e, var "a"]])
     body = lift [bv 8, bv 8] resTy (ELam [("a", bv 8), ("b", bv 8)] result) [var "x", var "y"]
 
 -- | Definitions @Chain.g0 = base@ and @Chain.g(i+1) = \\x -> step Chain.gi x@
 -- over 8-bit vectors, and a top entity applying @Chain.gn@ pointwise to its
 -- input.
-chainProgram :: Int -> Expr -> (Expr -> Expr -> Expr) -> Program
+chainProgram :: Int -> Expr Ty Name -> (Expr Ty Name -> Expr Ty Name -> Expr Ty Name) -> Program Ty Name
 chainProgram = chainProgramOf (bv 8)
 
-chainProgramOf :: Ty -> Int -> Expr -> (Expr -> Expr -> Expr) -> Program
+chainProgramOf :: Ty -> Int -> Expr Ty Name -> (Expr Ty Name -> Expr Ty Name -> Expr Ty Name) -> Program Ty Name
 chainProgramOf ty n base step =
   program "chain" [Port "x" ty] [Port "y" ty] (top : Def (g 0) fTy base : defs)
   where
@@ -276,32 +274,32 @@ chainProgramOf ty n base step =
     top = mkTop [("x", ty)] ty (lift [ty] ty (EGlobal (g n)) [var "x"])
 
 -- | @g(i+1) x = g i (g i x)@ from @g0 x = not x@: @2^n@ distinct binds.
-nestedChain :: Int -> Program
+nestedChain :: Int -> Program Ty Name
 nestedChain n = chainProgram n (ELam [("x", bv 8)] (not8 (var "x"))) twice
 
 -- | @g(i+1) x = g i x + g i x@ from @g0 x = x + x@: the two calls build the
 -- same binds, so the result is small but the inlining work doubles per level.
-sharedChain :: Int -> Program
+sharedChain :: Int -> Program Ty Name
 sharedChain n =
   chainProgram n (ELam [("x", bv 8)] (bin8 BvAdd (var "x") (var "x"))) $ \g x ->
     bin8 BvAdd (EApp g [x]) (EApp g [x])
 
 -- | @g(i+1) x = g i (g i x)@ from @g0 x = x@: exponential work, no binds.
-identityChain :: Int -> Program
+identityChain :: Int -> Program Ty Name
 identityChain n = chainProgram n (ELam [("x", bv 8)] (var "x")) twice
 
 -- | @g(i+1) x = g i (g i x)@ from
 -- @g0 x = (if x then (x, wide) else (x, wide)).0@ with a 10000-component
 -- literal @wide@: every call does work proportional to the width of @wide@
 -- but emits no binds, since both branches agree.
-wideChain :: Int -> Program
+wideChain :: Int -> Program Ty Name
 wideChain n = chainProgramOf TBool n base twice
   where
     wide = ELit (VTuple (replicate 10000 (VBool False)))
-    both = ETuple [var "x", wide]
-    base = ELam [("x", TBool)] (EProj 0 (EIf (var "x") both both))
+    both = mkTuple [var "x", wide]
+    base = ELam [("x", TBool)] (EProj 0 (ifE (var "x") both both))
 
-twice :: Expr -> Expr -> Expr
+twice :: Expr Ty Name -> Expr Ty Name -> Expr Ty Name
 twice g x = EApp g [EApp g [x]]
 
 -- | The right-nested tuple value @(false, (false, .. false))@ with @d@
@@ -313,29 +311,29 @@ deepState d = foldr (\_ v -> VTuple [VBool False, v]) (VBool False) [1 .. d]
 --
 -- The state never changes and the output is the input, so every state
 -- register is dead.
-deepMealy :: Int -> Program
+deepMealy :: Int -> Program Ty Name
 deepMealy d = program "deep" [Port "b" TBool] [Port "o" TBool] [mkTop [("b", TBool)] TBool body]
   where
     v = deepState d
     st = valueTy v
     stepTy = tFuns [st, TBool] (TProd [st, TBool])
-    step = ELam [("st", st), ("i", TBool)] (ETuple [var "st", var "i"])
+    step = ELam [("st", st), ("i", TBool)] (mkTuple [var "st", var "i"])
     body = EApp (prim (SigMealy v) [stepTy, sig TBool] (sig TBool)) [step, var "b"]
 
 -- > deepReg x = let r = register (deepState d) (lift nest x) in lift deepest r
 --
 -- @nest b@ is @(b, (b, .. b))@ with @d@ levels of nesting and @deepest@
 -- projects out its innermost component, so one register is live.
-deepRegister :: Int -> Program
+deepRegister :: Int -> Program Ty Name
 deepRegister d =
   program "deepreg" [Port "x" TBool] [Port "y" TBool] [mkTop [("x", TBool)] TBool body]
   where
     v = deepState d
     t = valueTy v
-    nest = ELam [("b", TBool)] (foldr (\_ e -> ETuple [var "b", e]) (var "b") [1 .. d])
+    nest = ELam [("b", TBool)] (foldr (\_ e -> mkTuple [var "b", e]) (var "b") [1 .. d])
     deepest = ELam [("t", t)] (foldr (\_ e -> EProj 1 e) (var "t") [1 .. d])
     reg = register v (lift [TBool] t nest [var "x"])
-    body = ELet False [Bind "r" (sig t) reg] (lift [t] TBool deepest [var "r"])
+    body = ELet [Bind "r" (sig t) reg] (lift [t] TBool deepest [var "r"])
 
 -- | @TBool@ paired with itself @k@ times. Each level is shared, so the type
 -- takes @k@ steps to build although it has @2^k@ components.
@@ -344,26 +342,26 @@ doubledTy k = foldr (\_ t -> TProd [t, t]) TBool [1 .. k]
 
 -- | @name0 = base; name(i+1) = (namei, namei)@ for @i < k@: @k + 1@ binds
 -- whose last value is a tuple of @2^k@ Bools, shared at every level.
-doublings :: Text -> Expr -> Int -> [Bind]
+doublings :: Text -> Expr Ty Name -> Int -> [Bind Ty Name]
 doublings name base k = [Bind (n i) (doubledTy i) (rhs i) | i <- [0 .. k]]
   where
     n i = Name (name <> tshow i)
-    rhs i = if i == 0 then base else ETuple [EVar (n (i - 1)), EVar (n (i - 1))]
+    rhs i = if i == 0 then base else mkTuple [EVar (n (i - 1)), EVar (n (i - 1))]
 
 -- | Component 0, @k@ times over.
-firsts :: Int -> Expr -> Expr
+firsts :: Int -> Expr Ty Name -> Expr Ty Name
 firsts k e = foldr (\_ -> EProj 0) e [1 .. k]
 
 -- > shared b = lift (\c -> let t0 = c; t(i+1) = (ti, ti) in tk.0 .. .0) b
 --
 -- The value of @tk@ written out as a tree has @2^(k+1) - 1@ nodes, but
 -- evaluating the program takes time linear in @k@.
-sharedTuple :: Int -> Program
+sharedTuple :: Int -> Program Ty Name
 sharedTuple k =
   program "shared" [Port "b" TBool] [Port "o" TBool] [mkTop [("b", TBool)] TBool body]
   where
     tk = var ("t" <> tshow k)
-    f = ELam [("c", TBool)] (ELet False (doublings "t" (var "c") k) (firsts k tk))
+    f = ELam [("c", TBool)] (ELet (doublings "t" (var "c") k) (firsts k tk))
     body = lift [TBool] TBool f [var "b"]
 
 -- > sharedIf b = lift (\c -> let t0 = c; u0 = base; t(i+1) = (ti, ti);
@@ -372,22 +370,22 @@ sharedTuple k =
 --
 -- The branches are built separately but each shares its components at every
 -- level; with @base = c@ they are equal.
-sharedIf :: Expr -> Int -> Program
+sharedIf :: Expr Ty Name -> Int -> Program Ty Name
 sharedIf base k =
   program "sharedif" [Port "b" TBool] [Port "o" TBool] [mkTop [("b", TBool)] TBool body]
   where
     final name = var (name <> tshow k)
     binds = doublings "t" (var "c") k <> doublings "u" base k
-    chosen = EIf (var "c") (final "t") (final "u")
-    f = ELam [("c", TBool)] (ELet False binds (firsts k chosen))
+    chosen = ifE (var "c") (final "t") (final "u")
+    f = ELam [("c", TBool)] (ELet binds (firsts k chosen))
     body = lift [TBool] TBool f [var "b"]
 
 -- > long x = let f1 = \v -> v; f(i+1) = \v -> fi (fi v) in lift fk x
 --
 -- Exponential work without binds, with every binder name @len@ characters
 -- long and sharing a prefix, so that comparing two names costs @len@.
-longNames :: Int -> Int -> Program
-longNames len k = withBody "long" (ELet False (bind1 : fmap bindI [2 .. k]) applied)
+longNames :: Int -> Int -> Program Ty Name
+longNames len k = withBody "long" (ELet (bind1 : fmap bindI [2 .. k]) applied)
   where
     prefix = Text.replicate len "p"
     f i = Name (prefix <> "f" <> tshow i)
@@ -400,11 +398,11 @@ longNames len k = withBody "long" (ELet False (bind1 : fmap bindI [2 .. k]) appl
 
 -- | @g(i+1) x = g i (g i x)@ from @g0 x = let v = not x in v@, with @v@
 -- named by @len@ repetitions of the letter: @2^k@ binds bound to @v@.
-longBinder :: Int -> Int -> Program
+longBinder :: Int -> Int -> Program Ty Name
 longBinder len k = chainProgram k base twice
   where
     v = Name (Text.replicate len "v")
-    base = ELam [("x", bv 8)] (ELet False [Bind v (bv 8) (not8 (var "x"))] (EVar v))
+    base = ELam [("x", bv 8)] (ELet [Bind v (bv 8) (not8 (var "x"))] (EVar v))
 
 -- | A module of @k@ chained @bool.not@ binds, valid for @k <= maxNormalBinds@.
 notChain :: Int -> NModule
@@ -425,7 +423,7 @@ notChain k =
 ----------------------------------------------------------------------
 -- Inspecting results
 
-normalized :: Program -> IO NModule
+normalized :: Program Ty Name -> IO NModule
 normalized p = case normalize p of
   Left e -> fail ("normalize failed: " <> show e)
   Right m -> pure m
@@ -511,14 +509,14 @@ outcomeWithin seconds r =
 
 -- | 'normalized', failing unless normalization finishes within the given
 -- number of seconds.
-normalizedWithin :: Int -> Program -> IO NModule
+normalizedWithin :: Int -> Program Ty Name -> IO NModule
 normalizedWithin seconds p = do
   r <- timeout (seconds * 1000000) (evaluate (normalize p))
   case r of
     Nothing -> fail ("normalize did not finish within " <> show seconds <> " s")
     Just result -> either (fail . show) pure result
 
-shouldTripLimit :: Program -> Text -> Expectation
+shouldTripLimit :: Program Ty Name -> Text -> Expectation
 shouldTripLimit p needle = do
   -- Tripping the evaluation-step budget takes about 10 s on an idle
   -- machine; the margin keeps the test meaningful (a cost that grew with
@@ -617,7 +615,7 @@ mutants =
 
 ----------------------------------------------------------------------
 
-examples :: [(String, Program, NModule)]
+examples :: [(String, Program Ty Name, NModule)]
 examples =
   [ ("counter", counterProgram, counterNormal)
   , ("mac", macProgram, macNormal)
@@ -652,7 +650,7 @@ spec = do
       it "[norm-loop] rejects a feedback path without a register as a combinational loop" $
         normalize (recCounter False) `shouldFailWith` "combinational loop"
       it "[norm-loop] rejects a binding defined as itself" $ do
-        let selfLoop = ELet True [Bind "c" (sig (bv 8)) (var "c")] (var "c")
+        let selfLoop = ELetRec [Bind "c" (sig (bv 8)) (var "c")] (var "c")
         normalize (withBody "self" selfLoop) `shouldFailWith` "combinational loop"
       it "[norm-loop] rejects mutual recursion without a register" $
         normalize (mutualRec False) `shouldFailWith` "combinational loop"
@@ -667,7 +665,7 @@ spec = do
       it "[norm-loop] rejects a recursive let that binds a function" $ do
         let f = ELam [("z", bv 8)] (EApp (var "f") [var "z"])
             applied = lift [bv 8] (bv 8) (var "f") [var "x"]
-            body = ELet True [Bind "f" (TFun (bv 8) (bv 8)) f] applied
+            body = ELetRec [Bind "f" (TFun (bv 8) (bv 8)) f] applied
         normalize (withBody "recfun" body) `shouldFailWith` "function"
       for_ deadLoops $ \(what, body) ->
         it ("[norm-deadloop] removes " <> what <> " that no output reads") $ do
@@ -681,8 +679,7 @@ spec = do
           simulateNormal m rows8 `shouldBe` Right rows8
       it "[norm-deadloop] keeps a live register next to a dead loop" $ do
         let body =
-              ELet
-                True
+              ELetRec
                 [ Bind "d" (sig (bv 8)) (lift [bv 8] (bv 8) (addK 1) [var "d"])
                 , Bind "r" (sig (bv 8)) (register (VBV 8 5) (var "x"))
                 ]
@@ -693,7 +690,7 @@ spec = do
         simulateCore p rows8 `shouldBe` Right [[VBV 8 5], [VBV 8 1], [VBV 8 255]]
         simulateNormal m rows8 `shouldBe` simulateCore p rows8
       it "[norm-deadloop] rejects a copy loop an output reads, as simulateCore does" $ do
-        let p = withBody "live" (ELet True [Bind "c" (sig (bv 8)) (var "c")] (var "c"))
+        let p = withBody "live" (ELetRec [Bind "c" (sig (bv 8)) (var "c")] (var "c"))
         normalize p `shouldFailWith` "combinational loop"
         either (Text.isInfixOf "not productive" . errMessage) (const False) (simulateCore p rows8)
           `shouldBe` True
@@ -704,9 +701,9 @@ spec = do
         -- condition from s within the cycle.
         let f =
               ELam [("v", bv 8), ("a", bv 8)] $
-                EIf (eq8 (var "v") (lit8 0)) (var "a") (bin8 BvAdd (var "a") (lit8 0))
+                ifE (eq8 (var "v") (lit8 0)) (var "a") (bin8 BvAdd (var "a") (lit8 0))
             body =
-              ELet True [Bind "s" (sig (bv 8)) (lift [bv 8, bv 8] (bv 8) f [var "s", var "x"])] (var "s")
+              ELetRec [Bind "s" (sig (bv 8)) (lift [bv 8, bv 8] (bv 8) f [var "s", var "x"])] (var "s")
             p = withBody "agree" body
         normalize p `shouldFailWith` "combinational loop"
         simulateCore p rows8 `shouldBe` Right rows8
@@ -731,16 +728,27 @@ spec = do
         m `shouldNormalizeLike` pairRegisterNormal
       it "selects the branch of an if with a literal condition without a mux" $ do
         let add k = bin8 BvAdd (var "a") (lit8 k)
-            f = ELam [("a", bv 8)] (EIf (ELit (VBool True)) (add 1) (add 2))
+            f = ELam [("a", bv 8)] (ifE (ELit (VBool True)) (add 1) (add 2))
         m <- normalized (pointwise "litif" f)
         fmap nbRhs (nmBinds m) `shouldBe` [NPrim BvAdd [AVar "x", ALit (VBV 8 1)]]
+      it "lowers a multi-way if to one mux per condition" $ do
+        let f =
+              ELam [("a", bv 8)] $
+                EIf [(eq8 (var "a") (lit8 0), lit8 1), (eq8 (var "a") (lit8 1), lit8 2)] (var "a")
+            p = pointwise "multiif" f
+            rows = [[VBV 8 x] | x <- [0, 1, 2, 200]]
+        m <- normalized p
+        checkNormal m `shouldBe` Right ()
+        length (filter isMux (fmap nbRhs (nmBinds m))) `shouldBe` 2
+        simulateCore p rows `shouldBe` Right [[VBV 8 1], [VBV 8 2], [VBV 8 2], [VBV 8 200]]
+        simulateNormal m rows `shouldBe` simulateCore p rows
       it "saturates a partially applied prim" $ do
         m <- normalized (pointwise "partial" (EApp (prim BvAdd [bv 8, bv 8] (bv 8)) [lit8 1]))
         checkNormal m `shouldBe` Right ()
         drivers m `shouldBe` [Right (NPrim BvAdd [ALit (VBV 8 1), AVar "x"])]
       it "keeps bound names distinct from input names that source binders reuse" $ do
         let inc = lift [bv 8] (bv 8) (addK 1) [var "y"]
-            body = ELam [("y", sig (bv 8))] (ELet False [Bind "x" (sig (bv 8)) inc] (var "x"))
+            body = ELam [("y", sig (bv 8))] (ELet [Bind "x" (sig (bv 8)) inc] (var "x"))
         m <- normalized (withTop "names" sigFun8 body)
         checkNormal m `shouldBe` Right ()
         nmInputs m `shouldBe` [("x", bv 8)]
@@ -762,8 +770,8 @@ spec = do
 
     describe "unsupported programs" $ do
       it "rejects an if whose branches carry functions" $ do
-        let branch k = ETuple [addK k, lit8 k]
-            pairIf = EIf (eq8 (var "a") (lit8 0)) (branch 1) (branch 2)
+        let branch k = mkTuple [addK k, lit8 k]
+            pairIf = ifE (eq8 (var "a") (lit8 0)) (branch 1) (branch 2)
             f = ELam [("a", bv 8)] (EApp (EProj 0 pairIf) [var "a"])
         normalize (pointwise "fnif" f) `shouldFailWith` "function"
       it "rejects a function where an output port expects a scalar" $ do
@@ -776,10 +784,10 @@ spec = do
       it "rejects a recursive global instead of looping" $ do
         normalize (withTop "recglobal" sigFun8 (EGlobal "Test.top")) `shouldFailWith` "recursive"
       it "reports the binding and the definitions an error comes from, innermost first" $ do
-        let branch k = ETuple [addK k, lit8 k]
-            bad = EIf (eq8 (var "a") (lit8 0)) (branch 1) (branch 2)
+        let branch k = mkTuple [addK k, lit8 k]
+            bad = ifE (eq8 (var "a") (lit8 0)) (branch 1) (branch 2)
             badTy = TProd [TFun (bv 8) (bv 8), bv 8]
-            helper = ELam [("a", bv 8)] (ELet False [Bind "bad" badTy bad] (var "a"))
+            helper = ELam [("a", bv 8)] (ELet [Bind "bad" badTy bad] (var "a"))
             p = pointwise "where" (EGlobal "Test.helper")
             r = normalize p {progDefs = Def "Test.helper" (TFun (bv 8) (bv 8)) helper : progDefs p}
         r `shouldFailWith` "function"

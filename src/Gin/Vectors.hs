@@ -13,12 +13,12 @@ module Gin.Vectors
   ) where
 
 import Data.Text (Text)
-import Gin.Core.Syntax (Port, Value)
+import Gin.Core.Syntax (Port, Ty, Value)
 
 data Vectors = Vectors
   { vecTop :: !Text
-  , vecInputs :: ![Port]
-  , vecOutputs :: ![Port]
+  , vecInputs :: ![Port Ty]
+  , vecOutputs :: ![Port Ty]
   , vecCycles :: ![Cycle]
   }
   deriving stock (Eq, Show)

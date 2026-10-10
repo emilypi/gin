@@ -1162,7 +1162,7 @@ hdlTools, verilogTools :: [String]
 hdlTools = verilogTools <> ["nvc"]
 verilogTools = ["iverilog", "vvp", "verilator"]
 
-writeProgram :: FilePath -> String -> Program -> IO FilePath
+writeProgram :: FilePath -> String -> Program Ty Name -> IO FilePath
 writeProgram dir name p = do
   let file = dir </> (name <> ".gin.json")
   LBS.writeFile file (encodeProgram p)
@@ -1183,7 +1183,7 @@ writeRaw dir name content = do
 readText :: FilePath -> IO Text
 readText file = Text.decodeUtf8 <$> BS.readFile file
 
-netlistOf :: Program -> IO Module
+netlistOf :: Program Ty Name -> IO Module
 netlistOf p = case normalize p >>= buildNetlist of
   Right m -> pure m
   Left e -> fail ("fixture does not compile: " <> show e)
@@ -1236,24 +1236,24 @@ everyCommand file vecs out =
 specFixture :: FilePath
 specFixture = "test/fixtures/ir/counter-spec.canonical.json"
 
-decodeFixture :: FilePath -> IO Program
+decodeFixture :: FilePath -> IO (Program Ty Name)
 decodeFixture path = do
   bytes <- LBS.readFile path
   either (fail . Text.unpack . renderError) pure (decodeProgram bytes)
 
-withTop :: (TopEntity -> TopEntity) -> Program -> Program
+withTop :: (TopEntity Ty Name -> TopEntity Ty Name) -> Program Ty Name -> Program Ty Name
 withTop f p = p {progTop = f (progTop p)}
 
 -- | counter whose top definition does not exist: a type error.
-missingTopDef :: Program
+missingTopDef :: Program Ty Name
 missingTopDef = withTop (\t -> t {topDef = "Counter.missing"}) counterProgram
 
 -- | counter with its input port named @clk@, which collides with the clock
 -- every module gets: the checker rejects it.
-clockPort :: Program
+clockPort :: Program Ty Name
 clockPort = withTop (\t -> t {topInputs = [Port "clk" TBool]}) counterProgram
 
-counterWithAxioms :: [Text] -> Program
+counterWithAxioms :: [Text] -> Program Ty Name
 counterWithAxioms axioms =
   counterProgram {progCertificate = (progCertificate counterProgram) {certAxioms = axioms}}
 
@@ -1299,7 +1299,7 @@ detectorMissingHit =
 -- | @g0 v = v@ and @gi v = g(i-1) (g(i-1) v)@, with @gk@ lifted over the
 -- input: the identity, which normalizes to no binds at all but costs the
 -- core simulator about @7 * 2^k@ evaluation steps a cycle.
-doublingProgram :: Int -> Program
+doublingProgram :: Int -> Program Ty Name
 doublingProgram k =
   Program
     { progProducer = Producer "gin-driver-spec" "n/a"
@@ -1318,7 +1318,7 @@ doublingProgram k =
     top = ELam [("x", sig (bv 8))] (EApp (lift1 (bv 8) (bv 8)) [EGlobal (doublingName k), EVar "x"])
 
 -- | The functions @g0@ to @gk@ of 'doublingProgram'.
-doublingDefs :: Int -> [Def]
+doublingDefs :: Int -> [Def Ty Name]
 doublingDefs k = fmap g [0 .. k]
   where
     fn = TFun (bv 8) (bv 8)
@@ -1332,7 +1332,7 @@ doublingName :: Int -> Name
 doublingName i = Name (Text.pack ("D.g" <> show i))
 
 -- | @sig.lift 1@ at the given argument and result types.
-lift1 :: Ty -> Ty -> Expr
+lift1 :: Ty -> Ty -> Expr Ty Name
 lift1 a r = EPrim (SigLift 1) (tFuns [TFun a r, sig a] (sig r))
 
 doublingVectors :: Vectors
@@ -1349,7 +1349,7 @@ doublingVectors =
 -- the identity lifts, but the core simulator builds one network node per
 -- lift and reaches its node cap (@2^18@) while building the top
 -- definition, so its name ends up in the inconclusive message.
-constantBudgetProgram :: Text -> Program
+constantBudgetProgram :: Text -> Program Ty Name
 constantBudgetProgram topDefName =
   Program
     { progProducer = Producer "gin-driver-spec" "n/a"
@@ -1389,7 +1389,7 @@ constantBudgetVectors =
 -- @fk@ squares @2^k@ times; the output is whether @fk (zext b + c)@ is
 -- below @2^4095@. Every cycle costs either simulator @2^k@ multiplications
 -- of 4096-bit numbers, all within its bounds.
-squaringProgram :: Int -> Program
+squaringProgram :: Int -> Program Ty Name
 squaringProgram k =
   Program
     { progProducer = Producer "gin-driver-spec" "n/a"

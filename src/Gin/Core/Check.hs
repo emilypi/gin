@@ -26,6 +26,7 @@ import Control.Monad (foldM, foldM_, unless, when, zipWithM_)
 import Control.Monad.State.Strict (StateT, evalStateT, get, lift, put)
 import Data.Bifunctor (first)
 import Data.Foldable (foldrM, for_, toList, traverse_)
+import Data.IntMap.Strict qualified as IntMap
 import Data.List (intercalate)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -43,18 +44,19 @@ import Numeric.Natural (Natural)
 
 -- | Full static check. Errors use 'StCheck'. Enforces: unique def names;
 -- every 'EGlobal' resolves; no recursion among globals (direct or
--- mutual); lexical scoping as documented on 'ELet'; binder names within
--- one 'ELam' binder list, and within one 'ELet' bind list, are pairwise
--- distinct; prim instantiated types match the rules in "Gin.Core.Prim",
--- including value/type agreement for register and mealy initial values;
--- application argument types match; an 'EIf' condition is 'TBool' and its
--- branches agree and are neither signals nor functions; projections are
--- in range; every 'Value' is valid ('validValue'); and the 'TopEntity'
--- rules, including scalar ports, a legal top name, port names that are
--- legal identifiers ('isLegalIdent'), pairwise distinct and different from
--- @clk@, @rst@ and the top name, and every signal in the top entity's
--- domain.
-checkProgram :: Program -> Either GinError ()
+-- mutual); lexical scoping as documented on 'ELet' and 'ELetRec'; binder
+-- names within one 'ELam' binder list, and within one 'ELet' or 'ELetRec'
+-- bind list, are pairwise distinct; prim instantiated types match the
+-- rules in "Gin.Core.Prim", including value/type agreement for register
+-- and mealy initial values; application argument types match; an 'EIf'
+-- has at least one condition, every condition is 'TBool', and its
+-- branches agree and are neither signals nor functions; tuple keys are 0
+-- to n-1 and projections are in range; every 'Value' is valid
+-- ('validValue'); and the 'TopEntity' rules, including scalar ports, a
+-- legal top name, port names that are legal identifiers ('isLegalIdent'),
+-- pairwise distinct and different from @clk@, @rst@ and the top name, and
+-- every signal in the top entity's domain.
+checkProgram :: Program Ty Name -> Either GinError ()
 checkProgram p = do
   let top = progTop p
       defs = progDefs p
@@ -75,7 +77,7 @@ checkProgram p = do
     zipWithM_ (checkDef env) defs refs
   checkTopDef declared top
 
-inDef :: Def -> Either GinError a -> Either GinError a
+inDef :: Def Ty Name -> Either GinError a -> Either GinError a
 inDef d = withContext ("in def " <> unName (defName d))
 
 ----------------------------------------------------------------------
@@ -87,7 +89,7 @@ inDef d = withContext ("in def " <> unName (defName d))
 -- which the netlist builder never renames, so they are held to its rules
 -- here: legal identifiers, pairwise distinct, and distinct from the clock
 -- @clk@ and the reset @rst@ every module gets (the top name included).
-checkPorts :: TopEntity -> Either GinError ()
+checkPorts :: TopEntity Ty Name -> Either GinError ()
 checkPorts top = withContext "in top entity" $ do
   unless (isLegalIdent (topName top)) $
     failAt StCheck ("illegal top name " <> showT (topName top) <> ": " <> identRule)
@@ -126,7 +128,7 @@ identRule =
 -- | The top definition's type must be
 -- @Signal d i1 -> .. -> Signal d ik -> Signal d o@ with @o@ the single
 -- output type or the right-nested product of the output types.
-checkTopDef :: Map Name Ty -> TopEntity -> Either GinError ()
+checkTopDef :: Map Name Ty -> TopEntity Ty Name -> Either GinError ()
 checkTopDef globals top = withContext "in top entity" $
   case (Map.lookup (topDef top) globals, fmap portTy (topOutputs top)) of
     (Nothing, _) -> failAt StCheck ("top definition " <> unName (topDef top) <> " is not defined")
@@ -151,7 +153,7 @@ checkTopDef globals top = withContext "in top entity" $
 ----------------------------------------------------------------------
 -- Definitions
 
-defTypes :: [Def] -> Either GinError (Map Name Ty)
+defTypes :: [Def Ty Name] -> Either GinError (Map Name Ty)
 defTypes = foldM insert Map.empty
   where
     insert m d
@@ -161,7 +163,7 @@ defTypes = foldM insert Map.empty
 -- | Depth-first search of the reference graph; a reference back to a
 -- definition still being visited closes a cycle, which is reported in
 -- reference order.
-checkAcyclic :: [Def] -> Either GinError ()
+checkAcyclic :: [Def Ty Name] -> Either GinError ()
 checkAcyclic defs = case foldM (visit [] Set.empty) Set.empty (fmap defName defs) of
   Right _ -> Right ()
   Left cycle' ->
@@ -187,7 +189,7 @@ bindLocals :: [(Name, TyRef)] -> Env -> Env
 bindLocals xs env = env{envLocals = Map.union (Map.fromList xs) (envLocals env)}
 
 -- | Check a definition against its declared type, already interned.
-checkDef :: Env -> Def -> TyRef -> Check ()
+checkDef :: Env -> Def Ty Name -> TyRef -> Check ()
 checkDef env d declared = withContextM ("in def " <> unName (defName d)) $ do
   lift (checkTy env (defTy d))
   actual <- infer env (defBody d)
@@ -311,7 +313,7 @@ intern t = mkTy =<< traverse intern (layerOf t)
 ----------------------------------------------------------------------
 -- Expressions
 
-infer :: Env -> Expr -> Check TyRef
+infer :: Env -> Expr Ty Name -> Check TyRef
 infer env = \case
   EVar n -> lookupIn "unbound variable " n (envLocals env)
   EGlobal n -> lookupIn "unknown global " n (envGlobals env)
@@ -332,48 +334,62 @@ infer env = \case
     refs <- traverse (intern . snd) binders
     res <- infer (bindLocals (zip (fmap fst binders) refs) env) body
     foldrM (\a r -> mkTy (FFun a r)) res refs
-  ELet isRec binds body -> do
-    lift (distinct (fmap bindName binds))
-    lift (traverse_ (checkTy env . bindTy) binds)
-    refs <- traverse (intern . bindTy) binds
-    let locals = zip (fmap bindName binds) refs
+  ELet binds body -> do
+    locals <- letLocals binds
     env' <-
-      if isRec
-        then do
-          let recEnv = bindLocals locals env
-          zipWithM_ (checkBind recEnv) binds refs
-          pure recEnv
-        else
-          foldM
-            (\e (b, local) -> bindLocals [local] e <$ checkBind e b (snd local))
-            env
-            (zip binds locals)
+      foldM
+        (\e (b, local) -> bindLocals [local] e <$ checkBind e b (snd local))
+        env
+        (zip binds locals)
     infer env' body
-  ETuple es -> case es of
-    _ : _ : _ -> mkTy . FProd . Seq.fromList =<< traverse (infer env) es
-    _ -> failAt StCheck "tuple with fewer than two components"
+  ELetRec binds body -> do
+    locals <- letLocals binds
+    let env' = bindLocals locals env
+    zipWithM_ (checkBind env') binds (fmap snd locals)
+    infer env' body
+  ETuple es
+    | IntMap.size es < 2 -> failAt StCheck "tuple with fewer than two components"
+    | not (keyedByPosition es) ->
+        failAt StCheck ("tuple keys are not 0 to " <> showT (IntMap.size es - 1))
+    | otherwise -> mkTy . FProd . Seq.fromList =<< traverse (infer env) (IntMap.elems es)
   EProj i e -> do
     t <- infer env e
     case refLayer t of
-      FProd cs -> case component i cs of
+      -- In time logarithmic in the index, however wide the product.
+      FProd cs -> case Seq.lookup i cs of
         Just c -> pure c
         Nothing ->
           failAt StCheck ("projection index " <> showT i <> " out of range for " <> renderRef t)
       _ -> failAt StCheck ("projection from non-product type " <> renderRef t)
-  EIf c t e -> do
-    ct <- infer env c
-    case refLayer ct of
-      FBool -> pure ()
-      _ -> failAt StCheck ("if condition must be Bool, got " <> renderRef ct)
-    tt <- infer env t
-    et <- infer env e
-    unless (sameTy tt et) $
-      failAt StCheck
-        ("if branches have different types: " <> renderRef tt <> " and " <> renderRef et)
-    unless (refIsData tt) $
-      failAt StCheck ("if branches must be data (no signals or functions), got " <> renderRef tt)
-    pure tt
+  EIf arms e -> case arms of
+    [] -> failAt StCheck "if with no conditions"
+    (c, t) : rest -> do
+      tt <- condition c >> infer env t
+      let sameAs b = do
+            bt <- infer env b
+            unless (sameTy tt bt) $
+              failAt StCheck
+                ("if branches have different types: " <> renderRef tt <> " and " <> renderRef bt)
+      for_ rest $ \(c', t') -> condition c' >> sameAs t'
+      sameAs e
+      unless (refIsData tt) $
+        failAt StCheck ("if branches must be data (no signals or functions), got " <> renderRef tt)
+      pure tt
   where
+    letLocals binds = do
+      lift (distinct (fmap bindName binds))
+      lift (traverse_ (checkTy env . bindTy) binds)
+      refs <- traverse (intern . bindTy) binds
+      pure (zip (fmap bindName binds) refs)
+    -- n distinct keys from 0 to n-1 are exactly 0 .. n-1.
+    keyedByPosition es =
+      fmap fst (IntMap.lookupMin es) == Just 0
+        && fmap fst (IntMap.lookupMax es) == Just (IntMap.size es - 1)
+    condition c = do
+      ct <- infer env c
+      case refLayer ct of
+        FBool -> pure ()
+        _ -> failAt StCheck ("if condition must be Bool, got " <> renderRef ct)
     lookupIn what n scope = maybe (failAt StCheck (what <> unName n)) pure (Map.lookup n scope)
     apply ft (i, arg) = case refLayer ft of
       FFun expected res -> do
@@ -391,13 +407,9 @@ infer env = \case
       _ ->
         failAt StCheck
           ("cannot apply a term of type " <> renderRef ft <> " to argument " <> showT i)
-    -- In time logarithmic in the index, however wide the product.
-    component i cs
-      | i < fromIntegral (Seq.length cs) = Seq.lookup (fromIntegral i) cs
-      | otherwise = Nothing
 
 -- | Check a bind's value against its declared type, already interned.
-checkBind :: Env -> Bind -> TyRef -> Check ()
+checkBind :: Env -> Bind Ty Name -> TyRef -> Check ()
 checkBind env b declared = withContextM ("in bind " <> unName (bindName b)) $ do
   actual <- infer env (bindExpr b)
   unless (sameTy actual declared) $

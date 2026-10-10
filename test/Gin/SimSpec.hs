@@ -18,7 +18,7 @@ import Gin.Error (GinError (..), Stage (..), renderError)
 import Gin.Examples
 import Gin.Sim (isBudgetError, simulateCore, simulateNormal)
 import Gin.Sim.Prim (evalPrim)
-import Gin.TestUtil (tshow)
+import Gin.TestUtil (ifE, tshow)
 import Gin.Vectors (Cycle (..), Vectors (..), maxCycles)
 import Numeric.Natural (Natural)
 import System.Timeout (timeout)
@@ -369,7 +369,7 @@ primLawSpec = do
 ----------------------------------------------------------------------
 -- Example circuits
 
-examples :: [(String, Program, NModule, Vectors)]
+examples :: [(String, Program Ty Name, NModule, Vectors)]
 examples =
   [ ("counter", counterProgram, counterNormal, counterVectors)
   , ("mac", macProgram, macNormal, macVectors)
@@ -393,10 +393,10 @@ coreExampleSpec = do
 ----------------------------------------------------------------------
 -- Building blocks for small programs
 
-prim :: PrimOp -> [Ty] -> Ty -> Expr
+prim :: PrimOp -> [Ty] -> Ty -> Expr Ty Name
 prim op args res = EPrim op (tFuns args res)
 
-var :: Text -> Expr
+var :: Text -> Expr Ty Name
 var = EVar . Name
 
 b4, b8 :: Integer -> Value
@@ -404,37 +404,37 @@ b4 = VBV 4
 b8 = VBV 8
 
 -- | A binary bit-vector prim of width @n@ applied to two operands.
-bvBin :: PrimOp -> Natural -> Expr -> Expr -> Expr
+bvBin :: PrimOp -> Natural -> Expr Ty Name -> Expr Ty Name -> Expr Ty Name
 bvBin op n a b = EApp (prim op [bv n, bv n] (bv n)) [a, b]
 
-bvEq8 :: Expr -> Expr -> Expr
+bvEq8 :: Expr Ty Name -> Expr Ty Name -> Expr Ty Name
 bvEq8 a b = EApp (prim BvEq [bv 8, bv 8] TBool) [a, b]
 
 -- | @bv.add@ at width @n@, unapplied.
-addPrim :: Natural -> Expr
+addPrim :: Natural -> Expr Ty Name
 addPrim n = prim BvAdd [bv n, bv n] (bv n)
 
 -- | @bv.add 1@ at width @n@: a partially applied prim.
-incr :: Natural -> Expr
+incr :: Natural -> Expr Ty Name
 incr n = EApp (addPrim n) [ELit (VBV n 1)]
 
 -- | @sig.lift k f s1 .. sk@ with element types @args@ and result @res@.
-liftE :: [Ty] -> Ty -> Expr -> [Expr] -> Expr
+liftE :: [Ty] -> Ty -> Expr Ty Name -> [Expr Ty Name] -> Expr Ty Name
 liftE args res f ss =
   EApp
     (prim (SigLift (fromIntegral (length args))) (tFuns args res : fmap sig args) (sig res))
     (f : ss)
 
-registerE :: Value -> Expr -> Expr
+registerE :: Value -> Expr Ty Name -> Expr Ty Name
 registerE v s = EApp (prim (SigRegister v) [sig t] (sig t)) [s]
   where
     t = valueTy v
 
-pureE :: Ty -> Expr -> Expr
+pureE :: Ty -> Expr Ty Name -> Expr Ty Name
 pureE t x = EApp (prim SigPure [t] (sig t)) [x]
 
 -- | @sig.mealy v f s@ with input type @i@ and output type @o@.
-mealyE :: Value -> Ty -> Ty -> Expr -> Expr -> Expr
+mealyE :: Value -> Ty -> Ty -> Expr Ty Name -> Expr Ty Name -> Expr Ty Name
 mealyE v i o f s = EApp (prim (SigMealy v) [tFuns [st, i] (TProd [st, o]), sig i] (sig o)) [f, s]
   where
     st = valueTy v
@@ -447,7 +447,7 @@ outputSpine = \case
   [] -> TProd []
 
 -- | A program whose top entity @t@ is the def @T.top@ with the given body.
-programWith :: [Port] -> [Port] -> Expr -> [Def] -> Program
+programWith :: [Port Ty] -> [Port Ty] -> Expr Ty Name -> [Def Ty Name] -> Program Ty Name
 programWith ins outs body defs =
   Program
     { progProducer = Producer "gin-sim-spec" "n/a"
@@ -465,11 +465,11 @@ programWith ins outs body defs =
   where
     topTy = tFuns (fmap (sig . portTy) ins) (sig (outputSpine (fmap portTy outs)))
 
-topProgram :: [Port] -> [Port] -> Expr -> Program
+topProgram :: [Port Ty] -> [Port Ty] -> Expr Ty Name -> Program Ty Name
 topProgram ins outs body = programWith ins outs body []
 
 -- | Lambda over the input signals of the given ports.
-overPorts :: [Port] -> Expr -> Expr
+overPorts :: [Port Ty] -> Expr Ty Name -> Expr Ty Name
 overPorts ps = ELam [(Name (portName p), sig (portTy p)) | p <- ps]
 
 normalModule :: [(Name, Ty)] -> [NOutput] -> [NBind] -> NModule
@@ -510,19 +510,19 @@ timeLimit = 60
 ----------------------------------------------------------------------
 -- Core IR semantics
 
-bv8Ports :: [Text] -> [Port]
+bv8Ports :: [Text] -> [Port Ty]
 bv8Ports = fmap (`Port` bv 8)
 
-ifPorts :: [Port]
+ifPorts :: [Port Ty]
 ifPorts = [Port "c" TBool, Port "a" (bv 8), Port "b" (bv 8)]
 
-ifProgram :: Program
+ifProgram :: Program Ty Name
 ifProgram =
   topProgram ifPorts [Port "o" (bv 8)] . overPorts ifPorts $
     liftE
       [TBool, bv 8, bv 8]
       (bv 8)
-      (ELam [("x", TBool), ("y", bv 8), ("z", bv 8)] (EIf (var "x") (var "y") (var "z")))
+      (ELam [("x", TBool), ("y", bv 8), ("z", bv 8)] (ifE (var "x") (var "y") (var "z")))
       [var "c", var "a", var "b"]
 
 ifRows, ifOutputs :: [[Value]]
@@ -535,7 +535,7 @@ ifRows =
 ifOutputs = [[b8 1], [b8 2], [b8 255], [b8 0]]
 
 -- | Higher-order global applied inside a lifted function.
-twiceProgram :: Program
+twiceProgram :: Program Ty Name
 twiceProgram =
   programWith
     (bv8Ports ["x"])
@@ -557,6 +557,16 @@ coreSemanticsSpec :: Spec
 coreSemanticsSpec = do
   it "[sim-prim-table] if c t e is t when c holds and e otherwise" $
     simulateCore ifProgram ifRows `shouldBe` Right ifOutputs
+  it "[sim-prim-table] a multi-way if is the branch of the first condition that holds" $ do
+    let ports = [Port "c" TBool, Port "d" TBool]
+        f =
+          ELam [("x", TBool), ("y", TBool)] $
+            EIf [(var "x", ELit (b8 1)), (var "y", ELit (b8 2))] (ELit (b8 3))
+        prog =
+          topProgram ports [Port "o" (bv 8)] . overPorts ports $
+            liftE [TBool, TBool] (bv 8) f [var "c", var "d"]
+        rows = [[VBool c, VBool d] | c <- [True, False], d <- [True, False]]
+    simulateCore prog rows `shouldBe` Right [[b8 1], [b8 1], [b8 2], [b8 3]]
   it "[sim-prim-table] sig.pure x is x at every cycle" $ do
     let prog = topProgram [] (bv8Ports ["o"]) (pureE (bv 8) (ELit (b8 42)))
     simulateCore prog (replicate 3 []) `shouldBe` Right (replicate 3 [b8 42])
@@ -592,8 +602,7 @@ coreSemanticsSpec = do
         prog =
           topProgram ports (bv8Ports ["o"]) . overPorts ports $
             ELet
-              False
-              [ Bind "p" (TProd [sig (bv 8), sig (bv 8)]) (ETuple [var "a", var "b"])
+              [ Bind "p" (TProd [sig (bv 8), sig (bv 8)]) (mkTuple [var "a", var "b"])
               , Bind "q" (sig (bv 8)) (EProj 1 (var "p"))
               ]
               ( liftE
@@ -611,7 +620,7 @@ coreSemanticsSpec = do
   it "reports an ill-typed lifted function in the cycle that evaluates it" $ do
     let f =
           ELam [("v", bv 8)] $
-            EIf
+            ifE
               (bvEq8 (var "v") (ELit (b8 3)))
               (bvBin BvAdd 8 (var "v") (ELit (VBool True)))
               (var "v")
@@ -625,12 +634,12 @@ coreSemanticsSpec = do
 -- Recursive lets
 
 -- | @acc = register 0 (acc + x)@, with the binds in the given order.
-accumulator :: [Bind] -> Program
+accumulator :: [Bind Ty Name] -> Program Ty Name
 accumulator binds =
   topProgram (bv8Ports ["x"]) (bv8Ports ["acc"]) . overPorts (bv8Ports ["x"]) $
-    ELet True binds (var "acc")
+    ELetRec binds (var "acc")
 
-accReg, accNext :: Bind
+accReg, accNext :: Bind Ty Name
 accReg = Bind "acc" (sig (bv 8)) (registerE (b8 0) (var "next"))
 accNext = Bind "next" (sig (bv 8)) (liftE [bv 8, bv 8] (bv 8) (addPrim 8) [var "acc", var "x"])
 
@@ -639,13 +648,12 @@ accRows = fmap (pure . b8) [1, 2, 3, 250, 0]
 accOutputs = fmap (pure . b8) [0, 1, 3, 6, 0]
 
 -- | @p = (register 0 (snd p), fst p + 1)@: feedback through a tuple.
-pairCounterProgram :: Program
+pairCounterProgram :: Program Ty Name
 pairCounterProgram =
   topProgram [] [Port "count" (bv 4)] $
-    ELet
-      True
+    ELetRec
       [ Bind "p" (TProd [sig (bv 4), sig (bv 4)]) $
-          ETuple
+          mkTuple
             [ registerE (b4 0) (EProj 1 (var "p"))
             , liftE [bv 4] (bv 4) (incr 4) [EProj 0 (var "p")]
             ]
@@ -654,25 +662,23 @@ pairCounterProgram =
 
 -- | An inner recursive let whose binds read the outer bind @a@:
 -- @a = register 0 b@, @b = a + c@, @c = register 1 b@, so @a@ doubles.
-doublingProgram :: Program
+doublingProgram :: Program Ty Name
 doublingProgram =
   topProgram [] (bv8Ports ["a"]) $
-    ELet True [Bind "a" (sig (bv 8)) (registerE (b8 0) inner)] (var "a")
+    ELetRec [Bind "a" (sig (bv 8)) (registerE (b8 0) inner)] (var "a")
   where
     inner =
-      ELet
-        True
+      ELetRec
         [ Bind "b" (sig (bv 8)) (liftE [bv 8, bv 8] (bv 8) (addPrim 8) [var "a", var "c"])
         , Bind "c" (sig (bv 8)) (registerE (b8 1) (var "b"))
         ]
         (var "b")
 
 -- | A recursive signal next to a non-recursive constant it reads.
-stepProgram :: Program
+stepProgram :: Program Ty Name
 stepProgram =
   topProgram [] (bv8Ports ["s"]) $
-    ELet
-      True
+    ELetRec
       [ Bind "s" (sig (bv 8)) . registerE (b8 0) $
           liftE [bv 8] (bv 8) (ELam [("v", bv 8)] (bvBin BvAdd 8 (var "v") (var "step"))) [var "s"]
       , Bind "step" (bv 8) (ELit (b8 3))
@@ -680,17 +686,16 @@ stepProgram =
       (var "s")
 
 -- | A zero-input top with one recursive Bool signal @s@.
-boolLoop :: Expr -> Program
-boolLoop rhs = topProgram [] [Port "o" TBool] (ELet True [Bind "s" (sig TBool) rhs] (var "s"))
+boolLoop :: Expr Ty Name -> Program Ty Name
+boolLoop rhs = topProgram [] [Port "o" TBool] (ELetRec [Bind "s" (sig TBool) rhs] (var "s"))
 
 -- | A counter that saturates at 3 because its own output, fed back,
 -- enables it: @c = mealy step 0 (lift (\v -> v < 3) c)@. The output of
 -- @step@ is its state, so it does not depend on the enable it computes.
-saturatingProgram :: Expr -> Program
+saturatingProgram :: Expr Ty Name -> Program Ty Name
 saturatingProgram step =
   topProgram [] (bv8Ports ["c"]) $
-    ELet
-      True
+    ELetRec
       [ Bind "c" (sig (bv 8)) . mealyE (b8 0) TBool (bv 8) step $
           liftE [bv 8] TBool (ELam [("v", bv 8)] (bvUlt8 (var "v") (ELit (b8 3)))) [var "c"]
       ]
@@ -699,17 +704,17 @@ saturatingProgram step =
     bvUlt8 a b = EApp (prim BvUlt [bv 8, bv 8] TBool) [a, b]
 
 -- | @\s e -> (if e then s + 1 else s, s)@.
-stepInside :: Expr
+stepInside :: Expr Ty Name
 stepInside =
   ELam [("s", bv 8), ("e", TBool)] $
-    ETuple [EIf (var "e") (EApp (incr 8) [var "s"]) (var "s"), var "s"]
+    mkTuple [ifE (var "e") (EApp (incr 8) [var "s"]) (var "s"), var "s"]
 
 -- | @\s e -> if e then (s + 1, s) else (s, s)@: 'stepInside' with the @if@
 -- outside the pair.
-stepOutside :: Expr
+stepOutside :: Expr Ty Name
 stepOutside =
   ELam [("s", bv 8), ("e", TBool)] $
-    EIf (var "e") (ETuple [EApp (incr 8) [var "s"], var "s"]) (ETuple [var "s", var "s"])
+    ifE (var "e") (mkTuple [EApp (incr 8) [var "s"], var "s"]) (mkTuple [var "s", var "s"])
 
 -- | The normal form of 'saturatingProgram'.
 saturatingNormal :: NModule
@@ -744,15 +749,14 @@ coreLetRecSpec = do
     simulateCore stepProgram (replicate 4 []) `shouldBe` Right (fmap (pure . b8) [0, 3, 6, 9])
   it "[sim-letrec] closes a loop through sig.mealy behind a register" $ do
     let accIn = bvBin BvAdd 8 (var "acc") (var "i")
-        step = ELam [("acc", bv 8), ("i", bv 8)] (ETuple [accIn, accIn])
+        step = ELam [("acc", bv 8), ("i", bv 8)] (mkTuple [accIn, accIn])
         rhs = registerE (b8 1) (mealyE (b8 0) (bv 8) (bv 8) step (var "s"))
-        prog = topProgram [] (bv8Ports ["s"]) (ELet True [Bind "s" (sig (bv 8)) rhs] (var "s"))
+        prog = topProgram [] (bv8Ports ["s"]) (ELetRec [Bind "s" (sig (bv 8)) rhs] (var "s"))
     simulateCore prog (replicate 6 []) `shouldBe` Right (fmap (pure . b8) [1, 1, 2, 4, 8, 16])
   it "[sim-letrec] lets a recursive signal use a non-recursive function of the same let" $ do
     let prog =
           topProgram [] (bv8Ports ["s"]) $
-            ELet
-              True
+            ELetRec
               [ Bind "s" (sig (bv 8)) (registerE (b8 0) (liftE [bv 8] (bv 8) (var "f") [var "s"]))
               , Bind "f" (TFun (bv 8) (bv 8)) $
                   ELam [("v", bv 8)] (bvBin BvAdd 8 (var "v") (ELit (b8 5)))
@@ -771,7 +775,7 @@ coreLetRecSpec = do
           programWith
             []
             (bv8Ports ["s"])
-            (ELet True [Bind "s" sig8 (EApp (EGlobal g) [var "s"])] (var "s"))
+            (ELetRec [Bind "s" sig8 (EApp (EGlobal g) [var "s"])] (var "s"))
             [delayInc, inc]
     simulateCore (through "T.delayInc") (replicate 4 [])
       `shouldBe` Right (fmap (pure . b8) [0, 1, 2, 3])
@@ -789,26 +793,24 @@ coreLetRecSpec = do
     r <- settled (simulateCore (boolLoop (var "s")) (replicate 3 []))
     r `shouldBeSimError` "not productive"
   it "[sim-letrec] rejects a loop through the input of sig.mealy" $ do
-    let step = ELam [("st", TBool), ("i", TBool)] (ETuple [var "st", var "i"])
+    let step = ELam [("st", TBool), ("i", TBool)] (mkTuple [var "st", var "i"])
         prog = boolLoop (mealyE (VBool False) TBool TBool step (var "s"))
     r <- settled (simulateCore prog (replicate 3 []))
     r `shouldBeSimError` "not productive"
   it "[sim-letrec] rejects a loop closed through a nested recursive let" $ do
     let inner =
-          ELet
-            True
+          ELetRec
             [ Bind "b" (sig (bv 8)) (liftE [bv 8, bv 8] (bv 8) (addPrim 8) [var "a", var "c"])
             , Bind "c" (sig (bv 8)) (registerE (b8 0) (var "b"))
             ]
             (var "b")
-        prog = topProgram [] (bv8Ports ["a"]) (ELet True [Bind "a" (sig (bv 8)) inner] (var "a"))
+        prog = topProgram [] (bv8Ports ["a"]) (ELetRec [Bind "a" (sig (bv 8)) inner] (var "a"))
     r <- settled (simulateCore prog (replicate 3 []))
     r `shouldBeSimError` "not productive"
   it "[sim-letrec] rejects a plain value defined in terms of itself" $ do
     let prog =
           topProgram [] (bv8Ports ["o"]) $
-            ELet
-              True
+            ELetRec
               [Bind "k" (bv 8) (bvBin BvAdd 8 (var "k") (ELit (b8 1)))]
               (pureE (bv 8) (var "k"))
     r <- settled (simulateCore prog (replicate 3 []))
@@ -817,14 +819,13 @@ coreLetRecSpec = do
     let five = ELam [("v", bv 8)] (ELit (b8 5))
         prog =
           topProgram [] (bv8Ports ["s"]) $
-            ELet True [Bind "s" (sig (bv 8)) (liftE [bv 8] (bv 8) five [var "s"])] (var "s")
+            ELetRec [Bind "s" (sig (bv 8)) (liftE [bv 8] (bv 8) five [var "s"])] (var "s")
     simulateCore prog (replicate 3 []) `shouldBe` Right (replicate 3 [b8 5])
   it "[sim-letrec] lets a recursive tuple of values read its own components" $ do
     let prog =
           topProgram [] (bv8Ports ["o"]) $
-            ELet
-              True
-              [Bind "p" (TProd [bv 8, bv 8]) (ETuple [ELit (b8 7), EProj 0 (var "p")])]
+            ELetRec
+              [Bind "p" (TProd [bv 8, bv 8]) (mkTuple [ELit (b8 7), EProj 0 (var "p")])]
               (pureE (bv 8) (EProj 1 (var "p")))
     simulateCore prog (replicate 3 []) `shouldBe` Right (replicate 3 [b8 7])
   it "[sim-letrec] feeds back a mealy output that depends only on the state" $ do
@@ -832,39 +833,38 @@ coreLetRecSpec = do
     simulateNormal saturatingNormal (replicate 6 []) `shouldBe` Right saturated
   it "[sim-letrec] gives an if whose condition is fed back the value its branches agree on" $ do
     simulateCore (saturatingProgram stepOutside) (replicate 6 []) `shouldBe` Right saturated
-    let five = ELam [("v", bv 8)] (EIf (bvEq8 (var "v") (ELit (b8 0))) (ELit (b8 5)) (ELit (b8 5)))
+    let five = ELam [("v", bv 8)] (ifE (bvEq8 (var "v") (ELit (b8 0))) (ELit (b8 5)) (ELit (b8 5)))
         prog =
           topProgram [] (bv8Ports ["s"]) $
-            ELet True [Bind "s" (sig (bv 8)) (liftE [bv 8] (bv 8) five [var "s"])] (var "s")
+            ELetRec [Bind "s" (sig (bv 8)) (liftE [bv 8] (bv 8) five [var "s"])] (var "s")
     simulateCore prog (replicate 3 []) `shouldBe` Right (replicate 3 [b8 5])
   it "[sim-letrec] agrees component by component when an if reads its own result" $ do
     -- s = lift (\q -> if q.1 then (3, true) else (4, true)) s: the flag is
     -- true in both branches, so the condition holds and the count is 3.
     let pairTy = TProd [bv 8, TBool]
-        pair n = ETuple [ELit (b8 n), ELit (VBool True)]
-        f = ELam [("q", pairTy)] (EIf (EProj 1 (var "q")) (pair 3) (pair 4))
+        pair n = mkTuple [ELit (b8 n), ELit (VBool True)]
+        f = ELam [("q", pairTy)] (ifE (EProj 1 (var "q")) (pair 3) (pair 4))
         prog =
           topProgram [] (bv8Ports ["o"]) $
-            ELet True [Bind "s" (sig pairTy) (liftE [pairTy] pairTy f [var "s"])] $
+            ELetRec [Bind "s" (sig pairTy) (liftE [pairTy] pairTy f [var "s"])] $
               liftE [pairTy] (bv 8) (ELam [("q", pairTy)] (EProj 0 (var "q"))) [var "s"]
     simulateCore prog (replicate 3 []) `shouldBe` Right (replicate 3 [b8 3])
   it "[sim-letrec] rejects an if fed back through its condition when its branches differ" $ do
-    let f = ELam [("v", bv 8)] (EIf (bvEq8 (var "v") (ELit (b8 0))) (ELit (b8 1)) (ELit (b8 2)))
+    let f = ELam [("v", bv 8)] (ifE (bvEq8 (var "v") (ELit (b8 0))) (ELit (b8 1)) (ELit (b8 2)))
         prog =
           topProgram [] (bv8Ports ["s"]) $
-            ELet True [Bind "s" (sig (bv 8)) (liftE [bv 8] (bv 8) f [var "s"])] (var "s")
+            ELetRec [Bind "s" (sig (bv 8)) (liftE [bv 8] (bv 8) f [var "s"])] (var "s")
     r <- settled (simulateCore prog (replicate 3 []))
     r `shouldBeSimError` "not productive: the value of s at cycle 0 depends on itself"
   it "[sim-letrec] ignores a value that is not productive when no output needs it" $ do
     let prog =
           topProgram [] [Port "o" TBool] $
-            ELet True [Bind "x" (sig TBool) notLoop] (pureE TBool (ELit (VBool True)))
+            ELetRec [Bind "x" (sig TBool) notLoop] (pureE TBool (ELit (VBool True)))
     simulateCore prog (replicate 3 []) `shouldBe` Right (replicate 3 [VBool True])
   it "[sim-letrec] reports a loop behind a register in the cycle that reads it" $ do
     let prog =
           topProgram [] [Port "o" TBool] $
-            ELet
-              True
+            ELetRec
               [Bind "x" (sig TBool) notLoop, Bind "r" (sig TBool) (registerE (VBool False) (var "x"))]
               (var "r")
     simulateCore prog [[]] `shouldBe` Right [[VBool False]]
@@ -876,7 +876,7 @@ coreLetRecSpec = do
     let lshr1 e = EApp (prim (BvLshr 1) [bv 8] (bv 8)) [e]
         pop =
           ELam [("v", bv 8)] $
-            EIf
+            ifE
               (bvEq8 (var "v") (ELit (b8 0)))
               (ELit (b8 0))
               ( bvBin
@@ -887,8 +887,7 @@ coreLetRecSpec = do
               )
         prog =
           topProgram (bv8Ports ["x"]) (bv8Ports ["o"]) . overPorts (bv8Ports ["x"]) $
-            ELet
-              True
+            ELetRec
               [Bind "pop" (TFun (bv 8) (bv 8)) pop]
               (liftE [bv 8] (bv 8) (var "pop") [var "x"])
     simulateCore prog (fmap (pure . b8) [0, 1, 255, 165, 128])
@@ -897,7 +896,7 @@ coreLetRecSpec = do
     let f = Bind "f" (TFun (bv 8) (bv 8)) (ELam [("v", bv 8)] (EApp (var "f") [var "v"]))
         prog =
           topProgram (bv8Ports ["x"]) (bv8Ports ["o"]) . overPorts (bv8Ports ["x"]) $
-            ELet True [f] (liftE [bv 8] (bv 8) (var "f") [var "x"])
+            ELetRec [f] (liftE [bv 8] (bv 8) (var "f") [var "x"])
     r <- settled (simulateCore prog [[b8 1]])
     r `shouldBeSimError` "nested more than 100000"
   where
@@ -910,11 +909,11 @@ coreLetRecSpec = do
 -- | @g0 = \v -> v@ and @gi = \v -> g(i-1) (g(i-1) v)@ for @i = 1 .. k@,
 -- with @gk@ lifted over the input: the identity, at a cost of
 -- @2^(k+1) - 1@ applications, about @9 * 2^k@ evaluation steps, per cycle.
-doublingWork :: Int -> Program
+doublingWork :: Int -> Program Ty Name
 doublingWork = doublingOver (var "v")
 
 -- | 'doublingWork' with @g0 v = base@: @2^k@ calls of @g0@ a cycle.
-doublingOver :: Expr -> Int -> Program
+doublingOver :: Expr Ty Name -> Int -> Program Ty Name
 doublingOver base k =
   programWith
     (bv8Ports ["x"])
@@ -923,11 +922,11 @@ doublingOver base k =
     (doublingDefsWith base k)
 
 -- | The defs @T.g0 .. T.gk@ of 'doublingWork'.
-doublingDefs :: Int -> [Def]
+doublingDefs :: Int -> [Def Ty Name]
 doublingDefs = doublingDefsWith (var "v")
 
 -- | The defs @T.g0 .. T.gk@ of 'doublingOver'.
-doublingDefsWith :: Expr -> Int -> [Def]
+doublingDefsWith :: Expr Ty Name -> Int -> [Def Ty Name]
 doublingDefsWith base k =
   [Def (doubling i) (TFun (bv 8) (bv 8)) (ELam [("v", bv 8)] (body i)) | i <- [0 .. k]]
   where
@@ -938,37 +937,37 @@ doublingDefsWith base k =
 -- | Bodies for @g0 v@ in 'doublingOver' that bind @w@ operands, each a
 -- variable or a literal, and then return @v@, so a call costs about @w@
 -- evaluation steps and does nothing else.
-operandBodies :: [(String, Int -> Expr)]
+operandBodies :: [(String, Int -> Expr Ty Name)]
 operandBodies =
   [ ("component of a tuple of variables", wideTuple (var "v"))
   , ("component of a tuple of literals", wideTuple (ELit (b8 0)))
-  , ("bind of a let", \w -> ELet False (binds w) (var "v"))
-  , ("bind of a recursive let", \w -> ELet True (binds w) (var "v"))
+  , ("bind of a let", \w -> ELet (binds w) (var "v"))
+  , ("bind of a recursive let", \w -> ELetRec (binds w) (var "v"))
   ]
   where
     binds w = [Bind (Name (Text.pack ("a" <> show i))) (bv 8) (var "v") | i <- [1 .. w]]
 
 -- | @let t = (e, .., e) in v@, with @w@ components.
-wideTuple :: Expr -> Int -> Expr
+wideTuple :: Expr Ty Name -> Int -> Expr Ty Name
 wideTuple e w =
-  ELet False [Bind "t" (TProd (replicate w (bv 8))) (ETuple (replicate w e))] (var "v")
+  ELet [Bind "t" (TProd (replicate w (bv 8))) (mkTuple (replicate w e))] (var "v")
 
 -- | @k = g18 7@ in a recursive let, read through @sig.pure@: a constant
 -- that costs about @9 * 2^18@ steps, more than a cycle may take, and is
 -- computed when cycle 0 first needs it.
-recursiveConstant :: Program
+recursiveConstant :: Program Ty Name
 recursiveConstant =
   programWith
     []
     (bv8Ports ["o"])
-    (ELet True [Bind "k" (bv 8) constant] (pureE (bv 8) (var "k")))
+    (ELetRec [Bind "k" (bv 8) constant] (pureE (bv 8) (var "k")))
     (doublingDefs 18)
   where
     constant = EApp (EGlobal (doubling 18)) [ELit (b8 7)]
 
 -- | A global constant @T.k = g18 7@, added to the input inside a lifted
 -- function, so it is first needed while cycle 0 is computed.
-globalConstant :: Program
+globalConstant :: Program Ty Name
 globalConstant =
   programWith
     (bv8Ports ["x"])
@@ -983,7 +982,7 @@ globalConstant =
 -- identity but binds @T.sj@ in the cycles where its input is @j@. A
 -- global is computed once, so each of these signals is built the first
 -- time a cycle needs it and kept for the rest of the run.
-globalSignals :: Program
+globalSignals :: Program Ty Name
 globalSignals =
   programWith
     (bv8Ports ["x"])
@@ -994,15 +993,15 @@ globalSignals =
     built j = EApp (EGlobal (registers 16)) [pureE (bv 8) (ELit (b8 j))]
     pick = ELam [("v", bv 8)] (foldr bindAt (var "v") [0 .. 4])
     bindAt j =
-      EIf
+      ifE
         (bvEq8 (var "v") (ELit (b8 j)))
-        (ELet False [Bind "s" (sig (bv 8)) (EGlobal (signalGlobal j))] (var "v"))
+        (ELet [Bind "s" (sig (bv 8)) (EGlobal (signalGlobal j))] (var "v"))
     signalGlobal j = Name (Text.pack ("T.s" <> show j))
 
 -- | @g0 s = base@ and @gi s = g(i-1) (g(i-1) s)@ on 8-bit signals, with
 -- @gk@ applied to the input: building the network calls @g0@ @2^k@ times,
 -- although the network is just the input.
-signalDoubling :: Expr -> Int -> Program
+signalDoubling :: Expr Ty Name -> Int -> Program Ty Name
 signalDoubling base k =
   programWith
     (bv8Ports ["x"])
@@ -1021,8 +1020,8 @@ signalDoubling base k =
 -- evaluation steps (one for each component), spent far faster than steps
 -- that evaluate expressions, so tests can reach the large bounds quickly
 -- even when built without optimization.
-literalWork :: Int -> Text -> Expr
-literalWork n x = ELet False [Bind "t" (valueTy wide) (ELit wide)] (var x)
+literalWork :: Int -> Text -> Expr Ty Name
+literalWork n x = ELet [Bind "t" (valueTy wide) (ELit wide)] (var x)
   where
     wide = VTuple (replicate (2 ^ n) (VBool False))
 
@@ -1033,7 +1032,7 @@ doubling i = Name (Text.pack ("T.g" <> show i))
 -- | @h0 v = let s = sig.pure v in v@ and @hi v = h(i-1) (h(i-1) v)@,
 -- with @h10@ lifted over the input: the identity, making and dropping
 -- @2^10@ signals a cycle.
-droppedSignals :: Program
+droppedSignals :: Program Ty Name
 droppedSignals =
   programWith
     (bv8Ports ["x"])
@@ -1044,13 +1043,13 @@ droppedSignals =
     h :: Int -> Name
     h i = Name (Text.pack ("T.h" <> show i))
     body i
-      | i <= 0 = ELet False [Bind "s" (sig (bv 8)) (pureE (bv 8) (var "v"))] (var "v")
+      | i <= 0 = ELet [Bind "s" (sig (bv 8)) (pureE (bv 8) (var "v"))] (var "v")
       | otherwise = EApp (EGlobal (h (i - 1))) [EApp (EGlobal (h (i - 1))) [var "v"]]
 
 -- | A counter whose output is its input, computed with @g18@ of
 -- 'doublingDefs' (about @9 * 2^18@ steps) in the cycle where the count is
 -- 3 and directly in every other cycle.
-expensiveAtThree :: Program
+expensiveAtThree :: Program Ty Name
 expensiveAtThree =
   programWith
     (bv8Ports ["x"])
@@ -1060,15 +1059,15 @@ expensiveAtThree =
   where
     step =
       ELam [("s", bv 8), ("i", bv 8)] $
-        ETuple
+        mkTuple
           [ EApp (incr 8) [var "s"]
-          , EIf (bvEq8 (var "s") (ELit (b8 3))) (EApp (EGlobal (doubling 18)) [var "i"]) (var "i")
+          , ifE (bvEq8 (var "s") (ELit (b8 3))) (EApp (EGlobal (doubling 18)) [var "i"]) (var "i")
           ]
 
 -- | @r0 s = register v s@ and @ri s = r(i-1) (r(i-1) s)@: @ri@ delays a
 -- signal of the type of @v@ through @2^i@ registers. The defs @T.r0 ..
 -- T.rk@.
-registerDoubling :: Value -> Int -> [Def]
+registerDoubling :: Value -> Int -> [Def Ty Name]
 registerDoubling v k =
   [Def (registers i) (TFun (sig t) (sig t)) (ELam [("s", sig t)] (body i)) | i <- [0 .. k]]
   where
@@ -1084,7 +1083,7 @@ registers i = Name (Text.pack ("T.r" <> show i))
 -- | A one-input top whose output is its input delayed by the registers of
 -- @rk@, then of @rj@ for each @j@ in the list, from 'registerDoubling'
 -- with initial value 0.
-delayedBy :: Int -> [Int] -> Program
+delayedBy :: Int -> [Int] -> Program Ty Name
 delayedBy k more =
   programWith
     (bv8Ports ["x"])
@@ -1094,7 +1093,7 @@ delayedBy k more =
 
 -- | Signals of @n@-component Bool tuples through the @2^k@ registers of
 -- @rk@ ('registerDoubling'); the output is the first component.
-wideRegisters :: Int -> Int -> Program
+wideRegisters :: Int -> Int -> Program Ty Name
 wideRegisters n k =
   programWith
     [Port "b" TBool]
@@ -1109,13 +1108,13 @@ wideRegisters n k =
     (registerDoubling (VTuple (replicate n (VBool False))) k)
   where
     tupleTy = TProd (replicate n TBool)
-    wide = ETuple (replicate n (var "v"))
+    wide = mkTuple (replicate n (var "v"))
 
 -- | Names @prefix1 .. prefixn@ bound in order, each by @step@ applied to
 -- the one before (@prefix0@ for the first).
-chain :: Text -> Ty -> (Expr -> Expr) -> Int -> Expr -> Expr
+chain :: Text -> Ty -> (Expr Ty Name -> Expr Ty Name) -> Int -> Expr Ty Name -> Expr Ty Name
 chain prefix ty step n =
-  ELet False [Bind (name i) ty (step (EVar (name (i - 1)))) | i <- [1 .. n]]
+  ELet [Bind (name i) ty (step (EVar (name (i - 1)))) | i <- [1 .. n]]
   where
     name i = Name (prefix <> tshow i)
 
@@ -1323,14 +1322,14 @@ normalSpec = do
 ----------------------------------------------------------------------
 -- Multiple outputs
 
-abPorts :: [Port]
+abPorts :: [Port Ty]
 abPorts = bv8Ports ["a", "b"]
 
 abRows :: [[Value]]
 abRows = [[b8 3, b8 4], [b8 5, b8 5], [b8 255, b8 1]]
 
 -- | Outputs @sum = a + b@ and @same = a == b@.
-twoOutputProgram :: Program
+twoOutputProgram :: Program Ty Name
 twoOutputProgram =
   topProgram abPorts [Port "sum" (bv 8), Port "same" TBool] . overPorts abPorts $
     liftE [bv 8, bv 8] (TProd [bv 8, TBool]) f [var "a", var "b"]
@@ -1338,23 +1337,23 @@ twoOutputProgram =
     f =
       ELam
         [("x", bv 8), ("y", bv 8)]
-        (ETuple [bvBin BvAdd 8 (var "x") (var "y"), bvEq8 (var "x") (var "y")])
+        (mkTuple [bvBin BvAdd 8 (var "x") (var "y"), bvEq8 (var "x") (var "y")])
 
 -- | Outputs @sum = a + b@, @diff = a - b@ and @same = a == b@ on the
 -- right-nested spine @(sum, (diff, same))@.
-threeOutputProgram :: Program
+threeOutputProgram :: Program Ty Name
 threeOutputProgram =
   topProgram abPorts threeOutputPorts . overPorts abPorts $
     liftE [bv 8, bv 8] (TProd [bv 8, TProd [bv 8, TBool]]) f [var "a", var "b"]
   where
     f =
       ELam [("x", bv 8), ("y", bv 8)] $
-        ETuple
+        mkTuple
           [ bvBin BvAdd 8 (var "x") (var "y")
-          , ETuple [bvBin BvSub 8 (var "x") (var "y"), bvEq8 (var "x") (var "y")]
+          , mkTuple [bvBin BvSub 8 (var "x") (var "y"), bvEq8 (var "x") (var "y")]
           ]
 
-threeOutputPorts :: [Port]
+threeOutputPorts :: [Port Ty]
 threeOutputPorts = [Port "sum" (bv 8), Port "diff" (bv 8), Port "same" TBool]
 
 twoOutputNormal, threeOutputNormal :: NModule
@@ -1393,7 +1392,7 @@ multiOutputSpec = do
             liftE [bv 8, bv 8] (TProd [bv 8, bv 8, TBool]) f [var "a", var "b"]
         f =
           ELam [("x", bv 8), ("y", bv 8)] $
-            ETuple
+            mkTuple
               [ bvBin BvAdd 8 (var "x") (var "y")
               , bvBin BvSub 8 (var "x") (var "y")
               , bvEq8 (var "x") (var "y")
@@ -1415,11 +1414,10 @@ multiOutputSpec = do
 -- Zero-input tops
 
 -- | A free-running counter of width @w@: @s = register 0 (s + 1)@.
-freeCounterProgram :: Natural -> Program
+freeCounterProgram :: Natural -> Program Ty Name
 freeCounterProgram w =
   topProgram [] [Port "count" (bv w)] $
-    ELet
-      True
+    ELetRec
       [Bind "s" (sig (bv w)) (registerE (VBV w 0) (liftE [bv w] (bv w) (incr w) [var "s"]))]
       (var "s")
 
@@ -1457,7 +1455,7 @@ zeroInputSpec = do
 
 -- | Malformed input rows: what is wrong, the circuit in both forms, the
 -- rows, and the cycle the error must name.
-badRows :: [(String, Program, NModule, [[Value]], Text)]
+badRows :: [(String, Program Ty Name, NModule, [[Value]], Text)]
 badRows =
   [ ("a row with too few values", macProgram, macNormal, [[b8 3]], "cycle 0")
   ,

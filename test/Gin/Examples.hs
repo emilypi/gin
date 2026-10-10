@@ -31,6 +31,7 @@ import Data.Text (Text)
 import Gin.Core.Normal
 import Gin.Core.Syntax
 import Gin.Netlist.Types
+import Gin.TestUtil (ifE)
 import Gin.Vectors (Cycle (..), Vectors (..))
 import Numeric.Natural (Natural)
 
@@ -56,17 +57,17 @@ bv = TBitVec
 sig :: Ty -> Ty
 sig = TSignal "System"
 
-prim :: PrimOp -> [Ty] -> Ty -> Expr
+prim :: PrimOp -> [Ty] -> Ty -> Expr Ty Name
 prim op args res = EPrim op (tFuns args res)
 
-v :: Text -> Expr
+v :: Text -> Expr Ty Name
 v = EVar . Name
 
 ----------------------------------------------------------------------
 -- counter
 
 -- > counter en = mealy (\s e -> (if e then s + 1 else s, s)) 0 en
-counterProgram :: Program
+counterProgram :: Program Ty Name
 counterProgram =
   Program
     { progProducer = producer
@@ -88,8 +89,8 @@ counterProgram =
     stepTy = tFuns [bv 8, TBool] (TProd [bv 8, bv 8])
     step =
       ELam [("s", bv 8), ("e", TBool)] $
-        ETuple
-          [ EIf (v "e") (EApp (prim BvAdd [bv 8, bv 8] (bv 8)) [v "s", ELit (VBV 8 1)]) (v "s")
+        mkTuple
+          [ ifE (v "e") (EApp (prim BvAdd [bv 8, bv 8] (bv 8)) [v "s", ELit (VBV 8 1)]) (v "s")
           , v "s"
           ]
 
@@ -143,7 +144,7 @@ counterVectors =
 
 -- > mac x y = mealy (\acc p -> let acc' = acc + zext16 p.1 * zext16 p.2 in (acc', acc)) 0
 -- >                 (lift2 (,) x y)
-macProgram :: Program
+macProgram :: Program Ty Name
 macProgram =
   Program
     { progProducer = producer
@@ -167,14 +168,13 @@ macProgram =
           [ step
           , EApp
               (prim (SigLift 2) [tFuns [bv 8, bv 8] pairTy, sig (bv 8), sig (bv 8)] (sig pairTy))
-              [ELam [("a", bv 8), ("b", bv 8)] (ETuple [v "a", v "b"]), v "x", v "y"]
+              [ELam [("a", bv 8), ("b", bv 8)] (mkTuple [v "a", v "b"]), v "x", v "y"]
           ]
     stepTy = tFuns [bv 16, pairTy] (TProd [bv 16, bv 16])
     zext16 e = EApp (prim (BvZext 16) [bv 8] (bv 16)) [e]
     step =
       ELam [("acc", bv 16), ("p", pairTy)] $
         ELet
-          False
           [ Bind "acc'" (bv 16) $
               EApp
                 (prim BvAdd [bv 16, bv 16] (bv 16))
@@ -182,7 +182,7 @@ macProgram =
                 , EApp (prim BvMul [bv 16, bv 16] (bv 16)) [zext16 (EProj 0 (v "p")), zext16 (EProj 1 (v "p"))]
                 ]
           ]
-          (ETuple [v "acc'", v "acc"])
+          (mkTuple [v "acc'", v "acc"])
 
 macNormal :: NModule
 macNormal =
@@ -242,7 +242,7 @@ macVectors =
 -- >   step s i | s == 0    = (if i then 1 else 0, false)
 -- >            | s == 1    = (if i then 1 else 2, false)
 -- >            | otherwise = (if i then 1 else 0, i)
-detectorProgram :: Program
+detectorProgram :: Program Ty Name
 detectorProgram =
   Program
     { progProducer = producer
@@ -269,17 +269,14 @@ detectorProgram =
           [EGlobal "Detector.step", v "b"]
     lit2 = ELit . VBV 2
     isState n = EApp (prim BvEq [bv 2, bv 2] TBool) [v "s", lit2 n]
-    pick a b = EIf (v "i") (lit2 a) (lit2 b)
+    pick a b = ifE (v "i") (lit2 a) (lit2 b)
     step =
       ELam [("s", bv 2), ("i", TBool)] $
         EIf
-          (isState 0)
-          (ETuple [pick 1 0, ELit (VBool False)])
-          ( EIf
-              (isState 1)
-              (ETuple [pick 1 2, ELit (VBool False)])
-              (ETuple [pick 1 0, v "i"])
-          )
+          [ (isState 0, mkTuple [pick 1 0, ELit (VBool False)])
+          , (isState 1, mkTuple [pick 1 2, ELit (VBool False)])
+          ]
+          (mkTuple [pick 1 0, v "i"])
 
 -- | One mux per scalar component of the step function's result.
 detectorNormal :: NModule

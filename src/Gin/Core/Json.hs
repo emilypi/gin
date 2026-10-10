@@ -42,6 +42,7 @@ import Data.ByteString.Lazy (LazyByteString)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isDigit, ord)
 import Data.Int (Int64)
+import Data.IntMap.Strict qualified as IntMap
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
@@ -60,12 +61,12 @@ import Numeric.Natural (Natural)
 
 -- | Decode and structurally validate (format tag, value invariants, width
 -- and size bounds). Type checking is 'Gin.Core.Check.checkProgram'.
-decodeProgram :: LazyByteString -> Either GinError Program
+decodeProgram :: LazyByteString -> Either GinError (Program Ty Name)
 decodeProgram = decodeWith program
 
 -- | Canonical encoding: keys in the order of @docs/file-formats.md@,
 -- @params@ always present, no insignificant whitespace.
-encodeProgram :: Program -> LazyByteString
+encodeProgram :: Program Ty Name -> LazyByteString
 encodeProgram = E.encodingToLazyByteString . programE
 
 -- | Decode and validate test vectors: format tag, 1 to 'maxCycles' cycles,
@@ -373,7 +374,7 @@ formatTag expected o = do
 unknownTag :: String -> Text -> Parser a
 unknownTag what t = fail ("unknown " <> what <> " " <> show t)
 
-program :: A.Value -> Parser Program
+program :: A.Value -> Parser (Program Ty Name)
 program = A.withObject "Program" $ \o -> do
   formatTag "gin-ir/1" o
   Program
@@ -386,7 +387,7 @@ producer :: A.Value -> Parser Producer
 producer = A.withObject "Producer" $ \o ->
   Producer <$> field o "tool" text <*> field o "leanVersion" text
 
-topEntity :: A.Value -> Parser TopEntity
+topEntity :: A.Value -> Parser (TopEntity Ty Name)
 topEntity = A.withObject "TopEntity" $ \o ->
   TopEntity
     <$> field o "name" text
@@ -398,10 +399,10 @@ topEntity = A.withObject "TopEntity" $ \o ->
 domain :: A.Value -> Parser Domain
 domain = A.withObject "Domain" $ \o -> Domain <$> field o "name" text <*> field o "periodPs" nat
 
-port :: A.Value -> Parser Port
+port :: A.Value -> Parser (Port Ty)
 port = A.withObject "Port" $ \o -> Port <$> field o "name" text <*> field o "type" ty
 
-def :: A.Value -> Parser Def
+def :: A.Value -> Parser (Def Ty Name)
 def = A.withObject "Def" $ \o ->
   Def <$> field o "name" name <*> field o "type" ty <*> field o "body" expr
 
@@ -456,7 +457,7 @@ decimal w = A.withText "DecimalString" $ \s -> do
       Just _ -> Text.all isDigit s
       Nothing -> False
 
-expr :: A.Value -> Parser Expr
+expr :: A.Value -> Parser (Expr Ty Name)
 expr = A.withObject "Expr" $ \o ->
   field o "e" text >>= \case
     "var" -> EVar <$> field o "name" name
@@ -470,12 +471,20 @@ expr = A.withObject "Expr" $ \o ->
       pure (EPrim op t)
     "app" -> EApp <$> field o "fun" expr <*> field o "args" (listOfAtLeast 1 "an application" expr)
     "lam" -> ELam <$> field o "binders" (listOfAtLeast 1 "a lambda" binder) <*> field o "body" expr
-    "let" -> ELet <$> field o "rec" bool <*> field o "binds" (list bind) <*> field o "body" expr
-    "tuple" -> ETuple <$> field o "elems" (listOfAtLeast 2 "a tuple" expr)
-    "proj" -> EProj <$> field o "index" nat <*> field o "of" expr
-    "if" -> EIf <$> field o "cond" expr <*> field o "then" expr <*> field o "else" expr
+    "let" -> do
+      isRec <- field o "rec" bool
+      (if isRec then ELetRec else ELet) <$> field o "binds" (list bind) <*> field o "body" expr
+    "tuple" -> mkTuple <$> field o "elems" (listOfAtLeast 2 "a tuple" expr)
+    -- 'nat' is at most 'maxJsonNumber', so the index fits an Int.
+    "proj" -> EProj . fromIntegral <$> field o "index" nat <*> field o "of" expr
+    "if" -> elseIf <$> field o "cond" expr <*> field o "then" expr <*> field o "else" expr
     e -> unknownTag "expression tag" e <?> Key "e"
   where
+    -- An if in the else branch joins this one, so a chain of else-ifs
+    -- decodes to a single multi-way 'EIf'.
+    elseIf c t = \case
+      EIf arms e -> EIf ((c, t) : arms) e
+      e -> EIf [(c, t)] e
     binder = A.withObject "Binder" $ \b -> (,) <$> field b "name" name <*> field b "type" ty
     bind = A.withObject "Bind" $ \b ->
       Bind <$> field b "name" name <*> field b "type" ty <*> field b "value" expr
@@ -534,7 +543,7 @@ vectors = A.withObject "Vectors" $ \o -> do
   Vectors top ins outs <$> field o "cycles" (cycles ins outs)
 
 -- | Count and payload are checked on the array before any row is decoded.
-cycles :: [Port] -> [Port] -> A.Value -> Parser [Cycle]
+cycles :: [Port Ty] -> [Port Ty] -> A.Value -> Parser [Cycle]
 cycles ins outs = A.withArray "Array" $ \rows -> do
   let n = Vector.length rows
       payload = toInteger n * sum (fmap (portBits . portTy) (ins <> outs))
@@ -563,7 +572,7 @@ portBits = \case
   TFun _ _ -> 0
   TSignal _ t -> portBits t
 
-row :: [Port] -> A.Value -> Parser [Value]
+row :: [Port Ty] -> A.Value -> Parser [Value]
 row ports = A.withArray "Array" $ \xs -> do
   unless (Vector.length xs == length ports) $
     fail
@@ -575,7 +584,7 @@ row ports = A.withArray "Array" $ \xs -> do
       )
   zipWithM (\i (p, x) -> portValue p x <?> Index i) [0 ..] (zip ports (Vector.toList xs))
 
-portValue :: Port -> A.Value -> Parser Value
+portValue :: Port Ty -> A.Value -> Parser Value
 portValue p x = do
   v <- value x
   unless (valueTy v == portTy p) $
@@ -601,7 +610,7 @@ natE = E.integer . toInteger
 obj :: [Series] -> Encoding
 obj = E.pairs . mconcat
 
-programE :: Program -> Encoding
+programE :: Program Ty Name -> Encoding
 programE p =
   obj
     [ E.pair "format" (E.text "gin-ir/1")
@@ -615,7 +624,7 @@ producerE :: Producer -> Encoding
 producerE (Producer tool leanVersion) =
   obj [E.pair "tool" (E.text tool), E.pair "leanVersion" (E.text leanVersion)]
 
-topE :: TopEntity -> Encoding
+topE :: TopEntity Ty Name -> Encoding
 topE t =
   obj
     [ E.pair "name" (E.text (topName t))
@@ -628,13 +637,13 @@ topE t =
 domainE :: Domain -> Encoding
 domainE (Domain n period) = obj [E.pair "name" (E.text n), E.pair "periodPs" (natE period)]
 
-portE :: Port -> Encoding
+portE :: Port Ty -> Encoding
 portE (Port n t) = obj [E.pair "name" (E.text n), E.pair "type" (tyE t)]
 
 nameE :: Name -> Encoding
 nameE = E.text . unName
 
-defE :: Def -> Encoding
+defE :: Def Ty Name -> Encoding
 defE (Def n t body) =
   obj [E.pair "name" (nameE n), E.pair "type" (tyE t), E.pair "body" (exprE body)]
 
@@ -668,7 +677,7 @@ valueE = \case
   VBV w n -> obj [E.pair "bv" (natE w), E.pair "val" (E.string (show n))]
   VTuple vs -> obj [E.pair "tuple" (E.list valueE vs)]
 
-exprE :: Expr -> Encoding
+exprE :: Expr Ty Name -> Encoding
 exprE = \case
   EVar n -> tagged "var" [E.pair "name" (nameE n)]
   EGlobal n -> tagged "global" [E.pair "name" (nameE n)]
@@ -680,16 +689,22 @@ exprE = \case
   EApp f args -> tagged "app" [E.pair "fun" (exprE f), E.pair "args" (E.list exprE args)]
   ELam binders body ->
     tagged "lam" [E.pair "binders" (E.list binderE binders), E.pair "body" (exprE body)]
-  ELet isRec binds body ->
-    tagged
-      "let"
-      [E.pair "rec" (E.bool isRec), E.pair "binds" (E.list bindE binds), E.pair "body" (exprE body)]
-  ETuple es -> tagged "tuple" [E.pair "elems" (E.list exprE es)]
-  EProj i e -> tagged "proj" [E.pair "index" (natE i), E.pair "of" (exprE e)]
-  EIf c t e ->
-    tagged "if" [E.pair "cond" (exprE c), E.pair "then" (exprE t), E.pair "else" (exprE e)]
+  ELet binds body -> letE False binds body
+  ELetRec binds body -> letE True binds body
+  ETuple es -> tagged "tuple" [E.pair "elems" (E.list exprE (IntMap.elems es))]
+  EProj i e -> tagged "proj" [E.pair "index" (E.int i), E.pair "of" (exprE e)]
+  EIf arms e -> foldr ifE (exprE e) arms
   where
     tagged t rest = obj (E.pair "e" (E.text t) : rest)
+    letE isRec binds body =
+      tagged
+        "let"
+        [ E.pair "rec" (E.bool isRec)
+        , E.pair "binds" (E.list bindE binds)
+        , E.pair "body" (exprE body)
+        ]
+    -- A multi-way if is written as nested ifs, the inverse of 'expr'.
+    ifE (c, t) el = tagged "if" [E.pair "cond" (exprE c), E.pair "then" (exprE t), E.pair "else" el]
     binderE (n, t) = obj [E.pair "name" (nameE n), E.pair "type" (tyE t)]
     bindE (Bind n t e) =
       obj [E.pair "name" (nameE n), E.pair "type" (tyE t), E.pair "value" (exprE e)]

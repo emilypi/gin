@@ -34,7 +34,7 @@ import Control.Monad (ap, foldM, unless, when, zipWithM, zipWithM_, (>=>))
 import Control.Monad.ST (ST, runST)
 import Data.Foldable (traverse_)
 import Data.Graph (SCC (..), stronglyConnComp)
-import Data.List (genericDrop)
+import Data.IntMap.Strict qualified as IntMap
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -128,7 +128,7 @@ import Numeric.Natural (Natural)
 -- disagreement, and callers should report it as such. Whenever
 -- 'simulateCore' returns a result, it agrees with 'simulateNormal' on
 -- the normalized program.
-simulateCore :: Program -> [[Value]] -> Either GinError [[Value]]
+simulateCore :: Program Ty Name -> [[Value]] -> Either GinError [[Value]]
 simulateCore prog rows = do
   validateRows [(portName p, portTy p) | p <- topInputs (progTop prog)] rows
   noGlobalRecursion prog
@@ -576,7 +576,7 @@ loopError l =
 ----------------------------------------------------------------------
 -- Core IR: running the program
 
-runCore :: Program -> [[Value]] -> ST s (Either GinError [[Value]])
+runCore :: Program Ty Name -> [[Value]] -> ST s (Either GinError [[Value]])
 runCore prog rows = do
   sim <-
     Sim
@@ -594,7 +594,7 @@ runCore prog rows = do
 -- not nest; then reads the outputs; then computes every next state.
 -- The work done once and every cycle each have their own step budget
 -- ('Charge').
-coreRun :: Program -> [[Value]] -> Eval s [[Value]]
+coreRun :: Program Ty Name -> [[Value]] -> Eval s [[Value]]
 coreRun prog rows = do
   defineGlobals prog
   let top = progTop prog
@@ -628,7 +628,7 @@ coreRun prog rows = do
 
 -- | Recursion among globals is rejected up front: a global is evaluated
 -- at most once, so it must not need itself.
-noGlobalRecursion :: Program -> Either GinError ()
+noGlobalRecursion :: Program Ty Name -> Either GinError ()
 noGlobalRecursion prog =
   case [NonEmpty.toList ds | NECyclicSCC ds <- stronglyConnComp graph] of
     [] -> Right ()
@@ -639,7 +639,7 @@ noGlobalRecursion prog =
     graph = [(d, defName d, Set.toList (globalRefs (defBody d))) | d <- progDefs prog]
 
 -- | Every global def, as a value computed on first use.
-defineGlobals :: Program -> Eval s ()
+defineGlobals :: Program Ty Name -> Eval s ()
 defineGlobals prog = do
   defs <- traverse global (progDefs prog)
   sim <- askSim
@@ -716,7 +716,7 @@ deepValue = \case
 
 -- | Split an output value along the right-nested product spine into one
 -- value per output port.
-splitOutputs :: [Port] -> Value -> Either GinError [Value]
+splitOutputs :: [Port Ty] -> Value -> Either GinError [Value]
 splitOutputs ports v = case ports of
   [p] -> pure <$> port p v
   p : rest -> case v of
@@ -809,7 +809,7 @@ pairPart k = \case
 ----------------------------------------------------------------------
 -- Core IR: expressions
 
-eval :: Env s -> Expr -> Eval s (D s)
+eval :: Env s -> Expr Ty Name -> Eval s (D s)
 eval env expr = do
   tick
   case expr of
@@ -823,23 +823,23 @@ eval env expr = do
     ELam binders body -> case binders of
       [] -> abort "lambda without binders"
       _ -> pure (closure env (fmap fst binders) body)
-    ELet False binds body -> do
+    ELet binds body -> do
       let bind e b = do
             th <- eager (Just ("in bind " <> unName (bindName b))) e (bindExpr b)
             pure (Map.insert (bindName b) th e)
       env' <- foldM bind env binds
       eval env' body
-    ELet True binds body -> letRec env binds >>= (`eval` body)
-    ETuple es -> DTuple <$> traverse (eager Nothing env) es
+    ELetRec binds body -> letRec env binds >>= (`eval` body)
+    ETuple es -> DTuple <$> traverse (eager Nothing env) (IntMap.elems es)
     EProj i e -> eval env e >>= project i >>= force
-    EIf c t e -> conditional env c t e
+    EIf arms e -> conditional env arms e
 
 -- | An argument, @let@ bind or tuple component, computed now so chains of
 -- them do not nest. One that needs a value still being computed is left
 -- to be computed when it is used, which is what makes evaluation by need.
 -- Binding one costs a step, even a variable or a literal, so binding many
 -- of them (a wide tuple of copies of a variable) is not free.
-eager :: Maybe Text -> Env s -> Expr -> Eval s (Thunk s)
+eager :: Maybe Text -> Env s -> Expr Ty Name -> Eval s (Thunk s)
 eager ctx env expr =
   tick >> case expr of
     EVar n | Just th <- Map.lookup n env -> pure th
@@ -866,23 +866,25 @@ valueSize = go 0
       VTuple vs -> foldl' go (n + 1) vs
       _ -> n + 1
 
-project :: Natural -> D s -> Eval s (Thunk s)
+project :: Int -> D s -> Eval s (Thunk s)
 project i = \case
-  DTuple ths | Just th <- listToMaybe (genericDrop i ths) -> pure th
+  DTuple ths | i >= 0, Just th <- listToMaybe (drop i ths) -> pure th
   _ -> abort ("projection " <> showT i <> " out of a value without that component")
 
 -- | @if c t e@ computes @c@, then one branch. When the condition needs the
 -- value being computed, the result is what both branches agree on
--- ('agree').
-conditional :: Env s -> Expr -> Expr -> Expr -> Eval s (D s)
-conditional env c t e =
-  tryBottom (eval env c) >>= \case
-    Right d -> choose d (eval env t) (eval env e)
-    Left loop -> do
-      cond <- retry Nothing loop (eval env c)
-      th <- delay Nothing Nothing (eval env t)
-      el <- delay Nothing Nothing (eval env e)
-      agree loop cond th el
+-- ('agree'). A multi-way @if@ is @if c1 t1 (if c2 t2 .. e)@.
+conditional :: Env s -> [(Expr Ty Name, Expr Ty Name)] -> Expr Ty Name -> Eval s (D s)
+conditional env arms e = case arms of
+  [] -> eval env e
+  (c, t) : rest ->
+    tryBottom (eval env c) >>= \case
+      Right d -> choose d (eval env t) (conditional env rest e)
+      Left loop -> do
+        cond <- retry Nothing loop (eval env c)
+        th <- delay Nothing Nothing (eval env t)
+        el <- delay Nothing Nothing (conditional env rest e)
+        agree loop cond th el
 
 choose :: D s -> Eval s a -> Eval s a -> Eval s a
 choose d th el = case d of
@@ -911,7 +913,7 @@ agree loop cond th el = do
         Right d -> choose d (force x) (force y)
         Left loop' -> agree loop' cond x y
 
-closure :: Env s -> [Name] -> Expr -> D s
+closure :: Env s -> [Name] -> Expr Ty Name -> D s
 closure env names body = DFun $ \arg -> case names of
   [x] -> eval (Map.insert x arg env) body
   x : xs -> pure (closure (Map.insert x arg env) xs body)
@@ -975,7 +977,7 @@ runPrim op args
 -- its expression builds, so the expression can refer to it before that
 -- node exists; tuples are bound component by component. Binding each
 -- binder costs a step.
-letRec :: Env s -> [Bind] -> Eval s (Env s)
+letRec :: Env s -> [Bind Ty Name] -> Eval s (Env s)
 letRec env binds = do
   work <- currentCharge
   refs <- traverse (const (tick >> liftST (newSTRef (Pending Nothing unset)))) binds

@@ -2,6 +2,7 @@ module Gin.Core.CheckSpec (spec) where
 
 import Data.ByteString.Lazy qualified as LBS
 import Data.Foldable (for_)
+import Data.IntMap.Strict qualified as IntMap
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Gin.Core.Check (checkProgram)
@@ -9,40 +10,39 @@ import Gin.Core.Json (decodeProgram, encodeProgram)
 import Gin.Core.Syntax
 import Gin.Error
 import Gin.Examples
-import Gin.TestUtil (tshow)
-import Numeric.Natural (Natural)
+import Gin.TestUtil (ifE, tshow)
 import System.Timeout (timeout)
 import Test.Hspec
 
 ----------------------------------------------------------------------
 -- Helpers
 
-v :: Text -> Expr
+v :: Text -> Expr Ty Name
 v = EVar . Name
 
-lit8 :: Integer -> Expr
+lit8 :: Integer -> Expr Ty Name
 lit8 = ELit . VBV 8
 
 -- | A prim node at the instantiated type @args -> res@.
-prim :: PrimOp -> [Ty] -> Ty -> Expr
+prim :: PrimOp -> [Ty] -> Ty -> Expr Ty Name
 prim op args res = EPrim op (tFuns args res)
 
-add8 :: Expr
+add8 :: Expr Ty Name
 add8 = prim BvAdd [bv 8, bv 8] (bv 8)
 
 -- | counterProgram plus extra definitions that the top entity does not use.
-withDefs :: [Def] -> Program
+withDefs :: [Def Ty Name] -> Program Ty Name
 withDefs ds = counterProgram{progDefs = progDefs counterProgram <> ds}
 
 -- | Check an expression at a declared type, as an extra definition.
-checkAs :: Ty -> Expr -> Either GinError ()
+checkAs :: Ty -> Expr Ty Name -> Either GinError ()
 checkAs t e = checkProgram (withDefs [Def "Test.subject" t e])
 
 -- | A prim node checked at exactly its own annotated type.
 checkPrim :: PrimOp -> Ty -> Either GinError ()
 checkPrim op t = checkAs t (EPrim op t)
 
-withTop :: (TopEntity -> TopEntity) -> Program -> Program
+withTop :: (TopEntity Ty Name -> TopEntity Ty Name) -> Program Ty Name -> Program Ty Name
 withTop f p = p{progTop = f (progTop p)}
 
 -- | A type-checker error whose message mentions the fragment.
@@ -62,7 +62,7 @@ someValue = \case
 
 -- | A top entity with one input @x : bv 8@ and the given output ports,
 -- whose definition ignores @x@ and outputs a constant of type @o@.
-constantTop :: [Port] -> [Port] -> Ty -> Program
+constantTop :: [Port Ty] -> [Port Ty] -> Ty -> Program Ty Name
 constantTop ins outs o =
   Program
     { progProducer = progProducer counterProgram
@@ -87,7 +87,7 @@ constantTop ins outs o =
           [(Name ("in" <> tshow i), sig (portTy p)) | (i, p) <- zip [0 :: Int ..] ins]
           constant
 
-threeOutputs :: [Port]
+threeOutputs :: [Port Ty]
 threeOutputs = [Port "a" TBool, Port "b" TBool, Port "c" (bv 8)]
 
 -- | Port names that are not legal HDL identifiers: wrong case or
@@ -235,7 +235,7 @@ illTypedPrims =
 -- | Ill-formed types, each with the message fragment it is rejected with
 -- and a primitive whose annotation contains it but otherwise follows the
 -- rules in "Gin.Core.Prim".
-illFormedTypes :: [(String, Ty, Text, Expr)]
+illFormedTypes :: [(String, Ty, Text, Expr Ty Name)]
 illFormedTypes =
   [
     ( "a signal in another domain"
@@ -261,8 +261,8 @@ illFormedTypes =
 -- | Check an expression as the first component of a pair projected away,
 -- so that its type never reaches the declared type of the definition and
 -- only the annotations inside the expression can reject it.
-checkHidden :: Expr -> Either GinError ()
-checkHidden e = checkAs (bv 8) (EProj 1 (ETuple [e, lit8 1]))
+checkHidden :: Expr Ty Name -> Either GinError ()
+checkHidden e = checkAs (bv 8) (EProj 1 (mkTuple [e, lit8 1]))
 
 -- | Fail if the expectation takes longer than 5 s.
 promptly :: Expectation -> Expectation
@@ -286,11 +286,11 @@ hostileSize = 32000
 -- | Programs that use a wide type many times without spelling it out at
 -- each use, so that walking the type at every use costs time quadratic in
 -- the size of the input. Each comes with whether it type-checks.
-hostilePrograms :: [(String, Program, Bool)]
+hostilePrograms :: [(String, Program Ty Name, Bool)]
 hostilePrograms =
   [
     ( "a body whose type repeats a wide binder type"
-    , single (TFun wide TBool) (ELam [("x", wide)] (ETuple (replicate n (v "x"))))
+    , single (TFun wide TBool) (ELam [("x", wide)] (mkTuple (replicate n (v "x"))))
     , False
     )
   ,
@@ -299,7 +299,7 @@ hostilePrograms =
         (TFun wide wide)
         ( ELam
             [("x", wide)]
-            (EProj 0 (EIf (ELit (VBool True)) (ETuple copies) (ETuple copies)))
+            (EProj 0 (ifE (ELit (VBool True)) (mkTuple copies) (mkTuple copies)))
         )
     , True
     )
@@ -309,7 +309,7 @@ hostilePrograms =
         (tFuns [wide, TFun wide TBool] (bools n))
         ( ELam
             [("x", wide), ("f", TFun wide TBool)]
-            (ETuple (replicate n (EApp (v "f") [v "x"])))
+            (mkTuple (replicate n (EApp (v "f") [v "x"])))
         )
     , True
     )
@@ -317,7 +317,7 @@ hostilePrograms =
     ( "many projections of the last component of a wide tuple"
     , single
         (TFun wide (bools n))
-        (ELam [("x", wide)] (ETuple (replicate n (EProj (fromIntegral n - 1) (v "x")))))
+        (ELam [("x", wide)] (mkTuple (replicate n (EProj (n - 1) (v "x")))))
     , True
     )
   ]
@@ -395,34 +395,33 @@ spec = do
         checkAs (bv 8) (v "x")
     it "[check-rules] rejects a lambda-bound variable used outside its lambda" $
       rejectedWith "unbound variable x" $
-        checkAs (TProd [bv 8, bv 8]) (ETuple [EApp (ELam [("x", bv 8)] (v "x")) [lit8 1], v "x"])
+        checkAs (TProd [bv 8, bv 8]) (mkTuple [EApp (ELam [("x", bv 8)] (v "x")) [lit8 1], v "x"])
     it "[check-rules] rejects a non-recursive let bind that refers to itself" $
       rejectedWith "unbound variable x" $
-        checkAs (bv 8) (ELet False [Bind "x" (bv 8) (EApp add8 [v "x", lit8 1])] (v "x"))
+        checkAs (bv 8) (ELet [Bind "x" (bv 8) (EApp add8 [v "x", lit8 1])] (v "x"))
     it "[check-rules] rejects a non-recursive let bind that refers to a later bind" $
       rejectedWith "unbound variable y" $
-        checkAs (bv 8) (ELet False [Bind "x" (bv 8) (v "y"), Bind "y" (bv 8) (lit8 1)] (v "x"))
+        checkAs (bv 8) (ELet [Bind "x" (bv 8) (v "y"), Bind "y" (bv 8) (lit8 1)] (v "x"))
     it "[check-rules] lets a non-recursive bind see the earlier binds" $
-      checkAs (bv 8) (ELet False [Bind "x" (bv 8) (lit8 1), Bind "y" (bv 8) (v "x")] (v "y"))
+      checkAs (bv 8) (ELet [Bind "x" (bv 8) (lit8 1), Bind "y" (bv 8) (v "x")] (v "y"))
         `shouldBe` Right ()
     it "[check-rules] lets a recursive bind see later binds and itself" $
       checkAs
         (bv 8)
-        ( ELet
-            True
+        ( ELetRec
             [Bind "x" (bv 8) (v "y"), Bind "y" (bv 8) (EApp add8 [v "y", lit8 1])]
             (v "x")
         )
         `shouldBe` Right ()
     it "[check-rules] rejects let binds escaping into the enclosing scope" $
       rejectedWith "unbound variable x" $
-        checkAs (TProd [bv 8, bv 8]) (ETuple [ELet False [Bind "x" (bv 8) (lit8 1)] (v "x"), v "x"])
+        checkAs (TProd [bv 8, bv 8]) (mkTuple [ELet [Bind "x" (bv 8) (lit8 1)] (v "x"), v "x"])
     it "[check-rules] rejects duplicate binders in one lambda" $
       rejectedWith "duplicate binder s" $
         checkAs (tFuns [bv 8, bv 8] (bv 8)) (ELam [("s", bv 8), ("s", bv 8)] (v "s"))
     it "[check-rules] rejects duplicate names in one let" $
       rejectedWith "duplicate binder x" $
-        checkAs (bv 8) (ELet True [Bind "x" (bv 8) (lit8 1), Bind "x" (bv 8) (lit8 2)] (v "x"))
+        checkAs (bv 8) (ELetRec [Bind "x" (bv 8) (lit8 1), Bind "x" (bv 8) (lit8 2)] (v "x"))
     it "[check-rules] allows an inner lambda to shadow an outer binder" $
       checkAs (tFuns [bv 8, TBool] TBool) (ELam [("x", bv 8)] (ELam [("x", TBool)] (v "x")))
         `shouldBe` Right ()
@@ -454,47 +453,65 @@ spec = do
   describe "conditionals" $ do
     it "[check-rules] rejects a bit-vector condition" $
       rejectedWith "condition" $
-        checkAs (bv 8) (EIf (ELit (VBV 1 1)) (lit8 1) (lit8 2))
+        checkAs (bv 8) (ifE (ELit (VBV 1 1)) (lit8 1) (lit8 2))
     it "[check-rules] rejects a signal condition" $
       rejectedWith "condition" $
-        checkAs (TFun (sig TBool) (bv 8)) (ELam [("c", sig TBool)] (EIf (v "c") (lit8 1) (lit8 2)))
+        checkAs (TFun (sig TBool) (bv 8)) (ELam [("c", sig TBool)] (ifE (v "c") (lit8 1) (lit8 2)))
     it "[check-rules] rejects branches of different types" $
       rejectedWith "branches" $
-        checkAs (bv 8) (EIf (ELit (VBool True)) (lit8 1) (ELit (VBV 4 1)))
+        checkAs (bv 8) (ifE (ELit (VBool True)) (lit8 1) (ELit (VBV 4 1)))
     it "[check-rules] rejects signal branches" $
       rejectedWith "branches" $
         checkAs
           (tFuns [sig (bv 8), sig (bv 8)] (sig (bv 8)))
-          (ELam [("a", sig (bv 8)), ("b", sig (bv 8))] (EIf (ELit (VBool True)) (v "a") (v "b")))
+          (ELam [("a", sig (bv 8)), ("b", sig (bv 8))] (ifE (ELit (VBool True)) (v "a") (v "b")))
     it "[check-rules] rejects function branches" $
       rejectedWith "branches" $
         checkAs
           (tFuns [bv 8] (bv 8))
-          (EIf (ELit (VBool True)) (EApp add8 [lit8 1]) (EApp add8 [lit8 2]))
+          (ifE (ELit (VBool True)) (EApp add8 [lit8 1]) (EApp add8 [lit8 2]))
     it "[check-rules] rejects branches that are products containing a signal" $
       rejectedWith "branches" $
         checkAs
           (TFun (sig (bv 8)) (TProd [sig (bv 8), bv 8]))
           ( ELam
               [("a", sig (bv 8))]
-              (EIf (ELit (VBool True)) (ETuple [v "a", lit8 1]) (ETuple [v "a", lit8 2]))
+              (ifE (ELit (VBool True)) (mkTuple [v "a", lit8 1]) (mkTuple [v "a", lit8 2]))
           )
+    it "[check-rules] accepts a multi-way if" $
+      checkAs (bv 8) (EIf [(ELit (VBool False), lit8 1), (ELit (VBool True), lit8 2)] (lit8 3))
+        `shouldBe` Right ()
+    it "[check-rules] rejects a bit-vector condition after the first" $
+      rejectedWith "condition" $
+        checkAs (bv 8) (EIf [(ELit (VBool True), lit8 1), (ELit (VBV 1 1), lit8 2)] (lit8 3))
+    it "[check-rules] rejects a later branch of a different type" $
+      rejectedWith "branches" $
+        checkAs (bv 8) (EIf [(ELit (VBool True), lit8 1), (ELit (VBool True), ELit (VBV 4 1))] (lit8 3))
+    it "[check-rules] rejects an if with no conditions" $
+      rejectedWith "no conditions" $
+        checkAs (bv 8) (EIf [] (lit8 1))
 
   describe "tuples and projections" $ do
     it "[check-rules] accepts the last component of a tuple" $
-      checkAs TBool (EProj 1 (ETuple [lit8 1, ELit (VBool True)])) `shouldBe` Right ()
+      checkAs TBool (EProj 1 (mkTuple [lit8 1, ELit (VBool True)])) `shouldBe` Right ()
     it "[check-rules] rejects a projection past the last component" $
       rejectedWith "out of range" $
-        checkAs (bv 8) (EProj 2 (ETuple [lit8 1, lit8 2]))
-    it "[check-rules] rejects a projection with an index beyond any machine integer" $
+        checkAs (bv 8) (EProj 2 (mkTuple [lit8 1, lit8 2]))
+    it "[check-rules] rejects a negative projection index" $
       rejectedWith "out of range" $
-        checkAs (bv 8) (EProj (2 ^ (64 :: Int) :: Natural) (ETuple [lit8 1, lit8 2]))
+        checkAs (bv 8) (EProj (-1) (mkTuple [lit8 1, lit8 2]))
+    it "[check-rules] rejects a projection at the largest key" $
+      rejectedWith "out of range" $
+        checkAs (bv 8) (EProj maxBound (mkTuple [lit8 1, lit8 2]))
     it "[check-rules] rejects a projection from a non-product" $
       rejectedWith "projection" $
         checkAs (bv 8) (EProj 0 (lit8 1))
     it "[check-rules] rejects a one-component tuple" $
       rejectedWith "tuple" $
-        checkAs (TProd [bv 8, bv 8]) (ETuple [lit8 1])
+        checkAs (TProd [bv 8, bv 8]) (mkTuple [lit8 1])
+    it "[check-rules] rejects a tuple whose keys skip a position" $
+      rejectedWith "tuple keys" $
+        checkAs (TProd [bv 8, bv 8]) (ETuple (IntMap.fromList [(0, lit8 1), (2, lit8 2)]))
 
   describe "values and types" $ do
     for_
@@ -507,7 +524,7 @@ spec = do
       ]
       $ \(name, value) ->
         it ("[check-rules] rejects " <> name <> " as a literal") $
-          rejectedWith "invalid value" (checkAs (bv 8) (EProj 0 (ETuple [lit8 0, ELit value])))
+          rejectedWith "invalid value" (checkAs (bv 8) (EProj 0 (mkTuple [lit8 0, ELit value])))
     it "[check-rules] rejects a zero-width bit-vector type" $
       rejectedWith "width" $
         checkAs (TFun (bv 0) (bv 0)) (ELam [("x", bv 0)] (v "x"))
@@ -524,20 +541,20 @@ spec = do
           (ELam [("f", sig (TFun TBool TBool))] (v "f"))
     it "[check-rules] rejects a let bind whose value differs from its annotation" $
       rejectedWith "BitVec 4" $
-        checkAs (bv 4) (ELet False [Bind "x" (bv 4) (lit8 1)] (v "x"))
+        checkAs (bv 4) (ELet [Bind "x" (bv 4) (lit8 1)] (v "x"))
 
   describe "annotations inside expressions" $ do
     it "[check-rules] accepts well-formed annotations in a projected-away component" $ do
       checkHidden (EPrim SigPure (TFun TBool (sig TBool))) `shouldBe` Right ()
       checkHidden (ELam [("x", bv 8)] (v "x")) `shouldBe` Right ()
-      checkHidden (ELet True [Bind "x" (sig TBool) (v "x")] (lit8 1)) `shouldBe` Right ()
+      checkHidden (ELetRec [Bind "x" (sig TBool) (v "x")] (lit8 1)) `shouldBe` Right ()
     for_ illFormedTypes $ \(name, t, fragment, primNode) -> do
       it ("[check-rules] rejects a primitive annotated with " <> name) $
         rejectedWith fragment (checkHidden primNode)
       it ("[check-rules] rejects a lambda binder annotated with " <> name) $
         rejectedWith fragment (checkHidden (ELam [("x", t)] (v "x")))
       it ("[check-rules] rejects a let bind annotated with " <> name) $
-        rejectedWith fragment (checkHidden (ELet True [Bind "x" t (v "x")] (lit8 1)))
+        rejectedWith fragment (checkHidden (ELetRec [Bind "x" t (v "x")] (lit8 1)))
 
   describe "input size" $ do
     it "[check-rules] shortens a wide type in a message, keeping its shape" $ do

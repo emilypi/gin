@@ -156,6 +156,7 @@ import Gin.Core.Json (decodeProgram, decodeVectors)
 import Gin.Core.Normal (NModule)
 import Gin.Core.Syntax
   ( Certificate
+  , Name
   , Port (..)
   , Program (..)
   , TopEntity (..)
@@ -543,7 +544,7 @@ backendFor = \case
 
 -- | Read, decode and check the IR file, including its trace and,
 -- if one is given, its specification hash.
-loadProgram :: Inputs -> Pipe Program
+loadProgram :: Inputs -> Pipe (Program Ty Name)
 loadProgram ins = do
   let file = inFile ins
   bytes <- readInput file
@@ -576,7 +577,7 @@ policyWith extra = CertPolicy (allowedAxioms defaultPolicy <> Set.fromList extra
 
 -- | Read and decode the vectors file, and check that it describes the
 -- program's top entity.
-loadVectors :: Program -> FilePath -> Pipe Vectors
+loadVectors :: Program Ty Name -> FilePath -> Pipe Vectors
 loadVectors prog file = do
   bytes <- readInput file
   liftEither . inFileContext file $ do
@@ -601,7 +602,7 @@ readInput file =
 
 -- | The vectors must be for the program's top entity, with the same ports
 -- (names, types and order).
-matchVectors :: TopEntity -> Vectors -> Either GinError ()
+matchVectors :: TopEntity Ty Name -> Vectors -> Either GinError ()
 matchVectors top vecs = do
   unless (vecTop vecs == topName top) $
     failAt StDriver $
@@ -612,7 +613,7 @@ matchVectors top vecs = do
   matchPorts "input" (topInputs top) (vecInputs vecs)
   matchPorts "output" (topOutputs top) (vecOutputs vecs)
 
-matchPorts :: Text -> [Port] -> [Port] -> Either GinError ()
+matchPorts :: Text -> [Port Ty] -> [Port Ty] -> Either GinError ()
 matchPorts kind expected actual = do
   for_ (zip3 [0 :: Int ..] expected actual) $ \(i, e, a) ->
     unless (e == a) $
@@ -634,7 +635,7 @@ matchPorts kind expected actual = do
   where
     ports n = showT n <> " " <> kind <> (if n == 1 then " port" else " ports")
 
-renderPort :: Port -> Text
+renderPort :: Port Ty -> Text
 renderPort p = clip (portName p) <> " : " <> renderTy (portTy p)
   where
     renderTy = \case
@@ -651,7 +652,7 @@ clip t
 ----------------------------------------------------------------------
 -- Compiling and writing files
 
-compileProgram :: Program -> Pipe (NModule, Module)
+compileProgram :: Program Ty Name -> Pipe (NModule, Module)
 compileProgram prog = liftEither $ do
   nm <- normalize prog
   checkNormal nm
@@ -767,7 +768,7 @@ reportVectors minimum' vecs = do
 -- | Run both reference simulators against the vectors' expected outputs,
 -- each for at most the time limit, and print their lines; 'False' if one
 -- failed.
-runSimulators :: SimOptions -> Program -> NModule -> Vectors -> IO Bool
+runSimulators :: SimOptions -> Program Ty Name -> NModule -> Vectors -> IO Bool
 runSimulators sim prog nm vecs = do
   core <- withinTime (coreOutcome (simulateCore prog rows))
   coreOk <- reportAll [("sim-core", fromMaybe (Skip ("inconclusive: " <> timedOut)) core)]
@@ -799,7 +800,7 @@ evaluateWithin seconds outcome = do
 
 -- | 'Pass' when the simulated rows equal the expected ones, else the first
 -- mismatch.
-compareRows :: [Port] -> [[Value]] -> Either GinError [[Value]] -> Outcome
+compareRows :: [Port Ty] -> [[Value]] -> Either GinError [[Value]] -> Outcome
 compareRows ports expected = \case
   Left e -> Fail (oneLine (Text.lines (renderError e)))
   Right actual

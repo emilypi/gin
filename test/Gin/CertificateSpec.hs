@@ -55,7 +55,7 @@ invisibleOnly =
   , "\ESC"
   ]
 
-decodeFixture :: FilePath -> IO Program
+decodeFixture :: FilePath -> IO (Program Ty Name)
 decodeFixture path = do
   bytes <- LBS.readFile path
   either (fail . Text.unpack . renderError) pure (decodeProgram bytes)

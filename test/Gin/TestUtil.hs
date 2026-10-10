@@ -6,6 +6,7 @@ module Gin.TestUtil
   , runTool
   , withTempDir
   , tshow
+  , ifE
   , moduleOperands
   , declOperands
   ) where
@@ -15,6 +16,7 @@ import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as Text
+import Gin.Core.Syntax (Expr (..))
 import Gin.Netlist.Types (Decl (..), Module (..), Operand, Output (..), exprOperands)
 import System.Directory (createDirectoryIfMissing, doesFileExist, findExecutable)
 import System.Environment (lookupEnv)
@@ -76,6 +78,10 @@ withTempDir = withSystemTempDirectory "gin-test"
 
 tshow :: (Show a) => a -> Text
 tshow = Text.pack . show
+
+-- | The two-way @if c then t else e@.
+ifE :: Expr ty name -> Expr ty name -> Expr ty name -> Expr ty name
+ifE c t e = EIf [(c, t)] e
 
 -- | Every operand a module reads: output drivers, then each declaration's.
 moduleOperands :: Module -> [Operand]

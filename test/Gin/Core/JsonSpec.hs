@@ -16,7 +16,7 @@ import Gin.Core.Syntax
 import Gin.Error
 import Gin.Examples
 import Gin.Limits
-import Gin.TestUtil (tshow)
+import Gin.TestUtil (ifE, tshow)
 import Gin.Vectors
 import Numeric.Natural (Natural)
 import System.Environment (lookupEnv)
@@ -123,7 +123,7 @@ genPrimOp =
     , SigMealy <$> genValue
     ]
 
-genExpr :: Int -> Gen Expr
+genExpr :: Int -> Gen (Expr Ty Name)
 genExpr depth
   | depth <= 0 = leaf
   | otherwise =
@@ -131,14 +131,18 @@ genExpr depth
         [ (3, leaf)
         , (2, EApp <$> sub <*> listAtLeast 1 sub)
         , (1, ELam <$> listAtLeast 1 ((,) <$> genName <*> ty) <*> sub)
-        , (1, ELet <$> arbitrary <*> listAtLeast 0 (Bind <$> genName <*> ty <*> sub) <*> sub)
-        , (1, ETuple <$> listAtLeast 2 sub)
-        , (1, EProj <$> genNat <*> sub)
-        , (1, EIf <$> sub <*> sub <*> sub)
+        , (1, elements [ELet, ELetRec] <*> listAtLeast 0 (Bind <$> genName <*> ty <*> sub) <*> sub)
+        , (1, mkTuple <$> listAtLeast 2 sub)
+        , (1, EProj . fromIntegral <$> genNat <*> sub)
+        , (1, elseIf <$> listAtLeast 1 ((,) <$> sub <*> sub) <*> sub)
         ]
   where
     sub = genExpr (depth `div` 2)
     ty = genTy 3
+    -- The decoder joins an if in the else branch to its parent.
+    elseIf arms = \case
+      EIf more e -> EIf (arms <> more) e
+      e -> EIf arms e
     leaf =
       oneof
         [ EVar <$> genName
@@ -147,10 +151,10 @@ genExpr depth
         , EPrim <$> genPrimOp <*> genTy 4
         ]
 
-genPort :: Gen Port
+genPort :: Gen (Port Ty)
 genPort = Port <$> genText <*> genTy 3
 
-genProgram :: Gen Program
+genProgram :: Gen (Program Ty Name)
 genProgram = do
   producer <- Producer <$> genText <*> genText
   top <-
@@ -256,7 +260,7 @@ bvValue w s = A.object ["bv" A..= w, "val" A..= s]
 -- JSON) lists the definitions its statement depends on, as the exporter
 -- renders them: several lines, Unicode, and a string literal whose quotes
 -- and backslash must be escaped.
-counterWithSpec :: Program
+counterWithSpec :: Program Ty Name
 counterWithSpec =
   withSpecDefs
     [ SpecDef
@@ -277,7 +281,7 @@ counterWithSpec =
             }
       }
 
-withSpecDefs :: [SpecDef] -> Program -> Program
+withSpecDefs :: [SpecDef] -> Program Ty Name -> Program Ty Name
 withSpecDefs defs p = p{progCertificate = (progCertificate p){certSpecDefs = defs}}
 
 specJson :: A.Value
@@ -356,6 +360,11 @@ emptyRows n =
     <> LBS.intercalate "," (replicate n "{\"in\":[],\"out\":[]}")
     <> "]}"
 
+-- | The counter program with one more def, of the given body.
+withExtraDef :: Expr Ty Name -> Program Ty Name
+withExtraDef e =
+  counterProgram {progDefs = progDefs counterProgram <> [Def "Extra.f" (TBitVec 8) e]}
+
 ----------------------------------------------------------------------
 
 spec :: Spec
@@ -378,6 +387,20 @@ spec = do
     it "[json-roundtrip] re-encoding a decoded document reproduces the canonical encoding" $
       forAll genProgram $ \p ->
         let bytes = encodeProgram p in fmap encodeProgram (decodeProgram bytes) === Right bytes
+    it "[json-roundtrip] decodes an else-if chain to one multi-way if" $ do
+      let lit k = ELit (VBV 8 k)
+          chain = ifE (EVar "a") (lit 1) (ifE (EVar "b") (lit 2) (lit 3))
+          multiWay = EIf [(EVar "a", lit 1), (EVar "b", lit 2)] (lit 3)
+      decodeProgram (encodeProgram (withExtraDef chain)) `shouldBe` Right (withExtraDef multiWay)
+      encodeProgram (withExtraDef multiWay) `shouldBe` encodeProgram (withExtraDef chain)
+    it "[json-roundtrip] encodes ELetRec as a let with rec true and ELet with rec false" $ do
+      let binds = [Bind "x" (TBitVec 8) (EVar "x")]
+          letRec = withExtraDef (ELetRec binds (EVar "x"))
+          letPlain = withExtraDef (ELet binds (EVar "x"))
+      LBS8.unpack (encodeProgram letRec) `shouldContain` "{\"e\":\"let\",\"rec\":true,"
+      LBS8.unpack (encodeProgram letPlain) `shouldContain` "{\"e\":\"let\",\"rec\":false,"
+      decodeProgram (encodeProgram letRec) `shouldBe` Right letRec
+      decodeProgram (encodeProgram letPlain) `shouldBe` Right letPlain
     it "[json-roundtrip] encodes the counter program canonically" $ do
       expected <- LBS.readFile "test/fixtures/ir/counter.canonical.json"
       encodeProgram counterProgram `shouldBe` LBS8.dropWhileEnd isSpace expected

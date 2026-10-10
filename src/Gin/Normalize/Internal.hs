@@ -49,10 +49,10 @@ import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
 import Data.IntSet (IntSet)
 import Data.IntSet qualified as IntSet
-import Data.List (genericDrop)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
+import Data.Ord (clamp)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -79,7 +79,6 @@ import Gin.Core.Syntax
 import Gin.Core.Utils (failAt, showT, withContextM)
 import Gin.Error (GinError, Stage (..), ginError, withContext)
 import Gin.Limits (maxNormalBinds)
-import Numeric.Natural (Natural)
 
 -- | Evaluation steps (expression visits plus function applications) one
 -- normalization may take: 256 per permitted bind. Programs that stay
@@ -150,7 +149,7 @@ data IExpr
   | ILam [Int] IExpr
   | ILet !Bool [IBind] IExpr
   | ITuple [IExpr]
-  | IProj !Natural IExpr
+  | IProj !Int IExpr
   | IIf IExpr IExpr IExpr
 
 data IBind = IBind
@@ -169,7 +168,7 @@ intern x = state $ \s@(Interner ids names) -> case Map.lookup x ids of
     let i = Map.size ids
      in (i, Interner (Map.insert x i ids) (IntMap.insert i x names))
 
-internExpr :: Expr -> State Interner IExpr
+internExpr :: Expr Ty Name -> State Interner IExpr
 internExpr = \case
   EVar x -> IVar <$> intern x
   EGlobal g -> IGlobal <$> intern g
@@ -177,17 +176,19 @@ internExpr = \case
   EPrim op _ -> pure (IPrim op)
   EApp f args -> IApp <$> internExpr f <*> traverse internExpr args
   ELam params body -> ILam <$> traverse (intern . fst) params <*> internExpr body
-  ELet isRec binds body -> ILet isRec <$> traverse internBind binds <*> internExpr body
-  ETuple es -> ITuple <$> traverse internExpr es
+  ELet binds body -> ILet False <$> traverse internBind binds <*> internExpr body
+  ELetRec binds body -> ILet True <$> traverse internBind binds <*> internExpr body
+  ETuple es -> ITuple <$> traverse internExpr (IntMap.elems es)
   EProj i e -> IProj i <$> internExpr e
-  EIf c t e -> IIf <$> internExpr c <*> internExpr t <*> internExpr e
+  EIf arms e ->
+    foldr (\(c, t) el -> IIf <$> internExpr c <*> internExpr t <*> el) (internExpr e) arms
   where
     internBind (Bind x t e) = IBind <$> intern x <*> pure t <*> internExpr e
 
 -- | The bodies of all definitions and the id of the top entity's
 -- definition, with the name of every id. A later definition with the same
 -- name replaces an earlier one.
-internProgram :: Program -> (IntMap IExpr, Int, IntMap Name)
+internProgram :: Program Ty Name -> (IntMap IExpr, Int, IntMap Name)
 internProgram prog = (IntMap.fromList defs, top, names)
   where
     ((defs, top), Interner _ names) = runState build (Interner Map.empty IntMap.empty)
@@ -541,11 +542,11 @@ tie x hole v = case (hole, v) of
   (STuple _ hs, STuple _ vs) | length hs == length vs -> zipWithM_ (tie x) hs vs
   _ -> failAt StNormalize ("the value of recursive binding " <> x <> " does not match its type")
 
-project :: Natural -> SVal -> M SVal
+project :: Int -> SVal -> M SVal
 project i v = do
-  spend (fromIntegral (min i (fromIntegral maxEvalSteps)))
+  spend (clamp (0, maxEvalSteps) i)
   case v of
-    STuple _ vs | x : _ <- genericDrop i vs -> pure x
+    STuple _ vs | i >= 0, x : _ <- drop i vs -> pure x
     _ -> failAt StNormalize ("projection " <> showT i <> " out of a value without that component")
 
 -- | One mux per scalar component where the branches differ. Each pair of
@@ -660,7 +661,7 @@ stateWires v0 = do
 -- | Evaluate the top entity and run the final pass. The result satisfies
 -- the invariants of "Gin.Core.Normal" when the program is well typed;
 -- "Gin.Normalize.normalize" checks them.
-buildModule :: Program -> Either GinError NModule
+buildModule :: Program Ty Name -> Either GinError NModule
 buildModule prog = do
   let top = progTop prog
       (defs, topId, names) = internProgram prog
@@ -688,7 +689,7 @@ buildModule prog = do
 
 -- | Apply the top entity's definition, whose name has the given id, to its
 -- inputs and read its outputs.
-elaborate :: TopEntity -> Int -> M [(Port, W)]
+elaborate :: TopEntity Ty Name -> Int -> M [(Port Ty, W)]
 elaborate top topId = inContext ("in top entity " <> topName top) $ do
   when (null (topOutputs top)) $ failAt StNormalize "the top entity has no outputs"
   f <- global topId
@@ -736,7 +737,7 @@ isCopy = \case
 -- | Build the module from the emitted binds. Binds no output depends on,
 -- through any operand, are dropped before copies are resolved and loops
 -- are looked for, so only loops the outputs depend on are errors.
-assemble :: Program -> [(Port, W)] -> St -> Either GinError NModule
+assemble :: Program Ty Name -> [(Port Ty, W)] -> St -> Either GinError NModule
 assemble prog outs st = do
   let emitted = stBinds st
       raw = IntMap.restrictKeys emitted (reachable emitted (fmap snd outs))

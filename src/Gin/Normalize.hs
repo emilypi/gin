@@ -63,7 +63,7 @@ import Gin.Normalize.Internal (buildModule, primResultTy)
 -- 'Gin.Normalize.Internal.maxEvalSteps' steps, a recursive @let@ that
 -- binds a function, and an @if@ whose branches carry functions. The
 -- result is validated with 'checkNormal' before it is returned.
-normalize :: Program -> Either GinError NModule
+normalize :: Program Ty Name -> Either GinError NModule
 normalize prog = do
   m <- buildModule prog
   withContext "while validating the normal form" (checkNormal m)

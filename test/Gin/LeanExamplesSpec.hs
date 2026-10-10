@@ -42,7 +42,15 @@ import Gin.Certificate (checkCertificate, defaultPolicy)
 import Gin.Core.Check (checkProgram)
 import Gin.Core.Json (decodeProgram, decodeVectors, encodeVectors)
 import Gin.Core.Normal (NModule (..))
-import Gin.Core.Syntax (Certificate (..), Port (..), Program (..), TopEntity (..), Value (..))
+import Gin.Core.Syntax
+  ( Certificate (..)
+  , Name
+  , Port (..)
+  , Program (..)
+  , TopEntity (..)
+  , Ty
+  , Value (..)
+  )
 import Gin.Driver (runCli)
 import Gin.Error (GinError, renderError)
 import Gin.Examples
@@ -162,7 +170,7 @@ validateSpec ex = do
 -- | An exported example and the hand-written fixture of the same circuit.
 data LeanExample = LeanExample
   { exName :: !String
-  , exFixture :: !Program
+  , exFixture :: !(Program Ty Name)
   , exFixtureVectors :: !Vectors
   }
 
@@ -179,7 +187,7 @@ vectorsFile ex = "examples" </> exName ex </> exName ex <> ".vectors.json"
 
 -- | Decode an example's committed files and run the checks every gin
 -- command runs on loading: type checking and the default axiom policy.
-withExported :: LeanExample -> (Program -> Vectors -> Expectation) -> Expectation
+withExported :: LeanExample -> (Program Ty Name -> Vectors -> Expectation) -> Expectation
 withExported ex k = do
   programJson <- readBytes (programFile ex)
   vectorsJson <- readBytes (vectorsFile ex)
@@ -242,7 +250,7 @@ outputRows = fmap cycOutputs . vecCycles
 
 -- | 'simulateCore' with its error rendered. The examples are far inside
 -- its bounds, so any error, inconclusive or not, fails a test.
-runCore :: Program -> [[Value]] -> Either Text [[Value]]
+runCore :: Program Ty Name -> [[Value]] -> Either Text [[Value]]
 runCore p = first renderError . simulateCore p
 
 runNormal :: NModule -> [[Value]] -> Either Text [[Value]]

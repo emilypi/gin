@@ -1,3 +1,5 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 -- | Types of the gin core IR.
 module Gin.Core.Type
   ( Domain (..)
@@ -6,9 +8,20 @@ module Gin.Core.Type
   , isScalar
   , tFuns
   , splitFun
+
+    -- * Optics
+  , domainNameL
+  , domainPeriodPsL
+  , _TBool
+  , _TBitVec
+  , _TProd
+  , _TFun
+  , _TSignal
   ) where
 
+import Control.Lens (Plated (..), makePrisms)
 import Data.Text (Text)
+import Gin.Core.Optics (makeFieldLenses)
 import Numeric.Natural (Natural)
 
 -- | A synchronous clock domain. Every domain has one clock and one
@@ -51,3 +64,18 @@ splitFun :: Ty -> ([Ty], Ty)
 splitFun = \case
   TFun a r -> let (as, res) = splitFun r in (a : as, res)
   t -> ([], t)
+
+----------------------------------------------------------------------
+-- Optics
+
+makeFieldLenses ''Domain
+makePrisms ''Ty
+
+-- | The immediate component types: 'Control.Lens.universe' lists every
+-- type inside one, 'Control.Lens.transform' rewrites them bottom-up.
+instance Plated Ty where
+  plate f = \case
+    TProd ts -> TProd <$> traverse f ts
+    TFun a r -> TFun <$> f a <*> f r
+    TSignal d t -> TSignal d <$> f t
+    t -> pure t

@@ -1,3 +1,5 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 -- | Cycle-by-cycle test vectors: produced by the Lean exporter from the
 -- Lean semantics, consumed by the simulators and HDL testbenches. They
 -- are how we answer "does the generated hardware still implement the
@@ -10,9 +12,18 @@ module Gin.Vectors
   ( Vectors (..)
   , Cycle (..)
   , maxCycles
+
+    -- * Optics
+  , vecTopL
+  , vecInputsL
+  , vecOutputsL
+  , vecCyclesL
+  , cycInputsL
+  , cycOutputsL
   ) where
 
 import Data.Text (Text)
+import Gin.Core.Optics (makeFieldLenses)
 import Gin.Core.Syntax (Port, Ty, Value)
 
 data Vectors = Vectors
@@ -35,3 +46,9 @@ data Cycle = Cycle
 -- | Largest vector set gin accepts.
 maxCycles :: Int
 maxCycles = 100000
+
+----------------------------------------------------------------------
+-- Optics
+
+makeFieldLenses ''Vectors
+makeFieldLenses ''Cycle

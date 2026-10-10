@@ -1,3 +1,5 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 -- | Target-independent netlist: one operator per net, every net typed.
 --
 -- Invariants, established by 'Gin.Netlist.Build.buildNetlist' and
@@ -41,8 +43,54 @@ module Gin.Netlist.Types
   , Module (..)
   , moduleNets
   , operandType
+
+    -- * Optics
+  , hexprOperands
+  , declNetL
+  , _Ident
+  , _HBit
+  , _HVec
+  , netNameL
+  , netTypeL
+  , _HLitBit
+  , _HLitVec
+  , _ORef
+  , _OConst
+  , _UNot
+  , _UNeg
+  , _BAnd
+  , _BOr
+  , _BXor
+  , _BAdd
+  , _BSub
+  , _BMul
+  , _BEq
+  , _BUlt
+  , _BUle
+  , _HOperand
+  , _HUn
+  , _HBin
+  , _HMux
+  , _HShl
+  , _HLshr
+  , _HSlice
+  , _HConcat
+  , _HZext
+  , _HBitToVec
+  , _DAssign
+  , _DReg
+  , outNetL
+  , outDriverL
+  , modNameL
+  , modHeaderL
+  , modClockL
+  , modResetL
+  , modInputsL
+  , modOutputsL
+  , modDeclsL
   ) where
 
+import Control.Lens (Lens', Traversal', makePrisms, toListOf, view)
 import Data.Char (isAsciiLower, isDigit)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -50,6 +98,7 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Gin.Core.Optics (makeFieldLenses)
 import Numeric.Natural (Natural)
 
 -- | An identifier legal in Verilog-2005, SystemVerilog-2017 and VHDL-2008.
@@ -219,19 +268,23 @@ data HExpr
   | HBitToVec !Operand
   deriving stock (Eq, Show)
 
--- | The operands an expression reads, in order.
+-- | The operands an expression reads, in order ('hexprOperands' as a list).
 exprOperands :: HExpr -> [Operand]
-exprOperands = \case
-  HOperand o -> [o]
-  HUn _ o -> [o]
-  HBin _ a b -> [a, b]
-  HMux c t e -> [c, t, e]
-  HShl _ o -> [o]
-  HLshr _ o -> [o]
-  HSlice _ _ o -> [o]
-  HConcat a b -> [a, b]
-  HZext _ o -> [o]
-  HBitToVec o -> [o]
+exprOperands = toListOf hexprOperands
+
+-- | The operands an expression reads, in order.
+hexprOperands :: Traversal' HExpr Operand
+hexprOperands f = \case
+  HOperand o -> HOperand <$> f o
+  HUn op o -> HUn op <$> f o
+  HBin op a b -> HBin op <$> f a <*> f b
+  HMux c t e -> HMux <$> f c <*> f t <*> f e
+  HShl k o -> HShl k <$> f o
+  HLshr k o -> HLshr k <$> f o
+  HSlice hi lo o -> HSlice hi lo <$> f o
+  HConcat a b -> HConcat <$> f a <*> f b
+  HZext m o -> HZext m <$> f o
+  HBitToVec o -> HBitToVec <$> f o
 
 data Decl
   = -- | Continuous assignment of a combinational net.
@@ -241,9 +294,13 @@ data Decl
   deriving stock (Eq, Show)
 
 declNet :: Decl -> Net
-declNet = \case
-  DAssign n _ -> n
-  DReg n _ _ -> n
+declNet = view declNetL
+
+-- | The net a declaration drives.
+declNetL :: Lens' Decl Net
+declNetL f = \case
+  DAssign n e -> (`DAssign` e) <$> f n
+  DReg n v o -> (\n' -> DReg n' v o) <$> f n
 
 -- | An output port and the operand driving it.
 data Output = Output
@@ -276,3 +333,18 @@ operandType :: Module -> Operand -> Maybe HwType
 operandType m = \case
   ORef i -> Map.lookup i (moduleNets m)
   OConst l -> Just (hlitType l)
+
+----------------------------------------------------------------------
+-- Optics
+
+makePrisms ''Ident
+makePrisms ''HwType
+makeFieldLenses ''Net
+makePrisms ''HLit
+makePrisms ''Operand
+makePrisms ''UnOp
+makePrisms ''BinOp
+makePrisms ''HExpr
+makePrisms ''Decl
+makeFieldLenses ''Output
+makeFieldLenses ''Module

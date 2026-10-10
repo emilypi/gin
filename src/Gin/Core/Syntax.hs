@@ -1,3 +1,5 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 -- | Abstract syntax of the gin core IR, the language the Lean exporter
 -- emits (as JSON, see @docs/file-formats.md@) and the normalizer consumes.
 module Gin.Core.Syntax
@@ -17,8 +19,53 @@ module Gin.Core.Syntax
   , module Gin.Core.Type
   , module Gin.Core.Value
   , module Gin.Core.Prim
+
+    -- * Optics
+  , types
+  , _Name
+  , _EVar
+  , _EGlobal
+  , _ELit
+  , _EPrim
+  , _EApp
+  , _ELam
+  , _ELet
+  , _ELetRec
+  , _ETuple
+  , _EProj
+  , _EIf
+  , bindNameL
+  , bindTyL
+  , bindExprL
+  , defNameL
+  , defTyL
+  , defBodyL
+  , portNameL
+  , portTyL
+  , topNameL
+  , topDomainL
+  , topInputsL
+  , topOutputsL
+  , topDefL
+  , specDefNameL
+  , specDefBodyL
+  , certTheoremL
+  , certStatementL
+  , certAxiomsL
+  , certImplAxiomsL
+  , certSpecDefsL
+  , producerToolL
+  , producerLeanVersionL
+  , progProducerL
+  , progTopL
+  , progDefsL
+  , progCertificateL
   ) where
 
+import Control.Lens (Plated (..), Traversal, makePrisms)
+import Data.Bifoldable (Bifoldable (..))
+import Data.Bifunctor (Bifunctor (..))
+import Data.Bitraversable (Bitraversable (..), bifoldMapDefault, bimapDefault)
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
 import Data.List (find)
@@ -26,6 +73,7 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.String (IsString)
 import Data.Text (Text)
+import Gin.Core.Optics (makeFieldLenses)
 import Gin.Core.Prim
 import Gin.Core.Type
 import Gin.Core.Value
@@ -88,7 +136,7 @@ data Port ty = Port
   { portName :: !Text
   , portTy :: !ty
   }
-  deriving stock (Eq, Show, Functor)
+  deriving stock (Eq, Show, Functor, Foldable, Traversable)
 
 -- | The circuit to synthesise. The type of 'topDef' must be
 --
@@ -179,3 +227,99 @@ globalRefs = \case
   EIf arms e -> foldMap (\(c, t) -> globalRefs c <> globalRefs t) arms <> globalRefs e
   where
     bindRefs = foldMap (globalRefs . bindExpr)
+
+----------------------------------------------------------------------
+-- Optics
+
+makePrisms ''Name
+makePrisms ''Expr
+makeFieldLenses ''Bind
+makeFieldLenses ''Def
+makeFieldLenses ''Port
+makeFieldLenses ''TopEntity
+makeFieldLenses ''SpecDef
+makeFieldLenses ''Certificate
+makeFieldLenses ''Producer
+makeFieldLenses ''Program
+
+-- | The immediate subexpressions, in order, including the right-hand sides
+-- of let binds: 'Control.Lens.cosmos' visits every subexpression,
+-- 'Control.Lens.transform' rewrites them bottom-up.
+instance Plated (Expr ty name) where
+  plate f = \case
+    EApp g args -> EApp <$> f g <*> traverse f args
+    ELam params body -> ELam params <$> f body
+    ELet binds body -> ELet <$> traverse (bindExprL f) binds <*> f body
+    ELetRec binds body -> ELetRec <$> traverse (bindExprL f) binds <*> f body
+    ETuple es -> ETuple <$> traverse f es
+    EProj i e -> EProj i <$> f e
+    EIf arms e -> EIf <$> traverse (bitraverse f f) arms <*> f e
+    e -> pure e
+
+-- | Every type in the term, in order. 'Control.Lens.traversed' visits the
+-- names.
+types :: (Bitraversable p) => Traversal (p ty name) (p ty' name) ty ty'
+types f = bitraverse f pure
+
+-- The 'Bitraversable' instances visit types and names in the order they
+-- appear in the term.
+
+instance Bifunctor Expr where
+  bimap = bimapDefault
+
+instance Bifoldable Expr where
+  bifoldMap = bifoldMapDefault
+
+instance Bitraversable Expr where
+  bitraverse f g = go
+    where
+      go = \case
+        EVar x -> EVar <$> g x
+        EGlobal x -> EGlobal <$> g x
+        ELit v -> pure (ELit v)
+        EPrim op t -> EPrim op <$> f t
+        EApp h args -> EApp <$> go h <*> traverse go args
+        ELam params body -> ELam <$> traverse (bitraverse g f) params <*> go body
+        ELet binds body -> ELet <$> traverse (bitraverse f g) binds <*> go body
+        ELetRec binds body -> ELetRec <$> traverse (bitraverse f g) binds <*> go body
+        ETuple es -> ETuple <$> traverse go es
+        EProj i e -> EProj i <$> go e
+        EIf arms e -> EIf <$> traverse (bitraverse go go) arms <*> go e
+
+instance Bifunctor Bind where
+  bimap = bimapDefault
+
+instance Bifoldable Bind where
+  bifoldMap = bifoldMapDefault
+
+instance Bitraversable Bind where
+  bitraverse f g (Bind x t e) = Bind <$> g x <*> f t <*> bitraverse f g e
+
+instance Bifunctor Def where
+  bimap = bimapDefault
+
+instance Bifoldable Def where
+  bifoldMap = bifoldMapDefault
+
+instance Bitraversable Def where
+  bitraverse f g (Def x t e) = Def <$> g x <*> f t <*> bitraverse f g e
+
+instance Bifunctor TopEntity where
+  bimap = bimapDefault
+
+instance Bifoldable TopEntity where
+  bifoldMap = bifoldMapDefault
+
+instance Bitraversable TopEntity where
+  bitraverse f g (TopEntity n d ins outs x) =
+    TopEntity n d <$> traverse (traverse f) ins <*> traverse (traverse f) outs <*> g x
+
+instance Bifunctor Program where
+  bimap = bimapDefault
+
+instance Bifoldable Program where
+  bifoldMap = bifoldMapDefault
+
+instance Bitraversable Program where
+  bitraverse f g (Program p top defs c) =
+    Program p <$> bitraverse f g top <*> traverse (bitraverse f g) defs <*> pure c

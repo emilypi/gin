@@ -1,3 +1,5 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 -- | Primitive operations of the gin core IR.
 --
 -- Semantics are specified in @docs/semantics.md@.
@@ -26,8 +28,37 @@ module Gin.Core.Prim
   , primName
   , primArity
   , isCombinational
+
+    -- * Optics
+  , _BoolAnd
+  , _BoolOr
+  , _BoolXor
+  , _BoolNot
+  , _BoolEq
+  , _BvAdd
+  , _BvSub
+  , _BvMul
+  , _BvNeg
+  , _BvAnd
+  , _BvOr
+  , _BvXor
+  , _BvNot
+  , _BvShl
+  , _BvLshr
+  , _BvEq
+  , _BvUlt
+  , _BvUle
+  , _BvConcat
+  , _BvExtract
+  , _BvZext
+  , _BvOfBool
+  , _SigPure
+  , _SigLift
+  , _SigRegister
+  , _SigMealy
   ) where
 
+import Control.Lens (makePrisms)
 import Data.Text (Text)
 import Gin.Core.Value (Value)
 import Numeric.Natural (Natural)
@@ -124,3 +155,8 @@ isCombinational = \case
   SigRegister _ -> False
   SigMealy _ -> False
   _ -> True
+
+----------------------------------------------------------------------
+-- Optics
+
+makePrisms ''PrimOp

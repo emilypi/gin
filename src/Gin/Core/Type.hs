@@ -1,6 +1,15 @@
 {-# LANGUAGE TemplateHaskell #-}
 
--- | Types of the gin core IR.
+-- |
+-- Module       : Gin.Core.Type
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Types of the gin core IR.
 module Gin.Core.Type
   ( Domain (..)
   , Ty (..)

@@ -1,4 +1,13 @@
--- | The rule every module generates its lenses with. Record fields keep
+-- |
+-- Module       : Gin.Core.Optics
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- The rule every module generates its lenses with. Record fields keep
 -- their names, so code that reads them is unchanged, and each field gets a
 -- lens named after it with an @L@ suffix: @defName@ gets @defNameL@.
 -- Prisms keep lens's own names (@_EVar@).

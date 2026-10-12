@@ -1,4 +1,13 @@
--- | End-to-end tests of the compiler pipeline, through the library API.
+-- |
+-- Module       : Gin.E2ESpec
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- End-to-end tests of the compiler pipeline, through the library API.
 --
 -- They put a version of the README's third question to the compiler
 -- itself: does the generated hardware still implement the program it was

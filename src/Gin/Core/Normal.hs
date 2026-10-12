@@ -1,6 +1,15 @@
 {-# LANGUAGE TemplateHaskell #-}
 
--- | Normal form (NF): the first-order, signal-erased, tuple-free program
+-- |
+-- Module       : Gin.Core.Normal
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Normal form (NF): the first-order, signal-erased, tuple-free program
 -- the normalizer produces and the netlist builder consumes.
 --
 -- Invariants, checked by 'Gin.Normalize.checkNormal':

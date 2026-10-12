@@ -1,6 +1,15 @@
 {-# LANGUAGE TemplateHaskell #-}
 
--- | Abstract syntax of the gin core IR, the language the Lean exporter
+-- |
+-- Module       : Gin.Core.Syntax
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Abstract syntax of the gin core IR, the language the Lean exporter
 -- emits (as JSON, see @docs/file-formats.md@) and the normalizer consumes.
 module Gin.Core.Syntax
   ( Name (..)

@@ -1,4 +1,13 @@
--- | Tests for the Verilog-2005 backend. They answer the README's third
+-- |
+-- Module       : Gin.Backend.VerilogSpec
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Tests for the Verilog-2005 backend. They answer the README's third
 -- question for Verilog and, through 'familySpec', SystemVerilog: does
 -- the generated hardware still implement the functionality described by
 -- Lean?

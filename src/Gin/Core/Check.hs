@@ -1,4 +1,13 @@
--- | Type checker for the core IR.
+-- |
+-- Module       : Gin.Core.Check
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Type checker for the core IR.
 --
 -- The IR is fully annotated (lambda binders, let binds and primitives
 -- carry their types), so checking is syntax-directed: every expression's

@@ -1,4 +1,13 @@
--- | Sanity checks on the shared fixtures themselves, so a broken fixture
+-- |
+-- Module       : Gin.ExamplesSpec
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Sanity checks on the shared fixtures themselves, so a broken fixture
 -- fails here rather than in every suite that uses it.
 module Gin.ExamplesSpec (spec) where
 

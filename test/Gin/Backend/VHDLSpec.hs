@@ -1,4 +1,13 @@
--- | Tests for the VHDL-2008 backend. They answer the README's third
+-- |
+-- Module       : Gin.Backend.VHDLSpec
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Tests for the VHDL-2008 backend. They answer the README's third
 -- question for VHDL: does the generated hardware still implement the
 -- functionality described by Lean?
 --

@@ -1,4 +1,13 @@
--- | SHA-256 (FIPS 180-4), used to give a reviewed specification a stable
+-- |
+-- Module       : Gin.Hash
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- SHA-256 (FIPS 180-4), used to give a reviewed specification a stable
 -- identity ('Gin.Certificate.certificateSpecHash'): once you have answered
 -- "does the specification say what I want?", you pin it with
 -- @--spec-hash@. I use a small pure implementation to keep the

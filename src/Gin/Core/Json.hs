@@ -1,4 +1,13 @@
--- | JSON encoding of the core IR and test vectors, as specified in
+-- |
+-- Module       : Gin.Core.Json
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- JSON encoding of the core IR and test vectors, as specified in
 -- @docs/file-formats.md@. I use explicit functions rather than instances,
 -- so the core types carry no aeson dependency and no orphan instances.
 --

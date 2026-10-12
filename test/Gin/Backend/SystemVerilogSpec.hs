@@ -1,4 +1,13 @@
--- | Tests for the SystemVerilog-2017 backend: the Verilog-family suite
+-- |
+-- Module       : Gin.Backend.SystemVerilogSpec
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Tests for the SystemVerilog-2017 backend: the Verilog-family suite
 -- from "Gin.Backend.VerilogSpec", run with the SystemVerilog tools and
 -- golden files, plus dialect checks.
 module Gin.Backend.SystemVerilogSpec (spec) where

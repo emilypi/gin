@@ -1,4 +1,13 @@
--- | Translation validation of the circuits exported from Lean.
+-- |
+-- Module       : Gin.LeanExamplesSpec
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Translation validation of the circuits exported from Lean.
 --
 -- These tests answer the README's third question for Lean exports: does
 -- the generated hardware still implement the functionality described by

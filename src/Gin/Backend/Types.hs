@@ -1,4 +1,13 @@
--- | The interface every HDL backend implements.
+-- |
+-- Module       : Gin.Backend.Types
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- The interface every HDL backend implements.
 module Gin.Backend.Types
   ( Target (..)
   , targetName

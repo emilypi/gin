@@ -1,4 +1,13 @@
--- | Tests for the reference simulators ('Gin.Sim') and the primitive
+-- |
+-- Module       : Gin.SimSpec
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Tests for the reference simulators ('Gin.Sim') and the primitive
 -- semantics ('Gin.Sim.Prim') specified in @docs/semantics.md@.
 --
 -- The simulators are my direct transcription of the operational

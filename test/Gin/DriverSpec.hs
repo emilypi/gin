@@ -1,3 +1,12 @@
+-- |
+-- Module       : Gin.DriverSpec
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
 module Gin.DriverSpec (spec) where
 
 import Control.Concurrent (forkIO, killThread, threadDelay, yield)

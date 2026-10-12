@@ -1,6 +1,15 @@
 {-# LANGUAGE TemplateHaskell #-}
 
--- | Cycle-by-cycle test vectors: produced by the Lean exporter from the
+-- |
+-- Module       : Gin.Vectors
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Cycle-by-cycle test vectors: produced by the Lean exporter from the
 -- Lean semantics, consumed by the simulators and HDL testbenches. They
 -- are how we answer "does the generated hardware still implement the
 -- functionality described by Lean?": the Lean model, the simulators and

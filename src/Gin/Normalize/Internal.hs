@@ -1,4 +1,13 @@
--- | Machinery behind "Gin.Normalize".
+-- |
+-- Module       : Gin.Normalize.Internal
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Machinery behind "Gin.Normalize".
 --
 -- The core IR is evaluated into a wire-level semantic domain: a scalar is a
 -- wire or a literal, a tuple is a tree of wires, and a function exists only

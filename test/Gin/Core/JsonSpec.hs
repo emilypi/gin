@@ -1,3 +1,12 @@
+-- |
+-- Module       : Gin.Core.JsonSpec
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
 module Gin.Core.JsonSpec (spec) where
 
 import Control.Monad (void)

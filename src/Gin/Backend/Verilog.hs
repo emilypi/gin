@@ -1,4 +1,13 @@
--- | Verilog-2005 backend, and the design renderer it shares with
+-- |
+-- Module       : Gin.Backend.Verilog
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Verilog-2005 backend, and the design renderer it shares with
 -- "Gin.Backend.SystemVerilog".
 --
 -- A design is one module with ports in the order clock, reset, inputs,

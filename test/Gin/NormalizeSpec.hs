@@ -1,4 +1,13 @@
--- | Tests for the normalizer and for the normal form (NF) invariant
+-- |
+-- Module       : Gin.NormalizeSpec
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Tests for the normalizer and for the normal form (NF) invariant
 -- checker.
 --
 -- Semantic equivalence with the reference simulators is tested end to

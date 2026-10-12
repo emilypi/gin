@@ -1,6 +1,15 @@
 {-# LANGUAGE TemplateHaskell #-}
 
--- | Runtime values shared by literals, register initialisers, simulation
+-- |
+-- Module       : Gin.Core.Value
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Runtime values shared by literals, register initialisers, simulation
 -- and test vectors.
 module Gin.Core.Value
   ( Value (..)

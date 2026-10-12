@@ -1,4 +1,13 @@
--- | Runs the compiler pipeline and implements the CLI commands.
+-- |
+-- Module       : Gin.Driver
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Runs the compiler pipeline and implements the CLI commands.
 --
 -- > gin check     FILE.gin.json [--allow-axiom NAME]... [--spec-hash HEX]
 -- > gin compile   FILE.gin.json [--target T]... [-o DIR] [--allow-axiom NAME]... [--spec-hash HEX]

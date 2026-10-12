@@ -1,4 +1,13 @@
--- | Semantics of combinational primitives (@docs/semantics.md@).
+-- |
+-- Module       : Gin.Sim.Prim
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Semantics of combinational primitives (@docs/semantics.md@).
 --
 -- Each equation below transcribes one row of the primitive table in
 -- @docs/semantics.md@, with @n@ the operand width. Arithmetic is on

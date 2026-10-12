@@ -1,6 +1,15 @@
 {-# LANGUAGE TemplateHaskell #-}
 
--- | Primitive operations of the gin core IR.
+-- |
+-- Module       : Gin.Core.Prim
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Primitive operations of the gin core IR.
 --
 -- Semantics are specified in @docs/semantics.md@.
 --

@@ -1,4 +1,13 @@
--- | Hand-written example circuits at every pipeline level, shared by all
+-- |
+-- Module       : Gin.Examples
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Hand-written example circuits at every pipeline level, shared by all
 -- component test suites: I keep them here so each package can be tested in
 -- isolation.
 --

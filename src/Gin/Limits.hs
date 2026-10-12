@@ -1,4 +1,13 @@
--- | Resource bounds on untrusted input. I check every bound before the
+-- |
+-- Module       : Gin.Limits
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Resource bounds on untrusted input. I check every bound before the
 -- work it guards, so hostile files fail fast with a decode or normalize
 -- error instead of exhausting memory or time.
 module Gin.Limits

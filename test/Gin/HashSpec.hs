@@ -1,4 +1,13 @@
--- | SHA-256 against the FIPS 180-4 / NIST example vectors: the spec hash
+-- |
+-- Module       : Gin.HashSpec
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- SHA-256 against the FIPS 180-4 / NIST example vectors: the spec hash
 -- you pin with @--spec-hash@ is only as good as this digest.
 module Gin.HashSpec (spec) where
 

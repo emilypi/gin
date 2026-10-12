@@ -1,4 +1,13 @@
--- | Tests for "Gin.Netlist.Build". Every netlist the builder produces is
+-- |
+-- Module       : Gin.Netlist.BuildSpec
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Tests for "Gin.Netlist.Build". Every netlist the builder produces is
 -- checked against the invariants documented in "Gin.Netlist.Types" by
 -- 'validate', a validator local to this module. I keep it here,
 -- independent of the builder, so that a mistake in the builder cannot

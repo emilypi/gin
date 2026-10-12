@@ -1,3 +1,12 @@
+-- |
+-- Module       : Gin.Core.CheckSpec
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
 module Gin.Core.CheckSpec (spec) where
 
 import Data.ByteString.Lazy qualified as LBS

@@ -1,4 +1,13 @@
--- | Helpers every stage shares: failing with a stage's error, adding
+-- |
+-- Module       : Gin.Core.Utils
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Helpers every stage shares: failing with a stage's error, adding
 -- context to one, and the text functions that build messages and HDL. I
 -- keep one definition of each here, so every stage words, quotes and
 -- escapes things the same way.

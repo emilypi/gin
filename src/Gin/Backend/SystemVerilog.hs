@@ -1,4 +1,13 @@
--- | SystemVerilog-2017 backend: the Verilog design renderer and
+-- |
+-- Module       : Gin.Backend.SystemVerilog
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- SystemVerilog-2017 backend: the Verilog design renderer and
 -- testbench generator of "Gin.Backend.Verilog" in the SystemVerilog
 -- dialect (@logic@ declarations, @always_ff@ register blocks).
 module Gin.Backend.SystemVerilog

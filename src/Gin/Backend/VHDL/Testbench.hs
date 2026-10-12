@@ -1,4 +1,13 @@
--- | VHDL-2008 testbench generation, and the pieces of VHDL syntax that the
+-- |
+-- Module       : Gin.Backend.VHDL.Testbench
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- VHDL-2008 testbench generation, and the pieces of VHDL syntax that the
 -- design renderer in "Gin.Backend.VHDL" shares with it.
 --
 -- The testbench is table-driven: a record type with one field per input and

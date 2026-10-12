@@ -1,6 +1,15 @@
 {-# LANGUAGE TemplateHaskell #-}
 
--- | Target-independent netlist: one operator per net, every net typed.
+-- |
+-- Module       : Gin.Netlist.Types
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Target-independent netlist: one operator per net, every net typed.
 --
 -- Invariants, established by 'Gin.Netlist.Build.buildNetlist' and
 -- assumed by every backend:

@@ -1,4 +1,13 @@
--- | Normalization: core IR to normal form (NF), defined in "Gin.Core.Normal".
+-- |
+-- Module       : Gin.Normalize
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Normalization: core IR to normal form (NF), defined in "Gin.Core.Normal".
 --
 -- = Supported fragment
 --

@@ -1,4 +1,13 @@
--- | VHDL-2008 backend. Like the Verilog and SystemVerilog backends, it
+-- |
+-- Module       : Gin.Backend.VHDL
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- VHDL-2008 backend. Like the Verilog and SystemVerilog backends, it
 -- exists so that a simulator can answer the README's third question:
 -- does the generated hardware still implement the functionality
 -- described by Lean?

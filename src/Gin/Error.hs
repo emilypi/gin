@@ -1,6 +1,15 @@
 {-# LANGUAGE TemplateHaskell #-}
 
--- | Uniform error type for every compiler stage.
+-- |
+-- Module       : Gin.Error
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Uniform error type for every compiler stage.
 --
 -- Every stage function returns @Either GinError a@; stages never throw. I
 -- want every failure to say which stage it came from, so the CLI can name

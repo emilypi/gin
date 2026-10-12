@@ -1,4 +1,13 @@
--- | Verilog-2005 and SystemVerilog-2017 testbench generation, and the
+-- |
+-- Module       : Gin.Backend.Verilog.Testbench
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Verilog-2005 and SystemVerilog-2017 testbench generation, and the
 -- lexical helpers that the Verilog-family design renderers share.
 --
 -- A testbench instantiates the design as @gin_dut@ and replays the

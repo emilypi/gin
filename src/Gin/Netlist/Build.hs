@@ -1,4 +1,13 @@
--- | Normal form (NF, "Gin.Core.Normal") to netlist ("Gin.Netlist.Types").
+-- |
+-- Module       : Gin.Netlist.Build
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Normal form (NF, "Gin.Core.Normal") to netlist ("Gin.Netlist.Types").
 --
 -- 'buildNetlist' emits at most one declaration per normal-form bind, in
 -- bind order, and establishes every invariant listed in

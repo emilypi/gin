@@ -1,4 +1,13 @@
--- | Shared test helpers.
+-- |
+-- Module       : Gin.TestUtil
+-- Copyright    : (c) 2026 Emily Pillmore
+-- License      : BSD-3-Clause
+--
+-- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
+-- Stability    : experimental
+-- Portability  : non-portable (GHC extensions)
+--
+-- Shared test helpers.
 module Gin.TestUtil
   ( goldenText
   , toolAvailable

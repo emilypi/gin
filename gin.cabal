@@ -21,9 +21,11 @@ tested-with:        GHC ==9.14.1
 extra-doc-files:
   README.md
   LICENSE.md
+  docs/optimization.md
   docs/memory-contract.md
 extra-source-files:
   test/hdl/memory_tb.sv
+  examples/optimization/*.json
   examples/memory-traffic.json
   examples/memory-words.json
 

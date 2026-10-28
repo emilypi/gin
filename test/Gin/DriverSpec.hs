@@ -37,6 +37,8 @@ import Gin.Limits (maxInputBytes)
 import Gin.Netlist.Build (buildNetlist)
 import Gin.Netlist.Types (Module)
 import Gin.Normalize (normalize)
+import Gin.Optimize.Policy (decodePolicy)
+import Gin.Optimize.Portfolio (buildPortfolio, candidateId, selectCandidate)
 import Gin.TestUtil (itWithTools, withTempDir)
 import Gin.Vectors (Cycle (..), Vectors (..))
 import System.Directory
@@ -77,6 +79,86 @@ spec = do
   toolEnvSpec
   processGroupSpec
   atomicSpec
+  optimizationSpec
+
+optimizationSpec :: Spec
+optimizationSpec = describe "optimization CLI" $ do
+  it "uses the same candidate for portfolio emission, compile, sim and testbench" $
+    withTempDir $ \dir -> do
+      source <- writeProgram dir "counter" counterProgram
+      vectors <- writeVectors dir "counter" counterVectors
+      let bytes = "{\"format\":\"gin-policy/1\",\"objectives\":[{\"name\":\"ops\"}],\"search\":{\"iterations\":2,\"expansions\":1000}}"
+      policyFile <- writeRaw dir "policy.json" (Text.decodeUtf8 (LBS.toStrict bytes))
+      case decodePolicy bytes >>= \p -> normalize counterProgram >>= buildPortfolio p >>= selectCandidate Nothing of
+        Left e -> expectationFailure (show e)
+        Right candidate -> do
+          let ident = Text.unpack (candidateId candidate)
+              portfolioDir = dir </> "portfolio"
+              selected = ["--optimize",policyFile,"--candidate",ident]
+          result <- gin ["optimize",source,"--policy",policyFile,"--vectors",vectors,"-o",portfolioDir]
+          result `shouldExit` ExitSuccess
+          forM_ ["portfolio.json","policy.json","validation.json"] $ \name ->
+            doesFileExist (portfolioDir </> name) `shouldReturn` True
+          compiled <- gin (["compile",source,"-o",dir </> "selected"] <> selected)
+          compiled `shouldExit` ExitSuccess
+          forM_ ["v","sv","vhd"] $ \ext -> do
+            actual <- BS.readFile (dir </> "selected" </> "counter." <> ext)
+            expected <- BS.readFile (portfolioDir </> ident </> "counter." <> ext)
+            actual `shouldBe` expected
+          simulated <- gin (["sim",source,"--vectors",vectors] <> selected)
+          simulated `shouldExit` ExitSuccess
+          bench <- gin (["testbench",source,"--vectors",vectors,"-o",dir </> "tb"] <> selected)
+          bench `shouldExit` ExitSuccess
+          again <- gin ["optimize",source,"--policy",policyFile,"-o",portfolioDir]
+          again `shouldExit` ExitFailure 1
+          wrong <- gin ["compile",source,"--optimize",policyFile,"--candidate","forged","-o",dir </> "wrong"]
+          wrong `shouldExit` ExitFailure 1
+  it "rejects candidate selection without a policy" $
+    withTempDir $ \dir -> do
+      source <- writeProgram dir "counter" counterProgram
+      result <- gin ["compile",source,"--candidate","forged","-o",dir </> "unselected"]
+      result `shouldExit` ExitFailure 1
+      runErr result `shouldSatisfy` Text.isInfixOf "--candidate requires --optimize"
+  it "validates the baseline even when every candidate is outside policy bounds" $
+    withTempDir $ \dir -> do
+      source <- writeProgram dir "counter" counterProgram
+      vectors <- writeVectors dir "counter" (counterExpecting [(0,99)])
+      policyFile <- writeRaw dir "policy.json" "{\"format\":\"gin-policy/1\",\"objectives\":[{\"name\":\"ops\"}],\"upperBounds\":[0]}"
+      result <- gin ["optimize",source,"--policy",policyFile,"--vectors",vectors,"-o",dir </> "portfolio"]
+      result `shouldExit` ExitFailure 1
+      runOut result `shouldSatisfy` Text.isInfixOf "sim-normal: FAIL"
+  it "rejects stateful pipelining and keeps missing proof tools unverified" $
+    withTempDir $ \dir -> do
+      source <- writeProgram dir "counter" counterProgram
+      policyFile <- writeRaw dir "policy.json" "{\"format\":\"gin-policy/1\",\"objectives\":[{\"name\":\"ops\"}]}"
+      pipeline <- gin ["pipeline",source,"--max-depth","1","-o",dir </> "pipeline"]
+      pipeline `shouldExit` ExitFailure 1
+      runErr pipeline `shouldSatisfy` Text.isInfixOf "combinational kernel"
+      proof <- gin ["prove",source,"--optimize",policyFile,"-o",dir </> "proof"]
+      proof `shouldExit` ExitFailure 1
+      evidence <- BS.readFile (dir </> "proof" </> "evidence.json")
+      evidence `shouldSatisfy` BS.isInfixOf "unverified"
+  it "bounds pipeline warmup preparation by the simulation deadline" $
+    withTempDir $ \dir -> do
+      source <- writeProgram dir "boolchain" (booleanChain 4097)
+      vectors <- writeVectors dir "boolchain" (Vectors "boolchain" [Port "x" TBool] [Port "y" TBool]
+        [Cycle [VBool False] [VBool True]])
+      result <- gin ["pipeline",source,"--max-depth","1","--vectors",vectors,"--sim-timeout","1","-o",dir </> "pipeline"]
+      result `shouldExit` ExitFailure 1
+      runErr result `shouldSatisfy` Text.isInfixOf "timeout"
+
+booleanChain :: Int -> Program Ty Name
+booleanChain count = Program (Producer "gin-test" "n/a")
+  (TopEntity "boolchain" sysDomain [Port "x" TBool] [Port "y" TBool] "Chain.top")
+  [Def "Chain.top" (TFun (sig TBool) (sig TBool))
+    (ELam [("x",sig TBool)] (EApp (lift1 TBool TBool)
+      [ELam [(name 0,TBool)] (ELet
+        [Bind (name i) TBool (EApp (EPrim BoolNot (TFun TBool TBool)) [EVar (name (i-1))]) | i <- [1..count]]
+        (EVar (name count))), EVar "x"]))]
+  (testCertificate "Chain.correct")
+  where
+    name :: Int -> Name
+    name i = Name ("b" <> Text.pack (show i))
 
 ----------------------------------------------------------------------
 -- Exit codes and usage

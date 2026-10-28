@@ -49,7 +49,7 @@ cd "$(dirname "$0")/.."
 IFS= read -r ELAN_TOOLCHAIN < lean/lean-toolchain
 export ELAN_TOOLCHAIN
 
-examples=(counter detector mac)
+examples=(counter detector mac muxadd memorymap)
 
 tmp=$(mktemp -d)
 # a stale .olean planted by check_stale_olean, removed on exit

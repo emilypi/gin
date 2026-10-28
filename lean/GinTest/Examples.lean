@@ -27,7 +27,7 @@ end GinTest.Examples
 
 open GinTest.Examples in
 run_meta do
-  unless defaultExports == ["counter", "detector", "mac"] do
+  unless defaultExports == ["counter", "detector", "mac", "muxadd", "memorymap"] do
     throwError "unexpected default exports {defaultExports}"
   for n in defaultExports do
     let e ← entry n

@@ -82,6 +82,7 @@ cover `gin`'s signal DSL or Lean's core library; changes to
 | -------------- | -------------- | ------------------------------------------- |
 | GHC            | 9.14.1         | building gin                                |
 | cabal-install  | 3.16.1.0       | building and testing gin                    |
+| Python         | 3.11 or newer  | export verification (`tomllib`); on `PATH`   |
 | Lean 4         | 4.34.1         | the DSL, proofs and exporter (via `elan`)   |
 | Icarus Verilog | 13.0           | Verilog and SystemVerilog lint and runs     |
 | Verilator      | 5.052          | Verilog and SystemVerilog lint              |
@@ -92,6 +93,10 @@ These are the versions gin is tested with. `elan` installs the Lean
 version pinned in `lean/lean-toolchain` on first use. 
 
 ### Build, test and validate
+
+Keep [Yolk](https://github.com/emilypi/yolk) in a sibling `../yolk` checkout;
+the default Cabal project builds the circuit compiler and its e-graph engine
+together. The optimization implementation requires Yolk's Pareto extraction API.
 
 ```sh
 cabal build all
@@ -120,6 +125,15 @@ gin validate  examples/counter/counter.gin.json --vectors examples/counter/count
 ```
 
 From a checkout, run them as `cabal run -v0 gin -- check …`.
+
+`gin optimize` searches a shared-circuit Pareto portfolio from a bounded JSON
+policy. `--optimize POLICY --candidate SHA256` selects that implementation for
+the ordinary compilation and validation commands. `gin pipeline` gives
+combinational kernels an explicit fixed-latency contract, and `gin prove`
+independently replays an exact-cycle candidate through Lean. See
+[the optimization guide](docs/optimization.md) and the reproducible
+`scripts/showcase-optimization.sh` example. Costs are structural proxies;
+physical timing and power require a target-specific evaluation.
 
 - `check` decodes and type checks the program and checks its trace
   (`Certificate` in the code, `"certificate"` in the JSON).
@@ -173,7 +187,7 @@ trusted base, the threat model and the CI setup I recommend.
 | Path | Contents |
 | --- | --- |
 | `lean/` | The Lean package: the signal DSL, the example circuits and their proofs, the exporter and its tests ([lean/README.md](lean/README.md)) |
-| `examples/<name>/` | `<name>.gin.json` and `<name>.vectors.json` exported from Lean, for counter, detector and mac (generated: never edit by hand) |
+| `examples/<name>/` | `<name>.gin.json` and `<name>.vectors.json` exported from Lean, for counter, detector, mac, muxadd and memorymap (generated: never edit by hand) |
 | `src/Gin/Core/` | The core IR: types, values, primitives, syntax, JSON codec, type checker and normal form |
 | `src/Gin/Certificate.hs` | The axiom policy |
 | `src/Gin/Normalize*` | Normalization from the core IR to normal form |

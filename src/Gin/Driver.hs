@@ -131,6 +131,7 @@ import Control.Exception
 import Control.Monad (guard, unless, void)
 import Control.Monad.Except (ExceptT (..), liftEither, runExceptT)
 import Control.Monad.IO.Class (liftIO)
+import Data.Aeson qualified as A
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isDigit)
@@ -138,8 +139,8 @@ import Data.Containers.ListUtils (nubOrd)
 import Data.Either (fromRight)
 import Data.Foldable (for_, traverse_)
 import Data.Functor ((<&>))
-import Data.List (find)
-import Data.Maybe (catMaybes, fromMaybe, isJust, listToMaybe)
+import Data.List (find, nubBy)
+import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, listToMaybe)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -161,7 +162,7 @@ import Gin.Backend.VHDL (vhdl)
 import Gin.Backend.Verilog (verilog)
 import Gin.Certificate (CertPolicy (..), certificateSpecHash, checkCertificate, defaultPolicy)
 import Gin.Core.Check (checkProgram)
-import Gin.Core.Json (decodeProgram, decodeVectors)
+import Gin.Core.Json (decodeProgram, decodeVectors, encodeVectors)
 import Gin.Core.Normal (NModule)
 import Gin.Core.Syntax
   ( Certificate
@@ -174,11 +175,22 @@ import Gin.Core.Syntax
   )
 import Gin.Core.Utils (failAt, invisible, showT)
 import Gin.Error (GinError (..), Stage (..), ginError, renderError, safeLine, withContext)
+import Gin.Hash (sha256Hex)
+import Gin.Evaluate.Memory qualified as MemoryEval
 import Gin.Limits (defaultSimTimeoutSeconds, defaultToolTimeoutSeconds, maxInputBytes)
 import Gin.Netlist.Build (buildNetlist)
 import Gin.Netlist.Types (HwType (..), Ident (..), Module (..), Net (..), Output (..))
+import Gin.Memory qualified as Memory
 import Gin.Normalize (checkNormal, normalize)
+import Gin.Optimize.Policy (Policy, decodePolicy, encodePolicy, policyTimeoutSeconds, policyObjectives, objectiveName)
+import Gin.Optimize.Evidence (emitEquivalence, equivalenceTheoremName)
+import Gin.Optimize.Portfolio
+  ( Portfolio, buildPortfolio, candidateId, candidateModule, encodePortfolio
+  , portfolioBaseline, portfolioCandidates, selectCandidate, candidateObjectives
+  , measureCircuit, metricOperators )
 import Gin.Sim (isBudgetError, simulateCore, simulateNormal)
+import Gin.Schedule
+  ( pipelineCircuit, pipelineVectors, scheduledModule, scheduledLatency, scheduledStageDepth )
 import Gin.Vectors (Cycle (..), Vectors (..))
 import Options.Applicative
   ( Parser
@@ -212,14 +224,16 @@ import Options.Applicative
   )
 import System.Directory
   ( createDirectoryIfMissing
+  , doesPathExist
   , findExecutablesInDirectories
   , makeAbsolute
   , removeFile
   , renameFile
+  , renameDirectory
   )
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
-import System.FilePath ((<.>), (</>))
+import System.FilePath (takeDirectory, (<.>), (</>))
 import System.IO
   ( Handle
   , IOMode (..)
@@ -230,7 +244,7 @@ import System.IO
   , stdout
   , withBinaryFile
   )
-import System.IO.Temp (withSystemTempDirectory)
+import System.IO.Temp (withSystemTempDirectory, withTempDirectory)
 import System.Posix.Signals (sigKILL, signalProcessGroup)
 import System.Process
   ( CreateProcess (..)
@@ -284,6 +298,18 @@ data Command
   | TestbenchCmd !Inputs !FilePath !Outputs
   | SimCmd !Inputs !FilePath !SimOptions
   | ValidateCmd !Inputs !FilePath !Outputs !ValidateOptions
+  | OptimizeCmd !Inputs !FilePath !(Maybe FilePath) !Outputs !SimOptions
+  | PipelineCmd !Inputs !Int !(Maybe FilePath) !Outputs !ToolOptions !SimOptions
+  | ProveCmd !Inputs !Outputs !ToolOptions
+  | MemoryCmd !Inputs !MemoryOptions !Outputs
+
+data MemoryOptions = MemoryOptions
+  { memLanes :: ![Int]
+  , memAddressWidth :: !Int
+  , memWords :: !FilePath
+  , memTraffic :: !(Maybe FilePath)
+  , memTimeoutSeconds :: !Int
+  }
 
 -- | The IR file, the axioms its trace may use beyond
 -- 'defaultPolicy', and the specification hash it must have.
@@ -291,6 +317,8 @@ data Inputs = Inputs
   { inFile :: !FilePath
   , inAllowAxioms :: ![Text]
   , inSpecHash :: !(Maybe Text)
+  , inOptimize :: !(Maybe FilePath)
+  , inCandidate :: !(Maybe Text)
   }
 
 -- | Which targets to generate, and where.
@@ -347,6 +375,30 @@ commands =
         "Run both reference simulators on the vectors and compare their outputs."
         ((\(i, v) s -> SimCmd i v s) <$> inputs vectorsOpt <*> simOptions)
       <> cmd
+        "optimize"
+        "Search a structural Pareto portfolio and write candidates to a new directory."
+        ( (\(i, (p, v, o)) s -> OptimizeCmd i p v o s)
+            <$> inputs ((,,) <$> policyOpt <*> optional vectorsOpt <*> outputs)
+            <*> simOptions
+        )
+      <> cmd
+        "memory"
+        "Generate memory-facing accelerators and compare explicit traffic models."
+        ((\(i,(m,o)) -> MemoryCmd i m o) <$> inputs ((,) <$> memoryOptions <*> outputs))
+      <> cmd
+        "prove"
+        "Replay an exact-cycle candidate's transition equivalence through the Lean kernel."
+        ((\(i,o) t -> ProveCmd i o t) <$> inputs outputs <*> toolOptions)
+      <> cmd
+        "pipeline"
+        "Pipeline a combinational kernel under an explicit fixed-latency contract."
+        ( (\(i, (d, v, o)) t s -> PipelineCmd i d v o t s)
+            <$> inputs ((,,) <$> option (wholeNumberReader "logic levels")
+                (long "max-depth" <> metavar "N" <> help "Maximum structural logic levels per pipeline stage")
+              <*> optional vectorsOpt <*> outputs)
+            <*> toolOptions <*> simOptions
+        )
+      <> cmd
         "validate"
         "Run sim, then lint the generated HDL and run its testbench with the HDL tools."
         ( (\(i, (v, o)) t s n -> ValidateCmd i v o (ValidateOptions t s n))
@@ -362,7 +414,7 @@ commands =
 -- @--spec-hash@, in the order the usage line shows them.
 inputs :: Parser a -> Parser (Inputs, a)
 inputs rest =
-  (\file a axioms hash -> (Inputs file axioms hash, a))
+  (\file a axioms hash optimize candidate -> (Inputs file axioms hash optimize candidate, a))
     <$> strArgument (metavar "FILE.gin.json" <> help "IR file exported by the Lean side")
     <*> rest
     <*> many
@@ -385,6 +437,21 @@ inputs rest =
                 \its statement and its specification's definitions) is HEX"
           )
       )
+    <*> optional
+      (strOption (long "optimize" <> metavar "POLICY.json" <> help "Select from this optimization policy's portfolio"))
+    <*> optional
+      (strOption (long "candidate" <> metavar "SHA256" <> help "Select this candidate digest (requires --optimize)"))
+
+policyOpt :: Parser FilePath
+policyOpt = strOption (long "policy" <> metavar "POLICY.json" <> help "Bounded structural optimization policy")
+
+memoryOptions :: Parser MemoryOptions
+memoryOptions = MemoryOptions
+  <$> many (option (wholeNumberReader "lanes") (long "lanes" <> metavar "N" <> help "Lane count to explore (repeatable; default 1,2,4)"))
+  <*> option (wholeNumberReader "address bits") (long "address-width" <> metavar "N" <> value 32 <> showDefault)
+  <*> strOption (long "words" <> metavar "WORDS.json" <> help "Unsigned input word array for the traffic model")
+  <*> optional (strOption (long "traffic" <> metavar "TRAFFIC.json" <> help "Explicit traffic scenario array"))
+  <*> option secondsReader (long "memory-timeout" <> metavar "SECONDS" <> value 60 <> showDefault)
 
 vectorsOpt :: Parser FilePath
 vectorsOpt =
@@ -504,28 +571,31 @@ runCommand environment cmd =
 -- | Run a command; 'False' when one of its checks failed.
 execute :: Env -> Command -> Pipe Bool
 execute environment = \case
-  CheckCmd ins -> True <$ loadProgram ins
+  CheckCmd ins -> do
+    prog <- loadProgram ins
+    whenOptimizing ins (void (selectedNormal ins prog))
+    pure True
   CompileCmd ins outs -> do
     prog <- loadProgram ins
-    (_, m) <- compileProgram prog
+    (_, m) <- compileProgram ins prog
     for_ (backendsOf outs) $ \b -> writeGroup (outputDir outs) (generatedFiles m Nothing b)
     pure True
   TestbenchCmd ins vecFile outs -> do
     prog <- loadProgram ins
     vecs <- loadVectors prog vecFile
-    (_, m) <- compileProgram prog
+    (_, m) <- compileProgram ins prog
     liftEither (testbenchPrecondition m vecs)
     for_ (backendsOf outs) $ \b -> writeGroup (outputDir outs) (generatedFiles m (Just vecs) b)
     pure True
   SimCmd ins vecFile sim -> do
     prog <- loadProgram ins
     vecs <- loadVectors prog vecFile
-    nm <- liftEither (normalize prog)
+    nm <- selectedNormal ins prog
     liftIO (runSimulators sim prog nm vecs)
   ValidateCmd ins vecFile outs opts -> do
     prog <- loadProgram ins
     vecs <- loadVectors prog vecFile
-    (nm, m) <- compileProgram prog
+    (nm, m) <- compileProgram ins prog
     liftEither (testbenchPrecondition m vecs)
     let backends = backendsOf outs
     vecOk <- liftIO (reportVectors (valMinCycles opts) vecs)
@@ -533,6 +603,183 @@ execute environment = \case
     simOk <- liftIO (runSimulators (valSim opts) prog nm vecs)
     hdlOk <- for backends (validateTarget environment (valTools opts) m vecs (outDir outs))
     pure (vecOk && simOk && and hdlOk)
+  OptimizeCmd ins policyFile vectorsFile outs sim -> do
+    unless (isNothing (inOptimize ins) && isNothing (inCandidate ins)) $
+      failAt StDriver "optimize uses --policy; --optimize and --candidate are for selecting a compiled candidate"
+    destination <- maybe (failAt StDriver "optimize requires -o with a new output directory") pure (outDir outs)
+    prog <- loadProgram ins
+    vecs <- traverse (loadVectors prog) vectorsFile
+    policy <- loadOptimizationPolicy policyFile
+    portfolio <- searchPortfolio policy prog
+    baselineOk <- case vecs of
+      Nothing -> pure True
+      Just vectors -> do
+        liftIO (putLine stdout "baseline:")
+        liftIO (runSimulators sim prog (candidateModule (portfolioBaseline portfolio)) vectors)
+    checks <- for (portfolioCandidates portfolio) $ \candidate -> do
+      liftIO (putLine stdout ("candidate: " <> candidateId candidate))
+      case vecs of
+        Nothing -> pure True
+        Just vectors
+          | candidateId candidate == candidateId (portfolioBaseline portfolio) -> pure baselineOk
+          | otherwise -> liftIO (runSimulators sim prog (candidateModule candidate) vectors)
+    writePortfolio destination outs policy portfolio vecs baselineOk checks
+    pure (baselineOk && and checks)
+  PipelineCmd ins depth vectorsFile outs toolOpts sim -> do
+    prog <- loadProgram ins
+    original <- selectedNormal ins prog
+    let scheduling = pipelineCircuit depth original
+    scheduled <- liftIO (evaluateWithin (simTimeoutSeconds sim) (length (show scheduling) `seq` scheduling)) >>= \case
+      Nothing -> failAt StDriver "pipeline generation exceeded the simulation timeout"
+      Just r -> liftEither r
+    let nm = scheduledModule scheduled
+        timingBackends = map (timingBackend (scheduledLatency scheduled)) (backendsOf outs)
+    m <- liftEither (buildNetlist nm)
+    vectors <- traverse (loadVectors prog) vectorsFile
+    result <- case vectors of
+      Nothing -> do
+        for_ timingBackends $ \backend -> writeGroup (outputDir outs) (generatedFiles m Nothing backend)
+        pure True
+      Just sourceVectors -> do
+        sourceOk <- liftIO (runSimulators sim prog original sourceVectors)
+        let preparation = pipelineVectors scheduled sourceVectors
+            forcedVectors = case preparation of
+              Left e -> length (show e) `seq` preparation
+              Right vs -> LBS.length (encodeVectors vs) `seq` preparation
+        adjusted <- liftIO (evaluateWithin (simTimeoutSeconds sim) forcedVectors) >>= \case
+          Nothing -> failAt StDriver "pipeline warmup exceeded the simulation timeout"
+          Just r -> liftEither r
+        let expected = map cycOutputs (vecCycles adjusted)
+            rows = map cycInputs (vecCycles adjusted)
+        outcome <- liftIO (evaluateWithin (simTimeoutSeconds sim)
+          (compareRows (vecOutputs adjusted) expected (simulateNormal nm rows)))
+        simOk <- liftIO (reportAll [("sim-pipeline",fromMaybe (Fail "timeout") outcome)])
+        hdlOk <- for timingBackends $ \backend -> validateTarget environment toolOpts m adjusted (outDir outs) backend
+        pure (sourceOk && simOk && and hdlOk)
+    let timing = A.object
+          [ "format" A..= ("gin-timing/1" :: Text)
+          , "contract" A..= ("fixed-latency" :: Text)
+          , "latencyCycles" A..= scheduledLatency scheduled
+          , "warmupCycles" A..= scheduledLatency scheduled
+          , "initiationInterval" A..= (1 :: Int)
+          , "stageLogicDepth" A..= scheduledStageDepth scheduled
+          , "sourceDigest" A..= sha256Hex (Text.encodeUtf8 (Text.pack (show original)))
+          , "candidateDigest" A..= sha256Hex (Text.encodeUtf8 (Text.pack (show nm)))
+          , "frequencyEvidence" A..= ("unavailable: logic depth is not physical timing" :: Text)
+          , "validation" A..= (if isJust vectors then if result then "passed" else "failed" else "not-run" :: Text)
+          ]
+    writeGroup (outputDir outs) [("timing.json",Text.decodeUtf8 (LBS.toStrict (A.encode timing)))]
+    pure result
+  ProveCmd ins outs tools -> do
+    unless (isJust (inOptimize ins)) (failAt StDriver "prove requires --optimize and optionally --candidate")
+    prog <- loadProgram ins
+    original <- liftEither (normalize prog)
+    candidate <- selectedNormal ins prog
+    source <- liftEither (emitEquivalence original candidate)
+    outcome <- liftIO (replayEquivalence environment tools source)
+    liftIO (reportWithOutput "lean-equivalence" outcome)
+    let checked = case fst outcome of Pass -> True; _ -> False
+        evidence = A.object
+          [ "format" A..= ("gin-equivalence/1" :: Text)
+          , "status" A..= (if checked then "kernel-checked-stream" else "unverified" :: Text)
+          , "scope" A..= ("all-cycle output equality with projected state and matching initialization" :: Text)
+          , "sourceDigest" A..= sha256Hex (Text.encodeUtf8 (Text.pack (show original)))
+          , "candidateDigest" A..= sha256Hex (Text.encodeUtf8 (Text.pack (show candidate)))
+          , "proofDigest" A..= sha256Hex (Text.encodeUtf8 source)
+          , "toolchain" A..= ("leanprover/lean4:v4.34.1" :: Text)
+          ]
+    writeGroup (outputDir outs)
+      [("GinOptimizationProof.lean",source), ("evidence.json",Text.decodeUtf8 (LBS.toStrict (A.encode evidence)))]
+    pure checked
+  MemoryCmd ins options outs -> do
+    unless (all (== SystemVerilog) (outTargets outs)) $
+      failAt StDriver "memory accelerator generation currently supports SystemVerilog"
+    destination <- maybe (failAt StDriver "memory requires -o with a new output directory") pure (outDir outs)
+    prog <- loadProgram ins
+    (names,kernels) <- memoryKernels ins prog
+    words_ <- readInput (memWords options) >>= liftEither . Memory.decodeMemoryWords
+    scenarios <- case memTraffic options of
+      Nothing -> pure Memory.defaultTrafficScenarios
+      Just file -> readInput file >>= liftEither . Memory.decodeTrafficScenarios
+    let lanes = if null (memLanes options) then [1,2,4] else memLanes options
+        configs = [Memory.MemoryConfig n (memAddressWidth options) | n <- lanes]
+        evaluated = MemoryEval.evaluateMemoryPortfolio names kernels configs scenarios words_
+        forced = case evaluated of
+          Left e -> length (show e) `seq` evaluated
+          Right p -> LBS.length (MemoryEval.encodeMemoryPortfolio p) `seq` evaluated
+    result <- liftIO (evaluateWithin (memTimeoutSeconds options) forced) >>= \case
+      Nothing -> failAt StDriver "memory evaluation deadline exceeded; no frontier claim is available"
+      Just r -> liftEither r
+    publishDirectory destination $ \tmp -> do
+      for_ (MemoryEval.memoryDesigns result) $ \design ->
+        writeGroup (tmp </> Text.unpack (MemoryEval.evaluatedIdentity design))
+          [("gin_memory_accelerator.sv",Memory.memorySystemVerilog (MemoryEval.evaluatedDesign design))]
+      writeGroup tmp
+        [("memory-portfolio.json",Text.decodeUtf8 (LBS.toStrict (MemoryEval.encodeMemoryPortfolio result)))
+        ,("words.json",Text.decodeUtf8 (LBS.toStrict (A.encode words_)))]
+    liftIO (putLine stdout ("memory: " <> showT (length (MemoryEval.memoryDesigns result))
+      <> " generated designs; " <> showT (length (MemoryEval.memoryFrontier result)) <> " on the completed modeled frontier"))
+    pure True
+
+memoryKernels :: Inputs -> Program Ty Name -> Pipe ([Text],[MemoryEval.MemoryKernel])
+memoryKernels ins prog = case inOptimize ins of
+  Nothing -> do
+    nm <- selectedNormal ins prog
+    pure (["operators"],[MemoryEval.MemoryKernel
+      (sha256Hex (Text.encodeUtf8 (Text.pack (show nm)))) nm [fromIntegral (metricOperators (measureCircuit nm))]])
+  Just file -> do
+    policy <- loadOptimizationPolicy file
+    portfolio <- searchPortfolio policy prog
+    candidates <- case inCandidate ins of
+      Nothing -> pure (portfolioCandidates portfolio)
+      Just ident -> pure <$> liftEither (selectCandidate (Just ident) portfolio)
+    pure (map objectiveName (policyObjectives policy),
+      [MemoryEval.MemoryKernel (candidateId c) (candidateModule c) (candidateObjectives c)
+        | c <- nubBy (\a b -> candidateId a == candidateId b) candidates])
+
+whenOptimizing :: Inputs -> Pipe () -> Pipe ()
+whenOptimizing ins action
+  | isJust (inOptimize ins) || isJust (inCandidate ins) = action
+  | otherwise = pure ()
+
+timingBackend :: Int -> Backend -> Backend
+timingBackend latency backend = backend {backendRender = \m -> prefix <> backendRender backend m}
+  where
+    comment = if backendTarget backend == VHDL then "-- " else "// "
+    prefix = comment <> "Fixed-latency artifact: output(t + " <> showT latency <> ") = source(t).\n"
+      <> comment <> "First " <> showT latency <> " cycles after reset are warmup. The trace below describes the source kernel.\n"
+
+-- Compile only newly generated source in a private directory. No evidence
+-- file, .olean cache or status supplied by a caller is accepted as proof.
+replayEquivalence :: Env -> ToolOptions -> Text -> IO (Outcome, Maybe Text)
+replayEquivalence environment options source = withSystemTempDirectory "gin-proof" $ \tmp -> do
+  BS.writeFile (tmp </> "GinOptimizationProof.lean") (Text.encodeUtf8 source)
+  BS.writeFile (tmp </> "lean-toolchain") "leanprover/lean4:v4.34.1\n"
+  lean <- resolveTool environment "lean"
+  checker <- resolveTool environment "leanchecker"
+  case (lean,checker) of
+    (Just compiler, Just replay) -> do
+      built <- runTool environment tmp seconds compiler ["-o","GinOptimizationProof.olean","GinOptimizationProof.lean"]
+      case built of
+        Finished ExitSuccess out err
+          | approvedAxioms out && Text.null (Text.strip err) ->
+              runToolWith [("LEAN_PATH",tmp)] environment tmp seconds replay ["GinOptimizationProof"] >>= judge
+          | otherwise -> pure (Fail "axiom inspection failed", Just (out <> err))
+        other -> judge other
+    _ -> pure (Fail "lean and leanchecker are required for independent replay", Nothing)
+  where
+    seconds = toolTimeoutSeconds options
+    judge (Finished ExitSuccess _ _) = pure (Pass, Nothing)
+    judge (Finished _ out err) = pure (Fail "Lean compilation or kernel replay failed",Just (out <> err))
+    judge TimedOut = pure (Fail "proof deadline exceeded",Nothing)
+    judge (NotStarted why) = pure (Fail why,Nothing)
+    approvedAxioms output =
+      let flattened = Text.unwords (Text.words output)
+          prefix = "'" <> equivalenceTheoremName <> "' depends on axioms: ["
+          noAxioms = "'" <> equivalenceTheoremName <> "' does not depend on any axioms"
+       in flattened == noAxioms || case Text.stripPrefix prefix flattened >>= Text.stripSuffix "]" of
+            Nothing -> False
+            Just names -> all ((`Set.member` allowedAxioms defaultPolicy) . Text.strip) (Text.splitOn "," names)
 
 outputDir :: Outputs -> FilePath
 outputDir = fromMaybe "." . outDir
@@ -661,12 +908,87 @@ clip t
 ----------------------------------------------------------------------
 -- Compiling and writing files
 
-compileProgram :: Program Ty Name -> Pipe (NModule, Module)
-compileProgram prog = liftEither $ do
-  nm <- normalize prog
-  checkNormal nm
-  m <- buildNetlist nm
+compileProgram :: Inputs -> Program Ty Name -> Pipe (NModule, Module)
+compileProgram ins prog = do
+  nm <- selectedNormal ins prog
+  m <- liftEither (buildNetlist nm)
   pure (nm, m)
+
+selectedNormal :: Inputs -> Program Ty Name -> Pipe NModule
+selectedNormal ins prog = case inOptimize ins of
+  Nothing -> do
+    unless (isNothing (inCandidate ins)) (failAt StDriver "--candidate requires --optimize")
+    liftEither (normalize prog >>= \nm -> nm <$ checkNormal nm)
+  Just file -> do
+    policy <- loadOptimizationPolicy file
+    portfolio <- searchPortfolio policy prog
+    candidateModule <$> liftEither (selectCandidate (inCandidate ins) portfolio)
+
+loadOptimizationPolicy :: FilePath -> Pipe Policy
+loadOptimizationPolicy file = readInput file >>= liftEither . inFileContext file . decodePolicy
+
+-- Force the manifest, including every context-bound graph digest, inside
+-- the deadline. Merely evaluating an Either constructor would leave the
+-- expensive search/reconstruction outside cancellation.
+searchPortfolio :: Policy -> Program Ty Name -> Pipe Portfolio
+searchPortfolio policy prog = do
+  let result = normalize prog >>= buildPortfolio policy
+      forced = case result of
+        Left e -> length (show e) `seq` result
+        Right p -> LBS.length (encodePortfolio p) `seq` result
+  liftIO (evaluateWithin (policyTimeoutSeconds policy) forced) >>= \case
+    Nothing -> failAt StDriver "optimization deadline exceeded; no feasibility or completeness claim is available"
+    Just r -> liftEither r
+
+-- A portfolio is published only after all files have been generated in a
+-- fresh sibling directory. Candidate paths contain only compiler digests.
+-- Existing destinations are rejected, including symlinks to directories.
+publishDirectory :: FilePath -> (FilePath -> Pipe ()) -> Pipe ()
+publishDirectory destination writeFiles = do
+  liftIO (doesPathExist destination) >>= rejectExisting
+  let parent = takeDirectory destination
+  liftIO (createDirectoryIfMissing True parent)
+  result <- liftIO $ withTempDirectory parent ".gin-artifact" $ \tmp -> runExceptT $ do
+    writeFiles tmp
+    liftIO (doesPathExist destination) >>= rejectExisting
+    liftIO (renameDirectory tmp destination)
+  liftEither result
+  where
+    rejectExisting True = failAt StDriver "output directory already exists; choose a new -o directory"
+    rejectExisting False = pure ()
+
+writePortfolio :: FilePath -> Outputs -> Policy -> Portfolio -> Maybe Vectors -> Bool -> [Bool] -> Pipe ()
+writePortfolio destination outs policy portfolio vectors baselineOk checks = do
+  exists <- liftIO (doesPathExist destination)
+  whenExists exists
+  let parent = takeDirectory destination
+  liftIO (createDirectoryIfMissing True parent)
+  written <- liftIO $ withTempDirectory parent ".gin-portfolio" $ \tmp -> runExceptT $ do
+    for_ (nubBy (\a b -> candidateId a == candidateId b) (portfolioBaseline portfolio : portfolioCandidates portfolio)) $ \c -> do
+      m <- liftEither (buildNetlist (candidateModule c))
+      for_ (backendsOf outs) $ \backend ->
+        writeGroup (tmp </> Text.unpack (candidateId c)) (generatedFiles m vectors backend)
+    let validation = A.object
+          [ "format" A..= ("gin-portfolio-validation/1" :: Text)
+          , "vectorsDigest" A..= fmap (sha256Hex . LBS.toStrict . encodeVectors) vectors
+          , "kind" A..= (if isJust vectors then "reference-simulation" else "not-run" :: Text)
+          , "baseline" A..= (if isJust vectors then A.object
+              ["id" A..= candidateId (portfolioBaseline portfolio), "passed" A..= baselineOk] else A.Null)
+          , "candidates" A..= [A.object ["id" A..= candidateId c, "passed" A..= ok]
+              | isJust vectors, (c, ok) <- zip (portfolioCandidates portfolio) checks]
+          ]
+    writeGroup tmp
+      [ ("portfolio.json", jsonText (encodePortfolio portfolio))
+      , ("policy.json", jsonText (encodePolicy policy))
+      , ("validation.json", jsonText (A.encode validation))
+      ]
+    liftIO (doesPathExist destination) >>= whenExists
+    liftIO (renameDirectory tmp destination)
+  liftEither written
+  where
+    jsonText = Text.decodeUtf8 . LBS.toStrict
+    whenExists True = failAt StDriver "portfolio output directory already exists; choose a new -o directory"
+    whenExists False = pure ()
 
 -- | The precondition of 'backendTestbench': the vectors' ports are the
 -- module's, by name, order and type. It follows from 'matchVectors', since
@@ -798,14 +1120,14 @@ runSimulators sim prog nm vecs = do
 -- of its own for at most the given number of seconds; 'Nothing' if it took
 -- longer, in which case the evaluation is stopped. Simulation is pure code
 -- built with @-fno-omit-yields@, so it can always be interrupted.
-evaluateWithin :: Int -> Outcome -> IO (Maybe Outcome)
+evaluateWithin :: Int -> a -> IO (Maybe a)
 evaluateWithin seconds outcome = do
   done <- newEmptyMVar
   worker <- forkIO (try (evaluate outcome) >>= putMVar done)
-  awakeTimeout seconds (readMVar done) >>= \case
-    Nothing -> Nothing <$ killThread worker
+  (awakeTimeout seconds (readMVar done) >>= \case
+    Nothing -> pure Nothing
     Just (Left e) -> throwIO (e :: SomeException)
-    Just (Right o) -> pure (Just o)
+    Just (Right o) -> pure (Just o)) `finally` killThread worker
 
 -- | 'Pass' when the simulated rows equal the expected ones, else the first
 -- mismatch.
@@ -1057,13 +1379,18 @@ data ToolResult
 -- killed with @SIGKILL@, which also reaches processes the tool started that
 -- are still running after it exited.
 runTool :: Env -> FilePath -> Int -> FilePath -> [String] -> IO ToolResult
-runTool environment work seconds exe args =
+runTool = runToolWith []
+
+-- Extra variables are generated by the driver (currently only the private
+-- proof directory), never copied from a policy or the caller's environment.
+runToolWith :: Env -> Env -> FilePath -> Int -> FilePath -> [String] -> IO ToolResult
+runToolWith extra environment work seconds exe args =
   either (NotStarted . ioMessage) id <$> tryIO (withCreateProcess spec supervise)
   where
     spec =
       (proc exe args)
         { cwd = Just work
-        , env = Just (toolEnvironment environment)
+        , env = Just (extra <> toolEnvironment environment)
         , std_in = CreatePipe
         , std_out = CreatePipe
         , std_err = CreatePipe

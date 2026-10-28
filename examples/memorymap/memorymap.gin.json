@@ -1,0 +1,104 @@
+{
+  "format": "gin-ir/1",
+  "producer": {"tool": "gin-export", "leanVersion": "4.34.1"},
+  "top": {
+    "name": "memorymap",
+    "domain": {"name": "System", "periodPs": 10000},
+    "inputs": [{"name": "words", "type": {"t": "bv", "width": 8}}],
+    "outputs": [{"name": "value_out", "type": {"t": "bv", "width": 8}}],
+    "def": "MemoryMap.memorymap"
+  },
+  "defs": [
+    {
+      "name": "MemoryMap.memorymap",
+      "type": {
+        "t": "fun",
+        "arg": {"t": "signal", "domain": "System", "elem": {"t": "bv", "width": 8}},
+        "res": {"t": "signal", "domain": "System", "elem": {"t": "bv", "width": 8}}
+      },
+      "body": {
+        "e": "lam",
+        "binders": [
+          {
+            "name": "words",
+            "type": {"t": "signal", "domain": "System", "elem": {"t": "bv", "width": 8}}
+          }
+        ],
+        "body": {
+          "e": "app",
+          "fun": {
+            "e": "prim",
+            "op": "sig.lift",
+            "type": {
+              "t": "fun",
+              "arg": {"t": "fun", "arg": {"t": "bv", "width": 8}, "res": {"t": "bv", "width": 8}},
+              "res": {
+                "t": "fun",
+                "arg": {"t": "signal", "domain": "System", "elem": {"t": "bv", "width": 8}},
+                "res": {"t": "signal", "domain": "System", "elem": {"t": "bv", "width": 8}}
+              }
+            },
+            "params": {"arity": 1}
+          },
+          "args": [
+            {
+              "e": "lam",
+              "binders": [{"name": "word", "type": {"t": "bv", "width": 8}}],
+              "body": {
+                "e": "app",
+                "fun": {
+                  "e": "prim",
+                  "op": "bv.add",
+                  "type": {
+                    "t": "fun",
+                    "arg": {"t": "bv", "width": 8},
+                    "res": {
+                      "t": "fun",
+                      "arg": {"t": "bv", "width": 8},
+                      "res": {"t": "bv", "width": 8}
+                    }
+                  },
+                  "params": {}
+                },
+                "args": [
+                  {
+                    "e": "app",
+                    "fun": {
+                      "e": "prim",
+                      "op": "bv.add",
+                      "type": {
+                        "t": "fun",
+                        "arg": {"t": "bv", "width": 8},
+                        "res": {
+                          "t": "fun",
+                          "arg": {"t": "bv", "width": 8},
+                          "res": {"t": "bv", "width": 8}
+                        }
+                      },
+                      "params": {}
+                    },
+                    "args": [{"e": "var", "name": "word"}, {"e": "var", "name": "word"}]
+                  },
+                  {"e": "lit", "value": {"bv": 8, "val": "1"}}
+                ]
+              }
+            },
+            {"e": "var", "name": "words"}
+          ]
+        }
+      }
+    }
+  ],
+  "certificate": {
+    "theorem": "MemoryMap.memorymap_correct",
+    "statement": "forall (words : Gin.Signal Gin.System (BitVec 8)) (t : Nat), MemoryMap.memorymap words t = MemoryMap.spec words t",
+    "axioms": [],
+    "implAxioms": [],
+    "specDefinitions": [
+      {
+        "name": "MemoryMap.spec",
+        "body": "MemoryMap.spec : Gin.Signal Gin.System (BitVec 8) -> Nat -> BitVec 8 := fun (words : Gin.Signal Gin.System (BitVec 8)) (t : Nat) => @HAdd.hAdd (BitVec 8) (BitVec 8) (BitVec 8) (@instHAdd (BitVec 8) (@BitVec.instAdd 8)) (@HAdd.hAdd (BitVec 8) (BitVec 8) (BitVec 8) (@instHAdd (BitVec 8) (@BitVec.instAdd 8)) (words t) (words t)) (1 : BitVec 8)"
+      }
+    ]
+  }
+}

@@ -25,7 +25,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-examples=(counter detector mac)
+examples=(counter detector mac muxadd memorymap)
 
 step() {
   printf '\nvalidate: %s\n' "$*"

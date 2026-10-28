@@ -68,6 +68,7 @@ library
     Gin.Optimize.Policy
     Gin.Optimize.Portfolio
     Gin.Sim
+    Gin.Schedule
     Gin.Sim.Prim
     Gin.Vectors
 
@@ -128,6 +129,7 @@ test-suite gin-test
     Gin.Optimize.PolicySpec
     Gin.Optimize.PortfolioSpec
     Gin.SimSpec
+    Gin.ScheduleSpec
     Gin.TestUtil
 
   build-depends:

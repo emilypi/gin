@@ -21,6 +21,11 @@ tested-with:        GHC ==9.14.1
 extra-doc-files:
   README.md
   LICENSE.md
+  docs/memory-contract.md
+extra-source-files:
+  test/hdl/memory_tb.sv
+  examples/memory-traffic.json
+  examples/memory-words.json
 
 common warnings
   ghc-options:
@@ -57,8 +62,10 @@ library
     Gin.Core.Value
     Gin.Driver
     Gin.Error
+    Gin.Evaluate.Memory
     Gin.Hash
     Gin.Limits
+    Gin.Memory
     Gin.Netlist.Build
     Gin.Netlist.Types
     Gin.Normalize
@@ -118,10 +125,12 @@ test-suite gin-test
     Gin.Core.JsonSpec
     Gin.DriverSpec
     Gin.E2ESpec
+    Gin.Evaluate.MemorySpec
     Gin.Examples
     Gin.ExamplesSpec
     Gin.HashSpec
     Gin.LeanExamplesSpec
+    Gin.MemorySpec
     Gin.Netlist.BuildSpec
     Gin.NormalizeSpec
     Gin.Optimize.CircuitSpec

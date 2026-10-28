@@ -1,0 +1,5 @@
+[
+  {"name":"one-channel","channels":1,"readLatency":8,"writeLatency":4,"acceptEvery":1,"responseEvery":1,"cycleLimit":10000},
+  {"name":"four-channels","channels":4,"readLatency":8,"writeLatency":4,"acceptEvery":1,"responseEvery":1,"cycleLimit":10000},
+  {"name":"backpressure","channels":1,"readLatency":24,"writeLatency":12,"acceptEvery":3,"responseEvery":2,"cycleLimit":10000}
+]

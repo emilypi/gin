@@ -44,6 +44,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# elan selects a toolchain before lake processes -d. Honor the project pin
+# even when the caller's default Lean release differs.
+IFS= read -r ELAN_TOOLCHAIN < lean/lean-toolchain
+export ELAN_TOOLCHAIN
+
 examples=(counter detector mac)
 
 tmp=$(mktemp -d)

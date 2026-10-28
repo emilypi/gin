@@ -34,6 +34,7 @@ module Gin.Core.Json
   , encodeProgram
   , decodeVectors
   , encodeVectors
+  , decodeWith
   ) where
 
 import Control.Monad (unless, when, zipWithM)

@@ -2,20 +2,116 @@
 
 module Gin.Optimize.PolicySpec (spec) where
 
+import Control.Exception (evaluate)
 import Control.Lens (set, view)
 import Data.ByteString.Lazy.Char8 qualified as B
 import Data.Either (isLeft)
 import Data.Map.Strict qualified as M
+import Data.Text qualified as T
 import Gin.Core.Bounded
 import Gin.Core.Prim (PrimOp (..))
 import Gin.Core.Type (Ty (..))
+import Gin.Error (GinError (..), renderError)
 import Gin.Optimize.Circuit (CircuitCosts (..), CircuitOptions (..))
 import Gin.Optimize.Policy
+import System.Timeout (timeout)
 import Test.Hspec
 import Yolk qualified as Y
 
 spec :: Spec
 spec = describe "optimization policies" $ do
+  it "reports the first invalid JSON field with its path" $ do
+    let bytes =
+          "{\"format\":\"gin-policy/1\",\"objectives\":[{\"name\":\"area\"}],\
+          \\"prefer\":[\"unknown\"],\"timeoutSeconds\":0,\"upperBounds\":[1,2],\
+          \\"search\":{\"iterations\":1001,\"nodes\":0}}"
+    case decodePolicy bytes of
+      Left err -> errContext err `shouldBe` ["at $.timeoutSeconds"]
+      Right _ -> expectationFailure "invalid fields were accepted"
+  it "preserves paths through nested JSON objects and arrays" $
+    mapM_
+      (\(bytes, path) -> case decodePolicy bytes of
+        Left err -> errContext err `shouldBe` [path]
+        Right _ -> expectationFailure "invalid field type was accepted")
+      [ ( "{\"format\":\"gin-policy/1\",\"objectives\":[{\"name\":\"area\"}],\
+          \\"search\":{\"nodes\":false}}"
+        , "at $.search.nodes"
+        )
+      , ( "{\"format\":\"gin-policy/1\",\"objectives\":[{\"name\":\"area\"},\
+          \{\"name\":\"depth\",\"default\":\"bad\"}]}"
+        , "at $.objectives[1].default"
+        )
+      , ( "{\"format\":\"gin-policy/1\",\"objectives\":false,\"timeoutSeconds\":0}"
+        , "at $.objectives"
+        )
+      , ( "{\"format\":\"unsupported\",\"objectives\":[]}"
+        , "at $.format"
+        )
+      , ( "{\"format\":\"gin-policy/1\",\"objectives\":[{\"name\":\"area\"}],\
+          \\"backend\":\"unknown\"}"
+        , "at $.backend"
+        )
+      ]
+  it "reports paths for invalid policy relationships" $
+    mapM_
+      (\(field, path) -> case decodePolicy
+        ("{\"format\":\"gin-policy/1\",\"objectives\":[{\"name\":\"area\"}],"
+          <> field <> "}") of
+        Left err -> errContext err `shouldBe` [path]
+        Right _ -> expectationFailure "invalid relationship was accepted")
+      [ ("\"prefer\":[\"unknown\"]", "at $.prefer")
+      , ("\"upperBounds\":[1,2]", "at $.upperBounds")
+      ]
+  it "rechecks edited objectives through the smart constructor" $
+    case decodePolicy (searchPolicy "iterations" 8) of
+      Left err -> expectationFailure (show err)
+      Right original | [objective] <- policyObjectives original -> do
+        let badObjective = set objectiveNameL "bad name"
+              (set objectiveOperatorsL
+                (M.singleton "typo" (boundedIntLiteral @1)) objective)
+            updated = set policyPreferencesL ["x", "x"]
+              (set policyObjectivesL [badObjective] original)
+        case validatePolicy updated of
+          Left err -> errContext err `shouldBe` ["at $.objectives[0].name"]
+          Right () -> expectationFailure "invalid edits were accepted"
+        mkObjective "bad name" (boundedIntLiteral @1) M.empty False
+          `shouldSatisfy` isLeft
+      Right _ -> expectationFailure "expected one objective in the fixture"
+  it "bounds each list before traversing an edited record" $
+    case decodePolicy (searchPolicy "iterations" 8) of
+      Left err -> expectationFailure (show err)
+      Right original | [objective] <- policyObjectives original ->
+        mapM_
+          (\(updated, path) -> do
+            let failurePath = case validatePolicy updated of
+                  Left err -> errContext err
+                  Right () -> []
+            result <- timeout 1000000 (evaluate (failurePath == [path]))
+            result `shouldBe` Just True)
+          [ (set policyObjectivesL (repeat objective) original, "at $.objectives")
+          , (set policyPreferencesL (repeat "x") original, "at $.prefer")
+          , ( set policyUpperBoundsL (Just (repeat (boundedIntLiteral @1))) original
+            , "at $.upperBounds"
+            )
+          ]
+      Right _ -> expectationFailure "expected one objective in the fixture"
+  it "rejects oversized objective arrays before parsing their elements" $ do
+    let bytes = "{\"format\":\"gin-policy/1\",\"objectives\":["
+          <> B.intercalate "," (replicate 17 "false") <> "]}"
+    case decodePolicy bytes of
+      Left err -> do
+        errMessage err `shouldBe` "expected between 1 and 16 objectives"
+        errContext err `shouldBe` ["at $.objectives"]
+      Right _ -> expectationFailure "oversized array was accepted"
+  it "retains terminal-safe rendering for parse errors" $ do
+    let bytes =
+          "{\"format\":\"gin-policy/1\",\"objectives\":[{\"name\":\"area\"}],\
+          \\"timeoutSeconds\":\"bad\\nvalue\",\"search\":{\"nodes\":false}}"
+    case decodePolicy bytes of
+      Left err -> do
+        length (T.lines (renderError err)) `shouldBe` 2
+        errContext err `shouldBe` ["at $.timeoutSeconds"]
+      Right _ -> expectationFailure "invalid field types were accepted"
   it "decodes named objectives and applies width-weighted operator costs" $ do
     let bytes =
           "{\"format\":\"gin-policy/1\",\"objectives\":[{\"name\":\"area\",\"default\":1,\

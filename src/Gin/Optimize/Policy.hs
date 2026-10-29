@@ -50,11 +50,11 @@ module Gin.Optimize.Policy
   ) where
 
 import Control.Lens (view)
-import Control.Monad (unless, when)
+import Control.Monad (forM_, unless, void, when)
 import Data.Aeson qualified as A
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
-import Data.Aeson.Types (Parser, (.!=), (.:), (.:?), (.=))
+import Data.Aeson.Types (JSONPathElement (..), Parser, (<?>), (.!=), (.:), (.:?), (.=))
 import Data.ByteString.Lazy qualified as B
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.List (nub)
@@ -62,13 +62,14 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as M
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Vector qualified as V
 import Gin.Core.Bounded
 import Gin.Core.Json (decodeWith)
 import Gin.Core.Optics (makeFieldLenses)
 import Gin.Core.Prim (PrimOp (..), primName)
 import Gin.Core.Type (Ty (..))
 import Gin.Core.Value (valueTy)
-import Gin.Error (GinError, Stage (StDecode), ginError)
+import Gin.Error (GinError, Stage (StDecode), ginError, withContext)
 import Gin.Hash (sha256Hex)
 import Gin.Optimize.Circuit (CircuitBackend (..), CircuitCosts (..), CircuitOptions (..))
 import Yolk qualified as Y
@@ -124,118 +125,128 @@ mkPolicy ::
   PolicySearch ->
   Maybe [CostWeight] ->
   Either GinError Policy
-mkPolicy objectives preferences seconds backend search bounds = do
-  let result = Policy objectives preferences seconds backend search bounds
-  validatePolicy result
-  pure result
+mkPolicy objectives preferences seconds backend search bounds =
+  parsePolicy (Policy objectives preferences seconds backend search bounds)
 
 mkObjective ::
   Text -> CostWeight -> Map Text CostWeight -> Bool -> Either GinError Objective
-mkObjective name def operators weighted = do
-  validateName name
-  unless
-    (all (`elem` operatorNames) (M.keys operators))
-    (Left (policyError "unknown cost operator"))
-  pure (Objective name def operators weighted)
+mkObjective name def operators weighted =
+  parseObjectiveAt "objective" (Objective name def operators weighted)
 
-validateName :: Text -> Either GinError ()
-validateName name =
-  unless
+parseObjectiveAt :: Text -> Objective -> Either GinError Objective
+parseObjectiveAt path objective = do
+  let name = objectiveName objective
+  check (path <> ".name")
+    "objective name must contain 1 to 64 ASCII letters, digits, underscores or hyphens"
     (not (T.null name) && T.length name <= 64 && T.all nameChar name)
-    ( Left
-        ( policyError
-            "objective name must contain 1 to 64 ASCII letters, digits, underscores or \
-              \hyphens"
-        )
-    )
+  check (path <> ".operators") "unknown cost operator"
+    (all (`elem` operatorNames) (M.keys (objectiveOperators objective)))
+  pure objective
  where
   nameChar c = isAsciiLower c || isAsciiUpper c || isDigit c || c == '_' || c == '-'
 
 policyError :: Text -> GinError
 policyError = ginError StDecode
 
+check :: Text -> Text -> Bool -> Either GinError ()
+check path message valid =
+  withContext ("at $." <> path) (unless valid (Left (policyError message)))
+
+-- Inspect only a bounded prefix before traversing a caller-supplied list.
+boundedList :: Text -> Int -> [a] -> Either GinError [a]
+boundedList path lower values =
+  values <$ check path message (size >= lower && size <= 16)
+ where
+  size = length (take 17 values)
+  message
+    | lower == 1 = "expected between 1 and 16 objectives"
+    | otherwise = "at most 16 entries are accepted"
+
+parsePolicy :: Policy -> Either GinError Policy
+parsePolicy p = do
+  objectives <- boundedList "objectives" 1 (policyObjectives p)
+  preference <- boundedList "prefer" 0 (policyPreferences p)
+  bounds <- traverse (boundedList "upperBounds" 0) (policyUpperBounds p)
+  forM_ (zip [0 :: Int ..] objectives) $ \(index, objective) ->
+    parseObjectiveAt ("objectives[" <> T.pack (show index) <> "]") objective
+  let names = map objectiveName objectives
+  check "objectives" "objective names must be unique" (nub names == names)
+  check "prefer" "preferences must be unique" (nub preference == preference)
+  check "prefer" "preferences must name existing objectives"
+    (all (`elem` names) preference)
+  forM_ bounds $ \values ->
+    check "upperBounds" "upperBounds must match objective dimensions"
+      (length values == length objectives)
+  pure p
+
+-- | Recheck edits through the same smart-construction boundary as JSON input.
+-- Stop at the first error, bounding collections before traversing their values.
+validatePolicy :: Policy -> Either GinError ()
+validatePolicy = void . parsePolicy
+
 decodePolicy :: B.ByteString -> Either GinError Policy
 decodePolicy bytes
   | B.length (B.take (65536 + 1) bytes) > 65536 =
       Left (policyError "optimization policy exceeds 65536 bytes")
-  | otherwise = decodeWith policyP bytes
+  | otherwise = decodeWith policyP bytes >>= parsePolicy
 
--- | Recheck relationships after record updates, without a JSON round trip.
--- Individual numeric settings cannot be replaced with unchecked integers.
-validatePolicy :: Policy -> Either GinError ()
-validatePolicy p = do
-  let objectives = policyObjectives p
-      names = map objectiveName objectives
-      preference = policyPreferences p
-  when (null objectives || length (take 17 objectives) > 16) $
-    Left (policyError "expected between 1 and 16 objectives")
-  unless (length (take 17 preference) <= 16) $
-    Left (policyError "at most 16 preferences are accepted")
-  mapM_
-    ( \o ->
-        mkObjective
-          (objectiveName o)
-          (objectiveDefault o)
-          (objectiveOperators o)
-          (objectiveWidthWeighted o)
-    )
-    objectives
-  unless (nub names == names) (Left (policyError "objective names must be unique"))
-  unless (nub preference == preference && all (`elem` names) preference) $
-    Left (policyError "prefer must contain unique objective names from objectives")
-  case policyUpperBounds p of
-    Just bs ->
-      unless (length (take 17 bs) == length objectives) $
-        Left (policyError "upperBounds must match objective dimensions and the JSON \
-          \number limit")
-    Nothing -> pure ()
-
+-- The shared decoder checks syntax, duplicate keys and numeric resource bounds.
+-- Aeson then parses typed fields; smart construction checks their relationships.
 policyP :: A.Value -> Parser Policy
 policyP = A.withObject "optimization policy" $ \o -> do
   keys
-    ["format", "objectives", "prefer", "upperBounds", "backend", "search"
-      , "timeoutSeconds"]
-    o
-  fmt <- o .: "format"
-  unless (fmt == ("gin-policy/1" :: Text)) (fail "expected gin-policy/1")
-  os <-
-    o .: "objectives" >>= A.withArray "objectives" (traverse objectiveP . foldr (:) [])
-  preference <- o .:? "prefer" .!= map objectiveName os
+    [ "format", "objectives", "prefer", "upperBounds", "backend", "search"
+    , "timeoutSeconds"
+    ] o
+  format <- o .: "format"
+  unless (format == ("gin-policy/1" :: Text)) (fail "expected gin-policy/1")
+    <?> Key "format"
+  rawObjectives <- o .: "objectives"
+  objectives <- A.withArray "objectives" objectivesP rawObjectives <?> Key "objectives"
+  preference <- o .:? "prefer" .!= map objectiveName objectives
+  seconds <- o .:? "timeoutSeconds" .!= boundedIntLiteral @60
   backend <- o .:? "backend" .!= "mutable"
-  chosenBackend <- case backend :: Text of
+  chosenBackend <- backendP backend <?> Key "backend"
+  rawSearch <- o .:? "search" .!= KM.empty
+  search <- searchP rawSearch <?> Key "search"
+  bounds <- o .:? "upperBounds"
+  pure Policy
+    { policyObjectives = objectives
+    , policyPreferences = preference
+    , policyTimeoutSeconds = seconds
+    , policyBackend = chosenBackend
+    , policySearch = search
+    , policyUpperBounds = bounds
+    }
+ where
+  objectivesP values = do
+    when (V.null values || V.length values > 16) $
+      fail "expected between 1 and 16 objectives"
+    V.toList <$> V.imapM (\i value -> objectiveP value <?> Index i) values
+  backendP = \case
     "mutable" -> pure MutableBackend
     "persistent" -> pure PersistentBackend
-    _ -> fail "unknown backend"
-  seconds <- o .:? "timeoutSeconds" .!= boundedIntLiteral @60
-  bounds <- o .:? "upperBounds"
-  search <- o .:? "search" .!= KM.empty
-  keys ["iterations", "nodes", "matches", "expansions", "archive", "witnesses"] search
-  iters <- search .:? "iterations" .!= boundedIntLiteral @8
-  nodes <- search .:? "nodes" .!= boundedIntLiteral @10000
-  matches <- search .:? "matches" .!= boundedIntLiteral @10000
-  expansions <- search .:? "expansions" .!= boundedIntLiteral @10000
-  archive <- search .:? "archive" .!= boundedIntLiteral @64
-  witnesses <- search .:? "witnesses" .!= boundedIntLiteral @2
-  either
-    (fail . show)
-    pure
-    ( mkPolicy
-        os
-        preference
-        seconds
-        chosenBackend
-        (PolicySearch iters nodes matches expansions archive witnesses)
-        bounds
-    )
+    (_ :: Text) -> fail "unknown backend"
+
+searchP :: A.Object -> Parser PolicySearch
+searchP o = do
+  keys ["iterations", "nodes", "matches", "expansions", "archive", "witnesses"] o
+  PolicySearch
+    <$> o .:? "iterations" .!= boundedIntLiteral @8
+    <*> o .:? "nodes" .!= boundedIntLiteral @10000
+    <*> o .:? "matches" .!= boundedIntLiteral @10000
+    <*> o .:? "expansions" .!= boundedIntLiteral @10000
+    <*> o .:? "archive" .!= boundedIntLiteral @64
+    <*> o .:? "witnesses" .!= boundedIntLiteral @2
 
 objectiveP :: A.Value -> Parser Objective
 objectiveP = A.withObject "objective" $ \o -> do
   keys ["name", "default", "operators", "widthWeighted"] o
-  name <- o .: "name"
-  def <- o .:? "default" .!= boundedIntLiteral @1
-  operators <- o .:? "operators" .!= M.empty
-  weighted <- o .:? "widthWeighted" .!= False
-  either (fail . show) pure (mkObjective name def operators weighted)
+  Objective
+    <$> o .: "name"
+    <*> o .:? "default" .!= boundedIntLiteral @1
+    <*> o .:? "operators" .!= M.empty
+    <*> o .:? "widthWeighted" .!= False
 
 keys :: [Text] -> A.Object -> Parser ()
 keys allowed o =

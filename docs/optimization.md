@@ -75,6 +75,16 @@ relationships after record updates, without serializing and reparsing a
 policy. `PolicySearch` holds the bounded settings; Yolk options are computed
 from it and the current objectives, avoiding stale stored dimensions.
 
+`decodePolicy` uses the existing Aeson parsers for typed JSON fields, then
+checks the policy through the same smart-construction boundary as `mkPolicy`.
+Both stop at the first error and return `Either GinError Policy`. Field paths
+identify invalid JSON fields and invalid objective or policy relationships.
+`validatePolicy` applies those same checks after record or lens edits.
+
+Collections are capped before traversing their contents. The shared JSON
+decoder still rejects malformed syntax, duplicate keys, negative numbers,
+and resource-limit violations before parsing policy fields.
+
 `pipelineCircuit` takes a `PipelineDepth`, created with `mkPipelineDepth`
 or a checked literal. Reported latency and stage depth are checked values
 too. For example, `view (scheduledLatencyL . boundedIntValue) scheduled`

@@ -902,7 +902,7 @@ wideNetlist =
       ]
 
 widePattern :: Integer
-widePattern = foldl (\acc _ -> acc * 2 ^ (64 :: Int) + 0xfedcba9876543210) 0 [1 .. 64 :: Int]
+widePattern = foldl' (\acc _ -> acc * 2 ^ (64 :: Int) + 0xfedcba9876543210) 0 [1 .. 64 :: Int]
 
 wideVectors :: Vectors
 wideVectors =

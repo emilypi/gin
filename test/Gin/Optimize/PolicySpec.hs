@@ -1,12 +1,18 @@
+{-# LANGUAGE DataKinds #-}
+
 module Gin.Optimize.PolicySpec (spec) where
 
+import Control.Lens (set, view)
 import Data.ByteString.Lazy.Char8 qualified as B
 import Data.Either (isLeft)
+import Data.Map.Strict qualified as M
+import Gin.Core.Bounded
 import Gin.Core.Prim (PrimOp (..))
 import Gin.Core.Type (Ty (..))
-import Gin.Optimize.Circuit (CircuitCosts (..))
+import Gin.Optimize.Circuit (CircuitCosts (..), CircuitOptions (..))
 import Gin.Optimize.Policy
 import Test.Hspec
+import Yolk qualified as Y
 
 spec :: Spec
 spec = describe "optimization policies" $ do
@@ -32,3 +38,29 @@ spec = describe "optimization policies" $ do
     case decodePolicy "{\"format\":\"gin-policy/1\",\"objectives\":[{\"name\":\"x\"}],\"search\":{\"expansions\":0,\"iterations\":0}}" of
       Left e -> expectationFailure (show e)
       Right p -> decodePolicy (encodePolicy p) `shouldBe` Right p
+  it "checks every numeric search boundary during decoding" $
+    mapM_ (\(field, valid, invalid) -> do
+      mapM_ (\n -> decodePolicy (searchPolicy field n) `shouldSatisfy` either (const False) (const True)) valid
+      mapM_ (\n -> decodePolicy (searchPolicy field n) `shouldSatisfy` isLeft) invalid)
+      [ ("iterations",[0,1000],[-1,1001])
+      , ("nodes",[1,100000],[0,100001])
+      , ("matches",[0,100000],[-1,100001])
+      , ("expansions",[0,10000000],[-1,10000001])
+      , ("archive",[1,4096],[0,4097])
+      , ("witnesses",[1,64],[0,65])
+      ]
+  it "derives dimensions from edited objective records and composes bounded optics" $
+    case (decodePolicy (searchPolicy "iterations" 8), mkObjective "depth" (boundedIntLiteral @1) M.empty False) of
+      (Right p, Right objective) -> do
+        let updated = set policyObjectivesL (policyObjectives p <> [objective])
+              (set (policySearchL . searchIterationsL) (boundedIntLiteral @0) p)
+        validatePolicy updated `shouldBe` Right ()
+        view (policySearchL . searchIterationsL . boundedIntValue) updated `shouldBe` 0
+        Y.paretoDimensions (circuitExtractionOptions (policyOptions updated)) `shouldBe` 2
+        decodePolicy (encodePolicy updated) `shouldBe` Right updated
+      result -> expectationFailure (show result)
+
+searchPolicy :: String -> Int -> B.ByteString
+searchPolicy field value = B.pack
+  ("{\"format\":\"gin-policy/1\",\"objectives\":[{\"name\":\"x\"}],\"search\":{\""
+    <> field <> "\":" <> show value <> "}}")

@@ -1,3 +1,5 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 -- | Evaluate a finite collection of generated memory architectures under
 -- named, explicit traffic models. This frontier is modeled, not measured.
 module Gin.Evaluate.Memory
@@ -10,8 +12,24 @@ module Gin.Evaluate.Memory
   , evaluatedDesign
   , evaluateMemoryPortfolio
   , encodeMemoryPortfolio
+
+    -- * Optics
+  , kernelIdentityL
+  , kernelModuleL
+  , kernelProxyCostsL
+  , evaluatedIdentityL
+  , evaluatedDesignL
+  , evaluatedKernelL
+  , evaluatedRunsL
+  , evaluatedCostsL
+  , memoryDesignsL
+  , memoryFrontierL
+  , memoryObjectiveNamesL
+  , memoryScenariosL
+  , memoryInputDigestL
   ) where
 
+import Control.Lens (view)
 import Control.Monad (unless, when)
 import Data.Aeson qualified as A
 import Data.Aeson.Types ((.=))
@@ -20,6 +38,8 @@ import Data.List (nub)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as T
+import Gin.Core.Bounded (boundedIntValue)
+import Gin.Core.Optics (makeFieldLenses)
 import Gin.Core.Normal (NModule (..))
 import Gin.Core.Type (Ty (..))
 import Gin.Error (GinError, Stage (..), ginError)
@@ -67,8 +87,8 @@ evaluateMemoryPortfolio names kernels configs scenarios words_ = do
       width nm = sum [toInteger w | (_,TBitVec w) <- nmInputs nm]
       payload = sum (map (width . kernelModule) kernels) * toInteger (length unique)
         * toInteger (length scenarios) * toInteger (length inputWords)
-      work = toInteger (length kernels) * sum [toInteger (memoryLanes cfg) * toInteger (trafficChannels s)
-        * toInteger (trafficCycleLimit s) | cfg <- unique, s <- scenarios]
+      work = toInteger (length kernels) * sum [toInteger (view boundedIntValue (memoryLanes cfg)) * toInteger (view boundedIntValue (trafficChannels s))
+        * toInteger (view boundedIntValue (trafficCycleLimit s)) | cfg <- unique, s <- scenarios]
   when (length inputWords > 100000) (Left (problem "memory input exceeds 100000 words"))
   when (work > 100000000) (Left (problem "memory portfolio exceeds 100000000 lane/channel/cycle work units"))
   when (length kernels * length unique > 128 || payload > 2 ^ (24 :: Int)) $
@@ -86,8 +106,8 @@ evaluateMemoryPortfolio names kernels configs scenarios words_ = do
       design <- generateMemoryAccelerator config (kernelModule kernel)
       runs <- traverse (\scenario -> simulateMemory config scenario (kernelModule kernel) inputWords) scenarios
       let identity = digest ("gin-memory/1\n" <> kernelIdentity kernel <> "\n" <> memorySystemVerilog design)
-          costs = map (* fromIntegral (memoryLanes config)) (kernelProxyCosts kernel)
-            <> [fromIntegral (memoryLanes config)] <> map (fromIntegral . memoryCycles) runs
+          costs = map (* fromIntegral (view boundedIntValue (memoryLanes config))) (kernelProxyCosts kernel)
+            <> [fromIntegral (view boundedIntValue (memoryLanes config))] <> map (fromIntegral . memoryCycles) runs
       pure (EvaluatedMemory identity design (kernelIdentity kernel) runs costs)
 
 dominates :: [Natural] -> [Natural] -> Bool
@@ -128,3 +148,8 @@ digest = sha256Hex . T.encodeUtf8
 
 problem :: Text -> GinError
 problem = ginError StDriver
+
+-- Optics use the same field-name + L convention as Gin.Core.
+makeFieldLenses ''MemoryKernel
+makeFieldLenses ''EvaluatedMemory
+makeFieldLenses ''MemoryPortfolio

@@ -101,6 +101,7 @@ together. The optimization implementation requires Yolk's Pareto extraction API.
 ```sh
 cabal build all
 GIN_REQUIRE_TOOLS=1 cabal test   # without the variable, tests whose HDL tools are missing are pending
+sh test/check-types.sh          # reject forged bounded settings at compile time
 scripts/validate.sh              # the whole pipeline, from the Lean sources to HDL simulation
 ```
 

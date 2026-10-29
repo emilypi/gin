@@ -1,3 +1,5 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE RankNTypes #-}
@@ -30,8 +32,48 @@ module Gin.Optimize.Circuit
   , defaultCircuitCosts
   , circuitRuleSetVersion
   , optimizeCircuit
+
+    -- * Optics
+  , scalarTypeL
+  , someTypeL
+  , circuitBackendL
+  , circuitSaturationLimitsL
+  , circuitExtractionOptionsL
+  , circuitPrimitiveCostL
+  , circuitMuxCostL
+  , circuitLiteralCostL
+  , optimizedModuleL
+  , extractionCostL
+  , circuitCandidatesL
+  , circuitRunResultL
+  , circuitCoverageL
+  , circuitFeasibilityL
+  , circuitTerminationL
+  , circuitExpansionsL
+  , circuitPendingBoundsL
+  , circuitWitnessesCompleteL
+  , forestRootsL
+  , atomAtL
+  , emittedBindsL
+  , emittedNamesL
+  , emittedNextL
+  , emittedCountL
+  , _MutableBackend
+  , _PersistentBackend
+  , _InputLeaf
+  , _RegisterLeaf
+  , _RVar
+  , _RLiteral
+  , _RPrim
+  , _RMux
+  , _Wire
+  , _Literal
+  , _Operation
+  , _Select
   ) where
 
+import Control.Lens (Getter, makePrisms, to)
+import Gin.Core.Optics (makeFieldLenses)
 import Control.Monad (foldM, unless, when)
 import Control.Monad.Except (ExceptT, MonadError, liftEither, runExceptT, throwError)
 import Control.Monad.State.Strict (StateT, gets, modify', runStateT)
@@ -499,3 +541,24 @@ problem = ginError StNormalize
 
 shown :: Show a => a -> Text
 shown = Text.pack . show
+
+-- Optics use the same field-name + L convention as Gin.Core.
+-- Scalar and Some carry existential sort evidence. Observe their reflected
+-- type through getters; an arbitrary type setter could invalidate that evidence.
+scalarTypeL :: Getter (Scalar s) Ty
+scalarTypeL = to scalarType
+
+someTypeL :: Getter (Some f) Ty
+someTypeL = to someType
+
+makeFieldLenses ''CircuitOptions
+makeFieldLenses ''CircuitCosts
+makeFieldLenses ''CircuitCandidate
+makeFieldLenses ''CircuitResult
+makeFieldLenses ''Forest
+makeFieldLenses ''AtomAt
+makeFieldLenses ''Emission
+makePrisms ''CircuitBackend
+makePrisms ''Leaf
+makePrisms ''RuleExpr
+makePrisms ''Circuit

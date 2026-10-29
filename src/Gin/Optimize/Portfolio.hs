@@ -1,3 +1,5 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 -- | Candidate identity, whole-circuit scoring and provenance. Extraction
 -- coverage, semantic evidence and physical measurements are independent.
 module Gin.Optimize.Portfolio
@@ -17,8 +19,24 @@ module Gin.Optimize.Portfolio
   , selectCandidate
   , encodePortfolio
   , measureCircuit
+
+    -- * Optics
+  , metricOperatorsL
+  , metricRegistersL
+  , metricRegisterBitsL
+  , metricLogicDepthL
+  , candidateIdL
+  , candidateModuleL
+  , candidateObjectivesL
+  , candidateExtractionCostL
+  , candidateMetricsL
+  , portfolioPolicyL
+  , portfolioBaselineL
+  , portfolioCandidatesL
+  , portfolioSearchL
   ) where
 
+import Control.Lens (view)
 import Data.Aeson qualified as A
 import Data.Aeson.Types ((.=))
 import Data.ByteString.Lazy qualified as B
@@ -29,6 +47,8 @@ import Data.Set qualified as S
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as T
+import Gin.Core.Bounded (boundedIntValue)
+import Gin.Core.Optics (makeFieldLenses)
 import Gin.Core.Normal
 import Gin.Core.Syntax (Name, Ty (..), Value)
 import Gin.Error (GinError, Stage (..), ginError)
@@ -83,7 +103,9 @@ buildPortfolio policy baseline = do
            let c = make (optimizedModule r) (extractionCost r)]
   pure (Portfolio policy original candidates result)
   where
-    feasible c = maybe True (and . zipWith (<=) (candidateObjectives c)) (policyUpperBounds policy)
+    feasible c = maybe True
+      (and . zipWith (<=) (candidateObjectives c) . map (fromIntegral . view boundedIntValue))
+      (policyUpperBounds policy)
     context = T.intercalate "\n"
       [policyDigest policy, circuitRuleSetVersion, digest (T.pack (show baseline))]
 
@@ -202,3 +224,8 @@ candidateModuleDigest = digest . T.pack . show . candidateModule
 
 problem :: Text -> GinError
 problem = ginError StNormalize
+
+-- Optics use the same field-name + L convention as Gin.Core.
+makeFieldLenses ''Metrics
+makeFieldLenses ''Candidate
+makeFieldLenses ''Portfolio

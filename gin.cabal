@@ -25,6 +25,9 @@ extra-doc-files:
   docs/memory-contract.md
 extra-source-files:
   test/hdl/memory_tb.sv
+  test/check-types.sh
+  test/compile-fail/*.hs
+  test/compile-pass/*.hs
   examples/optimization/*.json
   examples/memory-traffic.json
   examples/memory-words.json
@@ -53,6 +56,7 @@ library
     Gin.Backend.VHDL
     Gin.Backend.VHDL.Testbench
     Gin.Certificate
+    Gin.Core.Bounded
     Gin.Core.Check
     Gin.Core.Json
     Gin.Core.Normal
@@ -123,6 +127,7 @@ test-suite gin-test
     Gin.Backend.VerilogSpec
     Gin.Backend.VHDLSpec
     Gin.CertificateSpec
+    Gin.Core.BoundedSpec
     Gin.Core.CheckSpec
     Gin.Core.JsonSpec
     Gin.DriverSpec

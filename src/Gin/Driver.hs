@@ -1,3 +1,5 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 -- |
 -- Module       : Gin.Driver
 -- Copyright    : (c) 2026 Emily Pillmore
@@ -110,8 +112,47 @@
 module Gin.Driver
   ( runCli
   , runCliWith
+
+    -- * Optics
+  , memLanesL
+  , memAddressWidthL
+  , memWordsL
+  , memTrafficL
+  , memTimeoutSecondsL
+  , inFileL
+  , inAllowAxiomsL
+  , inSpecHashL
+  , inOptimizeL
+  , inCandidateL
+  , outTargetsL
+  , outDirL
+  , simTimeoutSecondsL
+  , toolAllowMissingL
+  , toolTimeoutSecondsL
+  , valToolsL
+  , valSimL
+  , valMinCyclesL
+  , trToolL
+  , trArgsL
+  , trJudgeL
+  , _CheckCmd
+  , _CompileCmd
+  , _TestbenchCmd
+  , _SimCmd
+  , _ValidateCmd
+  , _OptimizeCmd
+  , _PipelineCmd
+  , _ProveCmd
+  , _MemoryCmd
+  , _Pass
+  , _Fail
+  , _Skip
+  , _Finished
+  , _TimedOut
+  , _NotStarted
   ) where
 
+import Control.Lens (makePrisms, view)
 import Control.Applicative (many, optional, (<**>), (<|>))
 import Control.Concurrent (forkIO, killThread)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, readMVar)
@@ -148,6 +189,9 @@ import Data.Text.Encoding qualified as Text
 import Data.Traversable (for)
 import GHC.Clock (getMonotonicTime)
 import GHC.IO.Exception (IOException (..))
+import GHC.TypeNats (KnownNat)
+import Gin.Core.Bounded
+import Gin.Core.Optics (makeFieldLenses)
 import Gin.Backend.SystemVerilog (systemVerilog)
 import Gin.Backend.Types
   ( Backend (..)
@@ -182,7 +226,7 @@ import Gin.Netlist.Build (buildNetlist)
 import Gin.Netlist.Types (HwType (..), Ident (..), Module (..), Net (..), Output (..))
 import Gin.Memory qualified as Memory
 import Gin.Normalize (checkNormal, normalize)
-import Gin.Optimize.Policy (Policy, decodePolicy, encodePolicy, policyTimeoutSeconds, policyObjectives, objectiveName)
+import Gin.Optimize.Policy (Policy, TimeoutSeconds, decodePolicy, encodePolicy, policyTimeoutSeconds, policyObjectives, objectiveName)
 import Gin.Optimize.Evidence (emitEquivalence, equivalenceTheoremName)
 import Gin.Optimize.Portfolio
   ( Portfolio, buildPortfolio, candidateId, candidateModule, encodePortfolio
@@ -190,7 +234,7 @@ import Gin.Optimize.Portfolio
   , measureCircuit, metricOperators )
 import Gin.Sim (isBudgetError, simulateCore, simulateNormal)
 import Gin.Schedule
-  ( pipelineCircuit, pipelineVectors, scheduledModule, scheduledLatency, scheduledStageDepth )
+  ( PipelineDepth, pipelineCircuit, pipelineVectors, scheduledModule, scheduledLatency, scheduledStageDepth )
 import Gin.Vectors (Cycle (..), Vectors (..))
 import Options.Applicative
   ( Parser
@@ -299,16 +343,16 @@ data Command
   | SimCmd !Inputs !FilePath !SimOptions
   | ValidateCmd !Inputs !FilePath !Outputs !ValidateOptions
   | OptimizeCmd !Inputs !FilePath !(Maybe FilePath) !Outputs !SimOptions
-  | PipelineCmd !Inputs !Int !(Maybe FilePath) !Outputs !ToolOptions !SimOptions
+  | PipelineCmd !Inputs !PipelineDepth !(Maybe FilePath) !Outputs !ToolOptions !SimOptions
   | ProveCmd !Inputs !Outputs !ToolOptions
   | MemoryCmd !Inputs !MemoryOptions !Outputs
 
 data MemoryOptions = MemoryOptions
-  { memLanes :: ![Int]
-  , memAddressWidth :: !Int
+  { memLanes :: ![Memory.LaneCount]
+  , memAddressWidth :: !Memory.AddressWidth
   , memWords :: !FilePath
   , memTraffic :: !(Maybe FilePath)
-  , memTimeoutSeconds :: !Int
+  , memTimeoutSeconds :: !TimeoutSeconds
   }
 
 -- | The IR file, the axioms its trace may use beyond
@@ -393,7 +437,7 @@ commands =
         "pipeline"
         "Pipeline a combinational kernel under an explicit fixed-latency contract."
         ( (\(i, (d, v, o)) t s -> PipelineCmd i d v o t s)
-            <$> inputs ((,,) <$> option (wholeNumberReader "logic levels")
+            <$> inputs ((,,) <$> option (checkedNumberReader "logic levels")
                 (long "max-depth" <> metavar "N" <> help "Maximum structural logic levels per pipeline stage")
               <*> optional vectorsOpt <*> outputs)
             <*> toolOptions <*> simOptions
@@ -447,11 +491,11 @@ policyOpt = strOption (long "policy" <> metavar "POLICY.json" <> help "Bounded s
 
 memoryOptions :: Parser MemoryOptions
 memoryOptions = MemoryOptions
-  <$> many (option (wholeNumberReader "lanes") (long "lanes" <> metavar "N" <> help "Lane count to explore (repeatable; default 1,2,4)"))
-  <*> option (wholeNumberReader "address bits") (long "address-width" <> metavar "N" <> value 32 <> showDefault)
+  <$> many (option (checkedNumberReader "lanes") (long "lanes" <> metavar "N" <> help "Lane count to explore (repeatable; default 1,2,4)"))
+  <*> option (checkedNumberReader "address bits") (long "address-width" <> metavar "N" <> value (boundedIntLiteral @32) <> showDefault)
   <*> strOption (long "words" <> metavar "WORDS.json" <> help "Unsigned input word array for the traffic model")
   <*> optional (strOption (long "traffic" <> metavar "TRAFFIC.json" <> help "Explicit traffic scenario array"))
-  <*> option secondsReader (long "memory-timeout" <> metavar "SECONDS" <> value 60 <> showDefault)
+  <*> option (checkedNumberReader "seconds") (long "memory-timeout" <> metavar "SECONDS" <> value (boundedIntLiteral @60) <> showDefault)
 
 vectorsOpt :: Parser FilePath
 vectorsOpt =
@@ -534,8 +578,11 @@ axiomReader = eitherReader $ \s ->
         then Left "an axiom name must not be empty or contain control or invisible characters"
         else Right name
 
--- | A whole number of seconds, at least 1 and small enough that its
--- microseconds fit in an 'Int'.
+-- | Parse a whole number through the setting's checked constructor.
+checkedNumberReader :: (KnownNat lower, KnownNat upper) => String -> ReadM (BoundedInt lower upper)
+checkedNumberReader label = wholeNumberReader label >>= either fail pure . mkBoundedInt
+
+-- | Whole seconds small enough that microseconds fit in an Int.
 secondsReader :: ReadM Int
 secondsReader = boundedReader "seconds" (toInteger (maxBound :: Int) `div` 1000000)
 
@@ -633,7 +680,7 @@ execute environment = \case
       Nothing -> failAt StDriver "pipeline generation exceeded the simulation timeout"
       Just r -> liftEither r
     let nm = scheduledModule scheduled
-        timingBackends = map (timingBackend (scheduledLatency scheduled)) (backendsOf outs)
+        timingBackends = map (timingBackend (view boundedIntValue (scheduledLatency scheduled))) (backendsOf outs)
     m <- liftEither (buildNetlist nm)
     vectors <- traverse (loadVectors prog) vectorsFile
     result <- case vectors of
@@ -701,13 +748,13 @@ execute environment = \case
     scenarios <- case memTraffic options of
       Nothing -> pure Memory.defaultTrafficScenarios
       Just file -> readInput file >>= liftEither . Memory.decodeTrafficScenarios
-    let lanes = if null (memLanes options) then [1,2,4] else memLanes options
+    let lanes = if null (memLanes options) then [boundedIntLiteral @1,boundedIntLiteral @2,boundedIntLiteral @4] else memLanes options
         configs = [Memory.MemoryConfig n (memAddressWidth options) | n <- lanes]
         evaluated = MemoryEval.evaluateMemoryPortfolio names kernels configs scenarios words_
         forced = case evaluated of
           Left e -> length (show e) `seq` evaluated
           Right p -> LBS.length (MemoryEval.encodeMemoryPortfolio p) `seq` evaluated
-    result <- liftIO (evaluateWithin (memTimeoutSeconds options) forced) >>= \case
+    result <- liftIO (evaluateWithin (view boundedIntValue (memTimeoutSeconds options)) forced) >>= \case
       Nothing -> failAt StDriver "memory evaluation deadline exceeded; no frontier claim is available"
       Just r -> liftEither r
     publishDirectory destination $ \tmp -> do
@@ -936,7 +983,7 @@ searchPortfolio policy prog = do
       forced = case result of
         Left e -> length (show e) `seq` result
         Right p -> LBS.length (encodePortfolio p) `seq` result
-  liftIO (evaluateWithin (policyTimeoutSeconds policy) forced) >>= \case
+  liftIO (evaluateWithin (view boundedIntValue (policyTimeoutSeconds policy)) forced) >>= \case
     Nothing -> failAt StDriver "optimization deadline exceeded; no feasibility or completeness claim is available"
     Just r -> liftEither r
 
@@ -1505,3 +1552,15 @@ putText h t = BS.hPut h (Text.encodeUtf8 (Text.map visible t)) >> hFlush h
       | c == '\n' || c == '\t' = c
       | invisible c = '?'
       | otherwise = c
+
+-- Optics use the same field-name + L convention as Gin.Core.
+makeFieldLenses ''MemoryOptions
+makeFieldLenses ''Inputs
+makeFieldLenses ''Outputs
+makeFieldLenses ''SimOptions
+makeFieldLenses ''ToolOptions
+makeFieldLenses ''ValidateOptions
+makeFieldLenses ''ToolRun
+makePrisms ''Command
+makePrisms ''Outcome
+makePrisms ''ToolResult

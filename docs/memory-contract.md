@@ -52,7 +52,15 @@ in `examples/memory-traffic.json`: every field is required, names are unique
 `decodeMemoryWords` reads an array such as `examples/memory-words.json`.
 JSON words use the existing decoder's unsigned 31-bit number bound; the
 Haskell API accepts wider integers when they fit the kernel width.
-Inputs are validated on every operation, including record
-updates. The cycle cap is at most 1,000,000; simulated words at most 100,000;
+`mkMemoryConfig` and `mkTrafficScenario` accept ordinary integers and return
+checked configurations. Numeric fields use `LaneCount`, `AddressWidth`,
+`ServiceCycles` and `CycleBudget`, aliases of `BoundedInt` with inclusive
+type-level bounds. Record selectors and `fieldNameL` lenses remain available;
+updates require checked values. Use `boundedIntValue` to read an `Int`,
+`mkBoundedInt` for runtime settings, or `boundedIntLiteral @n` for constants.
+Names, kernels, and payload relationships are checked at consumption.
+The command's `--memory-timeout` accepts 1–3600 seconds, using the same
+checked deadline type as optimization policies.
+The cycle cap is at most 1,000,000; simulated words at most 100,000;
 the word/kernel-bind product at most 20,000,000. Results retain at most four accepted
 handshakes per word.

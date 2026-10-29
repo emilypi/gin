@@ -11,7 +11,7 @@ Use sibling checkouts of `gin` and `yolk`; the default `cabal.project` builds
 both. Existing compilation remains unchanged unless optimization is requested.
 
 This implementation is tested with Yolk revision
-`e888bea9ea3dd703bacec224559350bcbd858716` (the companion Pareto extraction
+`f362de493ad8f247a253cdb4f4fd90993afa7369` (the companion Pareto extraction
 change). Use that revision in the sibling checkout when reproducing the PR.
 
 ```sh
@@ -53,6 +53,38 @@ normalization, saturation, extraction, reconstruction and manifest forcing.
 Policy files are limited to 64 KiB; the existing bounded JSON decoder also
 rejects excessive nesting, number precision and magnitudes before parsing.
 The library exposes bounded options for callers implementing other policies.
+
+## Haskell API conventions
+
+Records keep named selectors and export `fieldNameL` lenses from the defining
+module; sum types export constructor prisms. Results describe the compiler's
+work when returned. Editing a result record does not rerun extraction, scoring,
+or semantic checks.
+
+Policy timeouts, search budgets, weights and upper bounds use checked
+`BoundedInt lower upper` values from `Gin.Core.Bounded`. `mkBoundedInt` and
+the `boundedInt` prism reject values outside the inclusive interval;
+`boundedIntValue` is a getter. The representation has no unchecked setter
+or numeric instance, and nominal roles prevent coercion between intervals.
+`boundedIntLiteral @n` checks constants at compile time. JSON decoders use
+the same smart constructor and keep the existing JSON format.
+
+`mkObjective` and `mkPolicy` check relationships between names, operators,
+preferences and objective dimensions. `buildPortfolio` rechecks those
+relationships after record updates, without serializing and reparsing a
+policy. `PolicySearch` holds the bounded settings; Yolk options are computed
+from it and the current objectives, avoiding stale stored dimensions.
+
+`pipelineCircuit` takes a `PipelineDepth`, created with `mkPipelineDepth`
+or a checked literal. Reported latency and stage depth are checked values
+too. For example, `view (scheduledLatencyL . boundedIntValue) scheduled`
+reads the latency as an `Int`.
+
+Objective and preference lists are capped at 16 elements. Circuit bindings
+and event logs use sequential traversal or prepend/reverse accumulation;
+they retain lists. Yolk's repeatedly combined coordinate vectors use boxed
+`Vector Natural` internally. Accumulating left folds in these paths are
+strict; no lazy `foldl` or `foldl1` is retained.
 
 All objective arithmetic is exact and nonnegative. Every candidate reports
 both its extracted-forest vector and its final vector after newly dead state

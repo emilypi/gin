@@ -1,5 +1,8 @@
+{-# LANGUAGE DataKinds #-}
+
 module Gin.Evaluate.MemorySpec (spec) where
 
+import Gin.Core.Bounded
 import Gin.Core.Normal
 import Gin.Core.Type (Ty (..))
 import Gin.Evaluate.Memory
@@ -11,13 +14,13 @@ spec :: Spec
 spec = describe "modeled memory portfolios" $ do
   it "enumerates distinct generated designs and retains a completed frontier" $ do
     case evaluateMemoryPortfolio ["operators"] [kernel]
-      [MemoryConfig 1 8,MemoryConfig 2 8] [scenario] [0..7] of
+      [MemoryConfig (boundedIntLiteral @1) (boundedIntLiteral @8),MemoryConfig (boundedIntLiteral @2) (boundedIntLiteral @8)] [scenario] [0..7] of
       Left e -> expectationFailure (show e)
       Right p -> do
         length (memoryDesigns p) `shouldBe` 2
         memoryFrontier p `shouldSatisfy` (not . null)
   it "keeps cycle-limited runs out of the completed frontier" $ do
-    case evaluateMemoryPortfolio ["operators"] [kernel] [MemoryConfig 1 8] [scenario {trafficCycleLimit = 1}] [0..7] of
+    case evaluateMemoryPortfolio ["operators"] [kernel] [MemoryConfig (boundedIntLiteral @1) (boundedIntLiteral @8)] [scenario {trafficCycleLimit = boundedIntLiteral @1}] [0..7] of
       Left e -> expectationFailure (show e)
       Right p -> do
         length (memoryDesigns p) `shouldBe` 1
@@ -28,4 +31,4 @@ kernel = MemoryKernel "identity" (NModule "word_identity" sysDomain [("x",TBitVe
   [NOutput "y" (TBitVec 8) (AVar "x")] [] (testCertificate "WordIdentity.correct")) [0]
 
 scenario :: TrafficScenario
-scenario = TrafficScenario "test" 1 8 4 1 1 100000
+scenario = TrafficScenario "test" (boundedIntLiteral @1) (boundedIntLiteral @8) (boundedIntLiteral @4) (boundedIntLiteral @1) (boundedIntLiteral @1) (boundedIntLiteral @100000)

@@ -1,5 +1,8 @@
+{-# LANGUAGE DataKinds #-}
+
 module Gin.MemorySpec (spec) where
 
+import Gin.Core.Bounded
 import Control.Monad (forM_)
 import Data.Either (isLeft)
 import Data.List (sort)
@@ -19,8 +22,8 @@ spec :: Spec
 spec = describe "generic memory accelerator" $ do
   it "rejects stateful kernels, invalid lanes and address widths" $ do
     generateMemoryAccelerator defaultMemoryConfig counterNormal `shouldSatisfy` isLeft
-    forM_ [MemoryConfig 0 8, MemoryConfig 17 8, MemoryConfig 1 0, MemoryConfig 1 65] $ \cfg ->
-      generateMemoryAccelerator cfg kernel `shouldSatisfy` isLeft
+    forM_ [(0,8),(17,8),(1,0),(1,65)] $ \(lanes,width) ->
+      mkMemoryConfig lanes width `shouldSatisfy` isLeft
   it "rejects malformed and ambiguous scenario and word inputs" $ do
     forM_ ["[]", "[{\"name\":\"x\",\"name\":\"y\"}]", "[{\"name\":\"x\",\"channels\":0}]",
            "[{\"name\":\"x\",\"unknown\":1}]"] $ \bytes ->
@@ -29,11 +32,12 @@ spec = describe "generic memory accelerator" $ do
     forM_ ["[-1]", "[1.5]", "[2147483648]", "[\"1\"]"] $ \bytes ->
       decodeMemoryWords bytes `shouldSatisfy` isLeft
     decodeTrafficScenarios "[{\"name\":\"ok\",\"channels\":1,\"readLatency\":2,\"writeLatency\":1,\"acceptEvery\":3,\"responseEvery\":1,\"cycleLimit\":500}]"
-      `shouldBe` Right [TrafficScenario "ok" 1 2 1 3 1 500]
+      `shouldBe` Right [TrafficScenario "ok" (boundedIntLiteral @1) (boundedIntLiteral @2) (boundedIntLiteral @1) (boundedIntLiteral @3) (boundedIntLiteral @1) (boundedIntLiteral @500)]
   it "preserves word mapping with no loss or duplication across lanes and scenarios" $ do
     forM_ [1,2,3,8,16] $ \lanes ->
       forM_ defaultTrafficScenarios $ \scenario -> do
-        result <- expectRight (simulateMemory (MemoryConfig lanes 8) scenario kernel [0 .. 36])
+        cfg <- expectRight (mkMemoryConfig lanes 8)
+        result <- expectRight (simulateMemory cfg scenario kernel [0 .. 36])
         memoryRunStatus result `shouldBe` Completed
         memoryOutput result `shouldBe` map (Just . (+ 1)) [0 .. 36]
         memoryReads result `shouldBe` 37
@@ -47,8 +51,8 @@ spec = describe "generic memory accelerator" $ do
           observed `shouldBe` [(index, op) | index <- [lane,lane+lanes .. 36],
                                           op <- [ReadRequest,ReadResponse,WriteRequest,WriteResponse]]
   it "bounds channel service even when lanes exceed channel count" $ do
-    let scenario = TrafficScenario "service" 2 1 1 3 2 10000
-    result <- expectRight (simulateMemory (MemoryConfig 16 8) scenario kernel [0 .. 63])
+    let scenario = TrafficScenario "service" (boundedIntLiteral @2) (boundedIntLiteral @1) (boundedIntLiteral @1) (boundedIntLiteral @3) (boundedIntLiteral @2) (boundedIntLiteral @10000)
+    result <- expectRight (simulateMemory (MemoryConfig (boundedIntLiteral @16) (boundedIntLiteral @8)) scenario kernel [0 .. 63])
     let countOps ops = Map.fromListWith (+)
           [((memoryEventCycle event, address event `mod` 2), 1 :: Int)
           | event <- memoryEvents result, memoryEventOperation event `elem` ops]
@@ -59,7 +63,7 @@ spec = describe "generic memory accelerator" $ do
       [event | event <- memoryEvents result, memoryEventOperation event `elem` [ReadRequest,WriteRequest]] `shouldBe` True
     memoryRunStatus result `shouldBe` Completed
   it "distinguishes budget exhaustion, empty completion and invalid words" $ do
-    let scenario = TrafficScenario "zero" 1 1 1 1 1 0
+    let scenario = TrafficScenario "zero" (boundedIntLiteral @1) (boundedIntLiteral @1) (boundedIntLiteral @1) (boundedIntLiteral @1) (boundedIntLiteral @1) (boundedIntLiteral @0)
     result <- expectRight (simulateMemory defaultMemoryConfig scenario kernel [1])
     memoryRunStatus result `shouldBe` CycleLimit
     memoryOutput result `shouldBe` [Nothing]
@@ -68,9 +72,9 @@ spec = describe "generic memory accelerator" $ do
     memoryRunStatus empty `shouldBe` Completed
     simulateMemory defaultMemoryConfig scenario kernel [256] `shouldSatisfy` isLeft
     simulateMemory defaultMemoryConfig scenario kernel [-1] `shouldSatisfy` isLeft
-    simulateMemory (MemoryConfig 1 1) scenario kernel [0,1] `shouldSatisfy` isLeft
+    simulateMemory (MemoryConfig (boundedIntLiteral @1) (boundedIntLiteral @1)) scenario kernel [0,1] `shouldSatisfy` isLeft
   itWithTools ["iverilog", "vvp"] "replays backpressure, invalid commands and reset against emitted HDL" $ withTempDir $ \dir -> do
-    design <- expectRight (generateMemoryAccelerator (MemoryConfig 3 8) kernel)
+    design <- expectRight (generateMemoryAccelerator (MemoryConfig (boundedIntLiteral @3) (boundedIntLiteral @8)) kernel)
     Text.writeFile (dir </> "design.sv") (memorySystemVerilog design)
     bench <- Text.readFile "test/hdl/memory_tb.sv"
     Text.writeFile (dir </> "bench.sv") bench

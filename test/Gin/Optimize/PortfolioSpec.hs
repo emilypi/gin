@@ -39,7 +39,7 @@ spec = describe "circuit portfolios" $ do
       Right p -> do
         buildPortfolio p {policyObjectives = []} identityCircuit `shouldSatisfy` isLeft
         buildPortfolio p {policyObjectives = policyObjectives p <> policyObjectives p} identityCircuit `shouldSatisfy` isLeft
-        buildPortfolio p {policyTimeoutSeconds = 0} identityCircuit `shouldSatisfy` isLeft
+        buildPortfolio p {policyPreferences = ["missing"]} identityCircuit `shouldSatisfy` isLeft
 
 identityCircuit :: NModule
 identityCircuit = NModule "identity" sysDomain [("x",TBool)]

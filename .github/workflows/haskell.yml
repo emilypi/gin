@@ -2,42 +2,80 @@ name: Haskell CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [main]
   pull_request:
-    branches: [ "main" ]
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
-
-    runs-on: ubuntu-latest
-
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: gin
+    env:
+      GIN_REQUIRE_TOOLS: '1'
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-haskell@v1
-      with:
-        ghc-version: '8.10.3'
-        cabal-version: '3.2'
+      - name: Check out Gin
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: gin
+          persist-credentials: false
 
-    - name: Cache
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-cabal
-      with:
-        path: ~/.cabal
-        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('**/*.cabal') }}-${{ hashFiles('**/cabal.project') }}
-        restore-keys: |
-          ${{ runner.os }}-build-${{ env.cache-name }}-
-          ${{ runner.os }}-build-
-          ${{ runner.os }}-
+      - name: Check out the pinned Yolk dependency
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: emilypi/yolk
+          ref: 513e01a2a5acb891fbebf2928e37bcccb5d9e8c3
+          path: yolk
+          persist-credentials: false
 
-    - name: Install dependencies
-      run: |
-        cabal update
-        cabal build --only-dependencies --enable-tests --enable-benchmarks
-    - name: Build
-      run: cabal build --enable-tests --enable-benchmarks all
-    - name: Run tests
-      run: cabal test all
+      - name: Check source width
+        run: sh test/check-width.sh
+
+      - name: Set up Haskell
+        id: haskell
+        uses: haskell-actions/setup@0f8e8c99d88aeb3fbfd523f1ef2c6f762d10d64d # v2.12.1
+        with:
+          ghc-version: '9.14.1'
+          cabal-version: '3.18.1.0'
+
+      - name: Restore dependencies
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.haskell.outputs.cabal-store }}
+          key: >-
+            ubuntu24-ghc9.14.1-cabal3.18.1.0-${{
+            hashFiles('**/*.cabal', '**/cabal.project*') }}
+          restore-keys: ubuntu24-ghc9.14.1-cabal3.18.1.0-
+
+      - name: Install Lean and HDL tools
+        run: bash scripts/ci-install-tools.sh
+
+      - name: Build libraries, CLI and tests
+        run: cabal build all --ghc-options=-Werror
+
+      - name: Save dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.haskell.outputs.cabal-store }}
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+      - name: Run tests with HDL tools required
+        run: cabal test all --offline --ghc-options=-Werror --test-show-details=direct
+
+      - name: Check type boundaries
+        run: sh test/check-types.sh
+
+      - name: Validate Lean exports and all HDL targets
+        run: scripts/validate.sh

@@ -81,7 +81,7 @@ cover `gin`'s signal DSL or Lean's core library; changes to
 | Tool           | Version        | Used for                                    |
 | -------------- | -------------- | ------------------------------------------- |
 | GHC            | 9.14.1         | building gin                                |
-| cabal-install  | 3.16.1.0       | building and testing gin                    |
+| cabal-install  | 3.18.1.0       | building and testing gin                    |
 | Python         | 3.11 or newer  | export verification (`tomllib`); on `PATH`   |
 | Lean 4         | 4.34.1         | the DSL, proofs and exporter (via `elan`)   |
 | Icarus Verilog | 13.0           | Verilog and SystemVerilog lint and runs     |
@@ -97,6 +97,12 @@ version pinned in `lean/lean-toolchain` on first use.
 Keep [Yolk](https://github.com/emilypi/yolk) in a sibling `../yolk` checkout;
 the default Cabal project builds the circuit compiler and its e-graph engine
 together. The optimization implementation requires Yolk's Pareto extraction API.
+
+GitHub Actions checks out both repositories, pinning Yolk to the revision in
+`cabal.project`. CI uses Ubuntu 24.04, GHC 9.14.1 and Cabal 3.18.1.0. It installs
+Lean from `lean/lean-toolchain`, the distribution's Icarus Verilog and Verilator,
+and nvc 1.23.1. HDL tests are required; the full Lean export and HDL validation
+pipeline runs after the Haskell and type-boundary checks.
 
 ```sh
 cabal build all

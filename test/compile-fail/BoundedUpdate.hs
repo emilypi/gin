@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+
 module BoundedUpdate where
 
 import Gin.Core.Bounded

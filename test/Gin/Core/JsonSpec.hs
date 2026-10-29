@@ -6,7 +6,6 @@
 -- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
 -- Stability    : experimental
 -- Portability  : non-portable (GHC extensions)
---
 module Gin.Core.JsonSpec (spec) where
 
 import Control.Monad (void)
@@ -53,13 +52,17 @@ genNat :: Gen Natural
 genNat =
   fromInteger
     <$> frequency
-      [(6, chooseInteger (0, 16)), (1, pure maxJsonNumber), (1, chooseInteger (0, maxJsonNumber))]
+      [ (6, chooseInteger (0, 16))
+      , (1, pure maxJsonNumber)
+      , (1, chooseInteger (0, maxJsonNumber))
+      ]
 
 genWidth :: Gen Natural
 genWidth =
   fromInteger
     <$> frequency
-      [(6, chooseInteger (1, 64)), (1, pure 1), (1, pure 4096), (1, chooseInteger (1, 4096))]
+      [(6, chooseInteger (1, 64)), (1, pure 1), (1, pure 4096), (1, chooseInteger (1
+        , 4096))]
 
 listAtLeast :: Int -> Gen a -> Gen [a]
 listAtLeast n g = sized $ \s -> do
@@ -76,9 +79,9 @@ genTy depth
         , (1, TFun <$> sub <*> sub)
         , (1, TSignal <$> genText <*> sub)
         ]
-  where
-    scalar = oneof [pure TBool, TBitVec <$> genWidth]
-    sub = genTy (depth `div` 2)
+ where
+  scalar = oneof [pure TBool, TBitVec <$> genWidth]
+  sub = genTy (depth `div` 2)
 
 -- | A valid value of the given data type.
 genValueOf :: Ty -> Gen Value
@@ -92,9 +95,10 @@ genValueOf = \case
 genDataTy :: Int -> Gen Ty
 genDataTy depth
   | depth <= 0 = scalar
-  | otherwise = frequency [(3, scalar), (1, TProd <$> listAtLeast 2 (genDataTy (depth `div` 2)))]
-  where
-    scalar = oneof [pure TBool, TBitVec <$> genWidth]
+  | otherwise =
+      frequency [(3, scalar), (1, TProd <$> listAtLeast 2 (genDataTy (depth `div` 2)))]
+ where
+  scalar = oneof [pure TBool, TBitVec <$> genWidth]
 
 genValue :: Gen Value
 genValue = genDataTy 4 >>= genValueOf
@@ -140,25 +144,26 @@ genExpr depth
         [ (3, leaf)
         , (2, EApp <$> sub <*> listAtLeast 1 sub)
         , (1, ELam <$> listAtLeast 1 ((,) <$> genName <*> ty) <*> sub)
-        , (1, elements [ELet, ELetRec] <*> listAtLeast 0 (Bind <$> genName <*> ty <*> sub) <*> sub)
+        , (1, elements [ELet, ELetRec] <*> listAtLeast 0 (Bind <$> genName <*> ty
+          <*> sub) <*> sub)
         , (1, mkTuple <$> listAtLeast 2 sub)
         , (1, EProj . fromIntegral <$> genNat <*> sub)
         , (1, elseIf <$> listAtLeast 1 ((,) <$> sub <*> sub) <*> sub)
         ]
-  where
-    sub = genExpr (depth `div` 2)
-    ty = genTy 3
-    -- The decoder joins an if in the else branch to its parent.
-    elseIf arms = \case
-      EIf more e -> EIf (arms <> more) e
-      e -> EIf arms e
-    leaf =
-      oneof
-        [ EVar <$> genName
-        , EGlobal <$> genName
-        , ELit <$> genValue
-        , EPrim <$> genPrimOp <*> genTy 4
-        ]
+ where
+  sub = genExpr (depth `div` 2)
+  ty = genTy 3
+  -- The decoder joins an if in the else branch to its parent.
+  elseIf arms = \case
+    EIf more e -> EIf (arms <> more) e
+    e -> EIf arms e
+  leaf =
+    oneof
+      [ EVar <$> genName
+      , EGlobal <$> genName
+      , ELit <$> genValue
+      , EPrim <$> genPrimOp <*> genTy 4
+      ]
 
 genPort :: Gen (Port Ty)
 genPort = Port <$> genText <*> genTy 3
@@ -175,29 +180,34 @@ genProgram = do
       <*> genName
   defs <- listOf (Def <$> genName <*> genTy 4 <*> genExpr 12)
   certificate <-
-    Certificate <$> genText <*> genText <*> listOf genText <*> listOf genText
+    Certificate
+      <$> genText
+      <*> genText
+      <*> listOf genText
+      <*> listOf genText
       <*> listOf (SpecDef <$> genText <*> genText)
   pure (Program producer top defs certificate)
 
 -- | Vectors within the payload bound (cycles times summed port widths).
 genVectors :: Gen Vectors
 genVectors = gen `suchThat` withinPayload
-  where
-    gen = do
-      ins <- resize 6 (listOf (Port <$> genText <*> genDataTy 1))
-      outs <- resize 6 (listOf (Port <$> genText <*> genDataTy 1))
-      let row = traverse (genValueOf . portTy)
-      n <- chooseInt (1, 12)
-      cycles <- vectorOf n (Cycle <$> row ins <*> row outs)
-      top <- genText
-      pure (Vectors top ins outs cycles)
-    withinPayload vs =
-      toInteger (length (vecCycles vs)) * sum (fmap (bits . portTy) (vecInputs vs <> vecOutputs vs))
-        <= maxVectorBits
-    bits = \case
-      TBitVec w -> toInteger w
-      TProd ts -> sum (fmap bits ts)
-      _ -> 1
+ where
+  gen = do
+    ins <- resize 6 (listOf (Port <$> genText <*> genDataTy 1))
+    outs <- resize 6 (listOf (Port <$> genText <*> genDataTy 1))
+    let row = traverse (genValueOf . portTy)
+    n <- chooseInt (1, 12)
+    cycles <- vectorOf n (Cycle <$> row ins <*> row outs)
+    top <- genText
+    pure (Vectors top ins outs cycles)
+  withinPayload vs =
+    toInteger (length (vecCycles vs))
+      * sum (fmap (bits . portTy) (vecInputs vs <> vecOutputs vs))
+      <= maxVectorBits
+  bits = \case
+    TBitVec w -> toInteger w
+    TProd ts -> sum (fmap bits ts)
+    _ -> 1
 
 ----------------------------------------------------------------------
 -- JSON surgery on encoded documents
@@ -210,7 +220,8 @@ modifyAt path f = case path of
   K k : rest -> \case
     A.Object o ->
       let key = Key.fromText k
-       in A.Object (maybe o (\x -> KeyMap.insert key (modifyAt rest f x) o) (KeyMap.lookup key o))
+       in A.Object (maybe o (\x ->
+         KeyMap.insert key (modifyAt rest f x) o) (KeyMap.lookup key o))
     other -> other
   I i : rest -> \case
     A.Array a ->
@@ -291,7 +302,7 @@ counterWithSpec =
       }
 
 withSpecDefs :: [SpecDef] -> Program Ty Name -> Program Ty Name
-withSpecDefs defs p = p{progCertificate = (progCertificate p){certSpecDefs = defs}}
+withSpecDefs defs p = p {progCertificate = (progCertificate p) {certSpecDefs = defs}}
 
 specJson :: A.Value
 specJson = asJson (encodeProgram counterWithSpec)
@@ -320,7 +331,8 @@ decodeErrorWith :: Text -> Either GinError a -> Expectation
 decodeErrorWith fragment = \case
   Left e -> do
     errStage e `shouldBe` StDecode
-    Text.unpack (Text.toLower (renderError e)) `shouldContain` Text.unpack (Text.toLower fragment)
+    Text.unpack (Text.toLower (renderError e))
+      `shouldContain` Text.unpack (Text.toLower fragment)
   Right _ -> expectationFailure "expected a decode error, but decoding succeeded"
 
 rejectsProgram :: Text -> A.Value -> Expectation
@@ -339,7 +351,8 @@ promptly act =
 
 -- | Nest a value inside @n@ singleton arrays.
 nested :: Int -> LBS.ByteString -> LBS.ByteString
-nested n inner = LBS8.replicate (fromIntegral n) '[' <> inner <> LBS8.replicate (fromIntegral n) ']'
+nested n inner =
+  LBS8.replicate (fromIntegral n) '[' <> inner <> LBS8.replicate (fromIntegral n) ']'
 
 -- | The counter program with raw JSON text spliced in as the value of an
 -- extra, ignored key. Bypasses aeson so the text can be anything.
@@ -357,10 +370,11 @@ wideVectors n =
       , "top" A..= ("wide" :: Text)
       , "inputs" A..= [A.object ["name" A..= ("x" :: Text), "type" A..= wideTy]]
       , "outputs" A..= noValues
-      , "cycles" A..= replicate n (A.object ["in" A..= [bvValue 4096 "0"], "out" A..= noValues])
+      , "cycles" A..= replicate n (A.object ["in" A..= [bvValue 4096 "0"]
+        , "out" A..= noValues])
       ]
-  where
-    wideTy = A.object ["t" A..= ("bv" :: Text), "width" A..= (4096 :: Int)]
+ where
+  wideTy = A.object ["t" A..= ("bv" :: Text), "width" A..= (4096 :: Int)]
 
 -- | Vectors with no ports and @n@ empty rows.
 emptyRows :: Int -> LBS.ByteString
@@ -385,24 +399,30 @@ spec = do
     it "[json-roundtrip] decodeVectors . encodeVectors is Right on generated vectors" $
       forAll genVectors $
         \vs -> decodeVectors (encodeVectors vs) === Right vs
-    for_ [("counter", counterProgram), ("mac", macProgram), ("detector", detectorProgram)] $
+    for_ [("counter", counterProgram), ("mac", macProgram), ("detector"
+      , detectorProgram)] $
       \(name, p) ->
         it ("[json-roundtrip] round-trips the " <> name <> " program") $
           decodeProgram (encodeProgram p) `shouldBe` Right p
-    for_ [("counter", counterVectors), ("mac", macVectors), ("detector", detectorVectors)] $
+    for_ [("counter", counterVectors), ("mac", macVectors), ("detector"
+      , detectorVectors)] $
       \(name, vs) ->
         it ("[json-roundtrip] round-trips the " <> name <> " vectors") $
           decodeVectors (encodeVectors vs) `shouldBe` Right vs
-    it "[json-roundtrip] re-encoding a decoded document reproduces the canonical encoding" $
+    it "[json-roundtrip] re-encoding a decoded document reproduces the canonical \
+      \encoding" $
       forAll genProgram $ \p ->
-        let bytes = encodeProgram p in fmap encodeProgram (decodeProgram bytes) === Right bytes
+        let bytes =
+              encodeProgram p in fmap encodeProgram (decodeProgram bytes) === Right bytes
     it "[json-roundtrip] decodes an else-if chain to one multi-way if" $ do
       let lit k = ELit (VBV 8 k)
           chain = ifE (EVar "a") (lit 1) (ifE (EVar "b") (lit 2) (lit 3))
           multiWay = EIf [(EVar "a", lit 1), (EVar "b", lit 2)] (lit 3)
-      decodeProgram (encodeProgram (withExtraDef chain)) `shouldBe` Right (withExtraDef multiWay)
+      decodeProgram (encodeProgram (withExtraDef chain))
+        `shouldBe` Right (withExtraDef multiWay)
       encodeProgram (withExtraDef multiWay) `shouldBe` encodeProgram (withExtraDef chain)
-    it "[json-roundtrip] encodes ELetRec as a let with rec true and ELet with rec false" $ do
+    it "[json-roundtrip] encodes ELetRec as a let with rec true and ELet with rec \
+      \false" $ do
       let binds = [Bind "x" (TBitVec 8) (EVar "x")]
           letRec = withExtraDef (ELetRec binds (EVar "x"))
           letPlain = withExtraDef (ELet binds (EVar "x"))
@@ -425,14 +445,18 @@ spec = do
     it "[json-specdefs] decodes the canonical fixture to the program" $ do
       bytes <- LBS.readFile specFixture
       decodeProgram bytes `shouldBe` Right counterWithSpec
-    it "[json-specdefs] encodes specDefinitions after implAxioms, each name before its body" $
+    it "[json-specdefs] encodes specDefinitions after implAxioms, each name before its \
+      \body" $
       LBS8.unpack (encodeProgram counterWithSpec)
-        `shouldContain` "\"implAxioms\":[],\"specDefinitions\":[{\"name\":\"Counter.spec\",\"body\":"
+        `shouldContain` "\"implAxioms\":[],\"specDefinitions\":[{\"name\":\"Counter.spec\
+          \\",\"body\":"
     it "[json-specdefs] decodes a certificate without specDefinitions as having none" $
       decodeProgram (A.encode (deleteAt [K "certificate"] "specDefinitions" specJson))
         `shouldBe` Right (withSpecDefs [] counterWithSpec)
-    it "[json-specdefs] decodes an explicit empty list as none and omits it when encoding" $ do
-      let doc = insertAt [K "certificate"] "specDefinitions" (A.toJSON noValues) counterJson
+    it "[json-specdefs] decodes an explicit empty list as none and omits it when \
+      \encoding" $ do
+      let doc =
+            insertAt [K "certificate"] "specDefinitions" (A.toJSON noValues) counterJson
       decodeProgram (A.encode doc) `shouldBe` Right counterProgram
       LBS8.unpack (encodeProgram counterProgram) `shouldNotContain` "specDefinitions"
     it "[json-specdefs] rejects malformed spec definitions" $ do
@@ -440,7 +464,8 @@ spec = do
       rejectsProgram "specDefinitions" (setAt defsPath A.Null specJson)
       rejectsProgram "specDefinitions" (setAt defsPath (A.String "Counter.spec") specJson)
       rejectsProgram "body" (deleteAt (defsPath <> [I 0]) "body" specJson)
-      rejectsProgram "name" (setAt (defsPath <> [I 1, K "name"]) (A.toJSON (1 :: Int)) specJson)
+      rejectsProgram "name" (setAt (defsPath
+        <> [I 1, K "name"]) (A.toJSON (1 :: Int)) specJson)
 
   describe "counter fixture" $ do
     it "[json-counter-fixture] decodes to counterProgram" $ do
@@ -448,7 +473,8 @@ spec = do
       decodeProgram bytes `shouldBe` Right counterProgram
     it "[json-counter-fixture] re-encodes to the canonical counter encoding" $ do
       bytes <- LBS.readFile "test/fixtures/ir/counter.gin.json"
-      fmap encodeProgram (decodeProgram bytes) `shouldBe` Right (encodeProgram counterProgram)
+      fmap encodeProgram (decodeProgram bytes)
+        `shouldBe` Right (encodeProgram counterProgram)
 
   describe "decoding rules" $ do
     it "[json-reject] accepts the unmodified counter document" $
@@ -469,7 +495,8 @@ spec = do
         `shouldBe` Right counterProgram
     it "[json-reject] rejects a format tag other than gin-ir/1" $ do
       rejectsProgram "gin-ir/1" (setAt [K "format"] (A.String "gin-ir/2") counterJson)
-      rejectsProgram "gin-ir/1" (setAt [K "format"] (A.String "gin-vectors/1") counterJson)
+      rejectsProgram "gin-ir/1" (setAt [K "format"] (A.String "gin-vectors/1")
+        counterJson)
     for_
       [ ("format", [])
       , ("producer", [])
@@ -519,9 +546,11 @@ spec = do
     it "[json-reject] rejects an unknown type tag" $
       rejectsProgram "bits" (setAt (outType <> [K "t"]) (A.String "bits") counterJson)
     it "[json-reject] rejects an unknown expression tag" $
-      rejectsProgram "lambda" (setAt (bodyPath <> [K "e"]) (A.String "lambda") counterJson)
+      rejectsProgram "lambda" (setAt (bodyPath
+        <> [K "e"]) (A.String "lambda") counterJson)
     it "[json-reject] rejects an unknown primitive" $
-      rejectsProgram "bv.div" (setAt (addPrim <> [K "op"]) (A.String "bv.div") counterJson)
+      rejectsProgram "bv.div" (setAt (addPrim
+        <> [K "op"]) (A.String "bv.div") counterJson)
     it "[json-reject] rejects an unknown value shape" $
       rejectsProgram
         "value"
@@ -538,29 +567,36 @@ spec = do
         decodeProgram (A.encode (setAt (outType <> [K "width"]) (A.toJSON w) counterJson))
           `shouldSatisfy` either (const False) (const True)
     it "[json-reject] rejects a negative number" $ do
-      rejectsProgram "negative" (setAt (outType <> [K "width"]) (A.Number (-1)) counterJson)
+      rejectsProgram "negative" (setAt (outType
+        <> [K "width"]) (A.Number (-1)) counterJson)
       decodeErrorWith "negative" (decodeProgram (withRawKey "-0"))
     it "[json-reject] rejects a non-integral number" $ do
-      rejectsProgram "integral" (setAt (outType <> [K "width"]) (A.Number 8.5) counterJson)
+      rejectsProgram "integral" (setAt (outType
+        <> [K "width"]) (A.Number 8.5) counterJson)
       decodeErrorWith "integral" (decodeProgram (withRawKey "1e-1"))
     it "[json-reject] accepts an integral number written with a fraction or exponent" $
-      decodeProgram (LBS8.pack (substitute "\"periodPs\":10000" "\"periodPs\":1.0e4" counterText))
+      decodeProgram
+        (LBS8.pack (substitute "\"periodPs\":10000" "\"periodPs\":1.0e4" counterText))
         `shouldBe` Right counterProgram
-    for_ ["", "01", "00", "+1", "-1", "1.0", " 1", "1 ", "1e2", "0x10", "١", "1_000"] $ \s ->
+    for_ ["", "01", "00", "+1", "-1", "1.0", " 1", "1 ", "1e2", "0x10", "١", "1_000"]
+      $ \s ->
       it ("[json-reject] rejects the non-canonical decimal " <> show s) $
         rejectsProgram "decimal" (setAt (oneLit <> [K "value"]) (bvValue 8 s) counterJson)
     it "[json-reject] rejects a value out of range for its width" $ do
       rejectsProgram "range" (setAt (oneLit <> [K "value"]) (bvValue 8 "256") counterJson)
       rejectsProgram "range" (setAt (oneLit <> [K "value"]) (bvValue 1 "2") counterJson)
     it "[json-reject] accepts the largest value for a width" $
-      decodeProgram (A.encode (setAt (oneLit <> [K "value"]) (bvValue 8 "255") counterJson))
+      decodeProgram (A.encode (setAt (oneLit
+        <> [K "value"]) (bvValue 8 "255") counterJson))
         `shouldSatisfy` either (const False) (const True)
     it "[json-reject] rejects a one-component product type" $
       rejectsProgram "elems" $
-        setAt outType (A.object ["t" A..= ("prod" :: Text), "elems" A..= [boolTy]]) counterJson
+        setAt outType (A.object ["t" A..= ("prod" :: Text)
+          , "elems" A..= [boolTy]]) counterJson
     it "[json-reject] rejects an empty product type" $
       rejectsProgram "elems" $
-        setAt outType (A.object ["t" A..= ("prod" :: Text), "elems" A..= noValues]) counterJson
+        setAt outType (A.object ["t" A..= ("prod" :: Text)
+          , "elems" A..= noValues]) counterJson
     it "[json-reject] rejects a one-component tuple value" $
       rejectsProgram "tuple" $
         setAt (oneLit <> [K "value"]) (A.object ["tuple" A..= [A.Bool True]]) counterJson
@@ -568,7 +604,8 @@ spec = do
       rejectsProgram "elems" $
         modifyAt (stepLam <> [K "body", K "elems"]) (const (A.toJSON [varS])) counterJson
     it "[json-reject] rejects an application with no arguments" $
-      rejectsProgram "args" (setAt (mealyApp <> [K "args"]) (A.toJSON noValues) counterJson)
+      rejectsProgram "args" (setAt (mealyApp
+        <> [K "args"]) (A.toJSON noValues) counterJson)
     it "[json-reject] rejects a lambda with no binders" $
       rejectsProgram
         "binders"
@@ -600,7 +637,8 @@ spec = do
       decodeErrorWith "expected Object" (decodeProgram "[]")
       decodeErrorWith "expected Object" (decodeProgram "\"gin-ir/1\"")
     it "[json-reject] reports where in the document decoding failed" $
-      case decodeProgram (A.encode (setAt (outType <> [K "width"]) (A.Number 0) counterJson)) of
+      case decodeProgram (A.encode (setAt (outType
+        <> [K "width"]) (A.Number 0) counterJson)) of
         Left e -> errContext e `shouldBe` ["at $.top.outputs[0].type.width"]
         Right _ -> expectationFailure "expected a decode error"
     it "[json-reject] never crashes on truncated or corrupted documents" $
@@ -639,26 +677,33 @@ spec = do
       fmap
         (domainPeriodPs . topDomain . progTop)
         ( decodeProgram
-            (A.encode (setAt [K "top", K "domain", K "periodPs"] (A.Number 2147483647) counterJson))
+            (A.encode (setAt [K "top", K "domain"
+              , K "periodPs"] (A.Number 2147483647) counterJson))
         )
         `shouldBe` Right 2147483647
-    it "[json-limits] rejects a number with a huge exponent without expanding it" $ promptly $ do
+    it "[json-limits] rejects a number with a huge exponent without expanding \
+      \it" $ promptly $ do
       decodeErrorWith "number" (decodeProgram (withRawKey "1e1000000000"))
       decodeErrorWith "number" (decodeProgram (withRawKey "1e999999999"))
       decodeErrorWith "number" (decodeProgram (withRawKey "1E+18446744073709551616"))
       decodeErrorWith "number" (decodeProgram (withRawKey "1e-1000000000"))
     -- Unguarded, aeson's tokenizer spends seconds converting such literals.
-    it "[json-limits] rejects a number with a huge mantissa without parsing it" $ promptly $ do
+    it "[json-limits] rejects a number with a huge mantissa without parsing \
+      \it" $ promptly $ do
       let digits = 16000000
-      decodeErrorWith "number" (decodeProgram (withRawKey ("1" <> LBS8.replicate digits '0')))
-      decodeErrorWith "number" (decodeProgram (withRawKey ("1." <> LBS8.replicate digits '7')))
+      decodeErrorWith "number" (decodeProgram (withRawKey ("1"
+        <> LBS8.replicate digits '0')))
+      decodeErrorWith "number" (decodeProgram (withRawKey ("1."
+        <> LBS8.replicate digits '7')))
       let tiny = "0." <> LBS8.replicate digits '0' <> "1"
       decodeErrorWith "number" (decodeProgram (withRawKey tiny))
     it "[json-limits] rejects a decimal string longer than 1234 digits" $ promptly $ do
       let long = Text.cons '1' (Text.replicate 1234 "0")
-      rejectsProgram "1234" (setAt (oneLit <> [K "value"]) (bvValue 4096 long) counterJson)
+      rejectsProgram "1234" (setAt (oneLit
+        <> [K "value"]) (bvValue 4096 long) counterJson)
       let huge = Text.cons '1' (Text.replicate 1000000 "0")
-      rejectsProgram "1234" (setAt (oneLit <> [K "value"]) (bvValue 4096 huge) counterJson)
+      rejectsProgram "1234" (setAt (oneLit
+        <> [K "value"]) (bvValue 4096 huge) counterJson)
     it "[json-limits] accepts the largest 4096-bit value (1234 digits)" $ do
       let largest = 2 ^ (4096 :: Int) - 1 :: Integer
           digits = tshow largest
@@ -667,12 +712,17 @@ spec = do
       void (decodeProgram (A.encode doc)) `shouldBe` Right ()
     it "[json-limits] rejects a duplicate key" $ promptly $ do
       decodeErrorWith "duplicate key \"format\"" $
-        decodeProgram ("{\"format\":\"gin-ir/1\"," <> LBS.drop 1 (encodeProgram counterProgram))
+        decodeProgram ("{\"format\":\"gin-ir/1\","
+          <> LBS.drop 1 (encodeProgram counterProgram))
       decodeErrorWith "duplicate key \"width\"" $
-        decodeProgram (LBS8.pack (substitute "\"width\":8}" "\"width\":8,\"width\":0}" counterText))
+        decodeProgram
+          (LBS8.pack (substitute "\"width\":8}" "\"width\":8,\"width\":0}" counterText))
       decodeErrorWith "duplicate key \"width\"" $
-        decodeProgram (LBS8.pack (substitute "\"width\":8}" "\"width\":0,\"width\":8}" counterText))
-      decodeErrorWith "duplicate key \"x\"" (decodeProgram (withRawKey "{\"x\":1,\"y\":2,\"x\":1}"))
+        decodeProgram
+          (LBS8.pack (substitute "\"width\":8}" "\"width\":0,\"width\":8}" counterText))
+      decodeErrorWith
+        "duplicate key \"x\""
+        (decodeProgram (withRawKey "{\"x\":1,\"y\":2,\"x\":1}"))
     it "[json-limits] rejects a vector payload above 2^18 bits before decoding rows" $
       promptly $ do
         decodeErrorWith "262144" (decodeVectors (wideVectors 65))
@@ -684,17 +734,21 @@ spec = do
     it "[vectors-reject] accepts the unmodified counter vectors" $
       decodeVectors (A.encode counterVectorsJson) `shouldBe` Right counterVectors
     it "[vectors-reject] rejects a format tag other than gin-vectors/1" $
-      rejectsVectors "gin-vectors/1" (setAt [K "format"] (A.String "gin-ir/1") counterVectorsJson)
+      rejectsVectors
+        "gin-vectors/1"
+        (setAt [K "format"] (A.String "gin-ir/1") counterVectorsJson)
     it "[vectors-reject] rejects zero cycles" $
       rejectsVectors "cycle" (setAt [K "cycles"] (A.toJSON noValues) counterVectorsJson)
     it "[vectors-reject] rejects more than 100000 cycles" $
       promptly $
         decodeErrorWith "100000" (decodeVectors (emptyRows (maxCycles + 1)))
     it "[vectors-reject] accepts exactly 100000 cycles" $
-      fmap (length . vecCycles) (decodeVectors (emptyRows maxCycles)) `shouldBe` Right maxCycles
+      fmap (length . vecCycles) (decodeVectors (emptyRows maxCycles))
+        `shouldBe` Right maxCycles
     it "[vectors-reject] rejects a row with too many inputs" $
       rejectsVectors "row" $
-        setAt [K "cycles", I 3, K "in"] (A.toJSON [A.Bool True, A.Bool False]) counterVectorsJson
+        setAt [K "cycles", I 3, K "in"] (A.toJSON [A.Bool True
+          , A.Bool False]) counterVectorsJson
     it "[vectors-reject] rejects a row with too few outputs" $
       rejectsVectors
         "row"
@@ -713,31 +767,32 @@ spec = do
       rejectsVectors "range" (setAt (cycleOut 1) (bvValue 8 "256") counterVectorsJson)
     it "[vectors-reject] rejects a missing cycles key" $
       rejectsVectors "cycles" (deleteAt [] "cycles" counterVectorsJson)
-  where
-    boolTy = A.object ["t" A..= ("bool" :: Text)]
-    varS = A.object ["e" A..= ("var" :: Text), "name" A..= ("s" :: Text)]
-    bv8Ty = A.object ["t" A..= ("bv" :: Text), "width" A..= (8 :: Int)]
-    zextPrim :: Integer -> A.Value
-    zextPrim w =
-      A.object
-        [ "e" A..= ("prim" :: Text)
-        , "op" A..= ("bv.zext" :: Text)
-        , "type" A..= A.object ["t" A..= ("fun" :: Text), "arg" A..= bv8Ty, "res" A..= bv8Ty]
-        , "params" A..= A.object ["width" A..= w]
-        ]
-    counterText = LBS8.unpack (encodeProgram counterProgram)
+ where
+  boolTy = A.object ["t" A..= ("bool" :: Text)]
+  varS = A.object ["e" A..= ("var" :: Text), "name" A..= ("s" :: Text)]
+  bv8Ty = A.object ["t" A..= ("bv" :: Text), "width" A..= (8 :: Int)]
+  zextPrim :: Integer -> A.Value
+  zextPrim w =
+    A.object
+      [ "e" A..= ("prim" :: Text)
+      , "op" A..= ("bv.zext" :: Text)
+      , "type" A..= A.object ["t" A..= ("fun" :: Text), "arg" A..= bv8Ty
+        , "res" A..= bv8Ty]
+      , "params" A..= A.object ["width" A..= w]
+      ]
+  counterText = LBS8.unpack (encodeProgram counterProgram)
 
 -- | Replace the first occurrence of a substring.
 substitute :: String -> String -> String -> String
 substitute old new = go
-  where
-    go s = case splitPrefix s of
-      Just rest -> new <> rest
-      Nothing -> case s of
-        c : cs -> c : go cs
-        [] -> []
-    splitPrefix s =
-      let (pre, rest) = splitAt (length old) s in if pre == old then Just rest else Nothing
+ where
+  go s = case splitPrefix s of
+    Just rest -> new <> rest
+    Nothing -> case s of
+      c : cs -> c : go cs
+      [] -> []
+  splitPrefix s =
+    let (pre, rest) = splitAt (length old) s in if pre == old then Just rest else Nothing
 
 -- | Truncations and single-byte corruptions of a document.
 corrupt :: LBS.ByteString -> Gen LBS.ByteString

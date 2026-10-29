@@ -55,8 +55,8 @@ specCanonicalBytes c =
   BS.concat . fmap field $
     ["gin-spec/1", certTheorem c, certStatement c]
       <> concat [[specDefName d, specDefBody d] | d <- certSpecDefs c]
-  where
-    field t = let b = Text.encodeUtf8 t in BS8.pack (show (BS.length b)) <> ":" <> b
+ where
+  field t = let b = Text.encodeUtf8 t in BS8.pack (show (BS.length b)) <> ":" <> b
 
 -- | The axioms a trace may name. A policy can only widen what is
 -- accepted up to 'alwaysRejected', which no policy admits.
@@ -103,46 +103,51 @@ checkCertificate :: CertPolicy -> Certificate -> Either GinError ()
 checkCertificate policy c = case problems of
   [] -> Right ()
   ps -> failAt StCertificate (Text.intercalate "; " ps)
-  where
-    problems =
-      ["empty theorem name" | blank (certTheorem c)]
-        <> ["empty statement" | blank (certStatement c)]
-        <> axiomProblems "axioms" (certAxioms c)
-        <> axiomProblems "implAxioms" (certImplAxioms c)
-    blank = Text.all (\ch -> isSpace ch || invisible ch)
-    allowed = Set.map normalizeName (allowedAxioms policy)
-    axiomProblems list axioms =
-      [ "axiom " <> shown <> " (in " <> list <> ") " <> reason
-      | axiom <- nubOrd axioms
-      , Just (shown, reason) <- [verdict axiom]
-      ]
-    verdict axiom
-      | not (validName axiom) =
-          Just
-            ( quote axiom
-            , "is not a valid axiom name: it is empty or contains control or invisible characters"
-            )
-      | Set.member (looseName axiom) alwaysRejected = Just (axiom, "is never allowed")
-      | native (normalizeName axiom) || native (looseName axiom) =
-          Just
-            (axiom, "comes from native evaluation (native_decide, bv_decide) and is never allowed")
-      | Set.member (normalizeName axiom) allowed = Nothing
-      | otherwise = Just (axiom, "is not allowed by the axiom policy")
-    native = Text.isInfixOf "._native."
+ where
+  problems =
+    ["empty theorem name" | blank (certTheorem c)]
+      <> ["empty statement" | blank (certStatement c)]
+      <> axiomProblems "axioms" (certAxioms c)
+      <> axiomProblems "implAxioms" (certImplAxioms c)
+  blank = Text.all (\ch -> isSpace ch || invisible ch)
+  allowed = Set.map normalizeName (allowedAxioms policy)
+  axiomProblems list axioms =
+    [ "axiom " <> shown <> " (in " <> list <> ") " <> reason
+    | axiom <- nubOrd axioms
+    , Just (shown, reason) <- [verdict axiom]
+    ]
+  verdict axiom
+    | not (validName axiom) =
+        Just
+          ( quote axiom
+          , "is not a valid axiom name: it is empty or contains control or invisible \
+            \characters"
+          )
+    | Set.member (looseName axiom) alwaysRejected = Just (axiom, "is never allowed")
+    | native (normalizeName axiom) || native (looseName axiom) =
+        Just
+          (axiom, "comes from native evaluation (native_decide, bv_decide) and is never \
+            \allowed")
+    | Set.member (normalizeName axiom) allowed = Nothing
+    | otherwise = Just (axiom, "is not allowed by the axiom policy")
+  native = Text.isInfixOf "._native."
 
 -- | Trim surrounding whitespace, then remove Lean's @«»@ quoting from each
 -- dot-separated component.
 normalizeName :: Text -> Text
 normalizeName = Text.intercalate "." . fmap unquote . Text.splitOn "." . Text.strip
-  where
-    unquote part = fromMaybe part (Text.stripPrefix "«" part >>= Text.stripSuffix "»")
+ where
+  unquote part = fromMaybe part (Text.stripPrefix "«" part >>= Text.stripSuffix "»")
 
 -- | A name to compare with the rejected axioms: every @«@ and @»@ removed,
 -- the whitespace around each component trimmed, and a leading @_root_@
 -- dropped. Looser than 'normalizeName', so it only ever rejects more.
 looseName :: Text -> Text
 looseName =
-  Text.intercalate "." . dropWhile (== "_root_") . fmap Text.strip . Text.splitOn "."
+  Text.intercalate "."
+    . dropWhile (== "_root_")
+    . fmap Text.strip
+    . Text.splitOn "."
     . Text.filter (\ch -> ch /= '«' && ch /= '»')
 
 -- | Not empty after normalization, and no control or invisible character.

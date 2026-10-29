@@ -6,7 +6,6 @@
 -- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
 -- Stability    : experimental
 -- Portability  : non-portable (GHC extensions)
---
 module Gin.Core.CheckSpec (spec) where
 
 import Data.ByteString.Lazy qualified as LBS
@@ -41,7 +40,7 @@ add8 = prim BvAdd [bv 8, bv 8] (bv 8)
 
 -- | counterProgram plus extra definitions that the top entity does not use.
 withDefs :: [Def Ty Name] -> Program Ty Name
-withDefs ds = counterProgram{progDefs = progDefs counterProgram <> ds}
+withDefs ds = counterProgram {progDefs = progDefs counterProgram <> ds}
 
 -- | Check an expression at a declared type, as an extra definition.
 checkAs :: Ty -> Expr Ty Name -> Either GinError ()
@@ -52,7 +51,7 @@ checkPrim :: PrimOp -> Ty -> Either GinError ()
 checkPrim op t = checkAs t (EPrim op t)
 
 withTop :: (TopEntity Ty Name -> TopEntity Ty Name) -> Program Ty Name -> Program Ty Name
-withTop f p = p{progTop = f (progTop p)}
+withTop f p = p {progTop = f (progTop p)}
 
 -- | A type-checker error whose message mentions the fragment.
 rejectedWith :: Text -> Either GinError () -> Expectation
@@ -86,15 +85,15 @@ constantTop ins outs o =
     , progDefs = [Def "Consts.consts" defTy body]
     , progCertificate = testCertificate "Consts.consts_correct"
     }
-  where
-    defTy = tFuns (fmap (sig . portTy) ins) (sig o)
-    constant = EApp (prim SigPure [o] (sig o)) [ELit (someValue o)]
-    body = case ins of
-      [] -> constant
-      _ ->
-        ELam
-          [(Name ("in" <> tshow i), sig (portTy p)) | (i, p) <- zip [0 :: Int ..] ins]
-          constant
+ where
+  defTy = tFuns (fmap (sig . portTy) ins) (sig o)
+  constant = EApp (prim SigPure [o] (sig o)) [ELit (someValue o)]
+  body = case ins of
+    [] -> constant
+    _ ->
+      ELam
+        [(Name ("in" <> tshow i), sig (portTy p)) | (i, p) <- zip [0 :: Int ..] ins]
+        constant
 
 threeOutputs :: [Port Ty]
 threeOutputs = [Port "a" TBool, Port "b" TBool, Port "c" (bv 8)]
@@ -330,11 +329,11 @@ hostilePrograms =
     , True
     )
   ]
-  where
-    n = hostileSize
-    wide = bools n
-    copies = replicate n (v "x")
-    single t body = withDefs [Def "Test.subject" t body]
+ where
+  n = hostileSize
+  wide = bools n
+  copies = replicate n (v "x")
+  single t body = withDefs [Def "Test.subject" t body]
 
 ----------------------------------------------------------------------
 
@@ -353,7 +352,8 @@ spec = do
     it "[check-examples] accepts a top entity with no inputs" $
       checkProgram (constantTop [] [Port "q" (bv 8)] (bv 8)) `shouldBe` Right ()
     it "[check-examples] accepts two outputs as a binary product" $
-      checkProgram (constantTop [Port "x" (bv 8)] (take 2 threeOutputs) (TProd [TBool, TBool]))
+      checkProgram (constantTop [Port "x" (bv 8)] (take 2 threeOutputs) (TProd [TBool
+        , TBool]))
         `shouldBe` Right ()
     it "[check-examples] accepts three outputs as a right-nested product" $
       checkProgram
@@ -382,7 +382,8 @@ spec = do
         checkAs (bv 8) (EGlobal "Test.missing")
     it "[check-rules] rejects a definition that refers to itself" $
       rejectedWith "Test.loop" $
-        checkProgram (withDefs [Def "Test.loop" (bv 8) (EApp add8 [EGlobal "Test.loop", lit8 1])])
+        checkProgram (withDefs [Def "Test.loop" (bv 8) (EApp add8 [EGlobal "Test.loop"
+          , lit8 1])])
     it "[check-rules] rejects mutually recursive definitions" $ do
       let result =
             checkProgram
@@ -404,7 +405,8 @@ spec = do
         checkAs (bv 8) (v "x")
     it "[check-rules] rejects a lambda-bound variable used outside its lambda" $
       rejectedWith "unbound variable x" $
-        checkAs (TProd [bv 8, bv 8]) (mkTuple [EApp (ELam [("x", bv 8)] (v "x")) [lit8 1], v "x"])
+        checkAs (TProd [bv 8, bv 8]) (mkTuple [EApp (ELam [("x"
+          , bv 8)] (v "x")) [lit8 1], v "x"])
     it "[check-rules] rejects a non-recursive let bind that refers to itself" $
       rejectedWith "unbound variable x" $
         checkAs (bv 8) (ELet [Bind "x" (bv 8) (EApp add8 [v "x", lit8 1])] (v "x"))
@@ -424,15 +426,18 @@ spec = do
         `shouldBe` Right ()
     it "[check-rules] rejects let binds escaping into the enclosing scope" $
       rejectedWith "unbound variable x" $
-        checkAs (TProd [bv 8, bv 8]) (mkTuple [ELet [Bind "x" (bv 8) (lit8 1)] (v "x"), v "x"])
+        checkAs (TProd [bv 8, bv 8]) (mkTuple [ELet [Bind "x" (bv 8) (lit8 1)] (v "x")
+          , v "x"])
     it "[check-rules] rejects duplicate binders in one lambda" $
       rejectedWith "duplicate binder s" $
         checkAs (tFuns [bv 8, bv 8] (bv 8)) (ELam [("s", bv 8), ("s", bv 8)] (v "s"))
     it "[check-rules] rejects duplicate names in one let" $
       rejectedWith "duplicate binder x" $
-        checkAs (bv 8) (ELetRec [Bind "x" (bv 8) (lit8 1), Bind "x" (bv 8) (lit8 2)] (v "x"))
+        checkAs (bv 8) (ELetRec [Bind "x" (bv 8) (lit8 1)
+          , Bind "x" (bv 8) (lit8 2)] (v "x"))
     it "[check-rules] allows an inner lambda to shadow an outer binder" $
-      checkAs (tFuns [bv 8, TBool] TBool) (ELam [("x", bv 8)] (ELam [("x", TBool)] (v "x")))
+      checkAs (tFuns [bv 8, TBool] TBool) (ELam [("x", bv 8)] (ELam [("x"
+        , TBool)] (v "x")))
         `shouldBe` Right ()
     it "[check-rules] rejects a lambda with no binders" $
       rejectedWith "lambda" $
@@ -465,7 +470,9 @@ spec = do
         checkAs (bv 8) (ifE (ELit (VBV 1 1)) (lit8 1) (lit8 2))
     it "[check-rules] rejects a signal condition" $
       rejectedWith "condition" $
-        checkAs (TFun (sig TBool) (bv 8)) (ELam [("c", sig TBool)] (ifE (v "c") (lit8 1) (lit8 2)))
+        checkAs
+          (TFun (sig TBool) (bv 8))
+          (ELam [("c", sig TBool)] (ifE (v "c") (lit8 1) (lit8 2)))
     it "[check-rules] rejects branches of different types" $
       rejectedWith "branches" $
         checkAs (bv 8) (ifE (ELit (VBool True)) (lit8 1) (ELit (VBV 4 1)))
@@ -473,7 +480,8 @@ spec = do
       rejectedWith "branches" $
         checkAs
           (tFuns [sig (bv 8), sig (bv 8)] (sig (bv 8)))
-          (ELam [("a", sig (bv 8)), ("b", sig (bv 8))] (ifE (ELit (VBool True)) (v "a") (v "b")))
+          (ELam [("a", sig (bv 8)), ("b"
+            , sig (bv 8))] (ifE (ELit (VBool True)) (v "a") (v "b")))
     it "[check-rules] rejects function branches" $
       rejectedWith "branches" $
         checkAs
@@ -485,17 +493,23 @@ spec = do
           (TFun (sig (bv 8)) (TProd [sig (bv 8), bv 8]))
           ( ELam
               [("a", sig (bv 8))]
-              (ifE (ELit (VBool True)) (mkTuple [v "a", lit8 1]) (mkTuple [v "a", lit8 2]))
+              (ifE (ELit (VBool True)) (mkTuple [v "a", lit8 1]) (mkTuple [v "a"
+                , lit8 2]))
           )
     it "[check-rules] accepts a multi-way if" $
-      checkAs (bv 8) (EIf [(ELit (VBool False), lit8 1), (ELit (VBool True), lit8 2)] (lit8 3))
+      checkAs (bv 8) (EIf [(ELit (VBool False), lit8 1), (ELit (VBool True)
+        , lit8 2)] (lit8 3))
         `shouldBe` Right ()
     it "[check-rules] rejects a bit-vector condition after the first" $
       rejectedWith "condition" $
-        checkAs (bv 8) (EIf [(ELit (VBool True), lit8 1), (ELit (VBV 1 1), lit8 2)] (lit8 3))
+        checkAs (bv 8) (EIf [(ELit (VBool True), lit8 1), (ELit (VBV 1 1)
+          , lit8 2)] (lit8 3))
     it "[check-rules] rejects a later branch of a different type" $
       rejectedWith "branches" $
-        checkAs (bv 8) (EIf [(ELit (VBool True), lit8 1), (ELit (VBool True), ELit (VBV 4 1))] (lit8 3))
+        checkAs
+          (bv 8)
+          (EIf [(ELit (VBool True), lit8 1), (ELit (VBool True)
+            , ELit (VBV 4 1))] (lit8 3))
     it "[check-rules] rejects an if with no conditions" $
       rejectedWith "no conditions" $
         checkAs (bv 8) (EIf [] (lit8 1))
@@ -533,7 +547,8 @@ spec = do
       ]
       $ \(name, value) ->
         it ("[check-rules] rejects " <> name <> " as a literal") $
-          rejectedWith "invalid value" (checkAs (bv 8) (EProj 0 (mkTuple [lit8 0, ELit value])))
+          rejectedWith "invalid value" (checkAs (bv 8) (EProj 0 (mkTuple [lit8 0
+            , ELit value])))
     it "[check-rules] rejects a zero-width bit-vector type" $
       rejectedWith "width" $
         checkAs (TFun (bv 0) (bv 0)) (ELam [("x", bv 0)] (v "x"))
@@ -542,7 +557,8 @@ spec = do
         checkAs (TFun (bv 4097) (bv 4097)) (ELam [("x", bv 4097)] (v "x"))
     it "[check-rules] rejects a one-component product type" $
       rejectedWith "product" $
-        checkAs (TFun (TProd [TBool]) (TProd [TBool])) (ELam [("x", TProd [TBool])] (v "x"))
+        checkAs (TFun (TProd [TBool]) (TProd [TBool])) (ELam [("x"
+          , TProd [TBool])] (v "x"))
     it "[check-rules] rejects a signal of functions" $
       rejectedWith "signal" $
         checkAs
@@ -569,8 +585,10 @@ spec = do
     it "[check-rules] shortens a wide type in a message, keeping its shape" $ do
       let result = checkAs (TFun (bools 20) (bools 3)) (ELam [("x", bools 20)] (v "x"))
           eight = Text.intercalate ", " (replicate 8 "Bool")
-      rejectedWith ("has type (" <> eight <> ", ... 12 more) -> (" <> eight <> ", ...") result
-      rejectedWith ("declared (" <> eight <> ", ... 12 more) -> (Bool, Bool, Bool)") result
+      rejectedWith ("has type (" <> eight <> ", ... 12 more) -> (" <> eight
+        <> ", ...") result
+      rejectedWith ("declared (" <> eight
+        <> ", ... 12 more) -> (Bool, Bool, Bool)") result
     for_ hostilePrograms $ \(name, program, accepted) ->
       it ("[check-rules] checks " <> name <> " promptly") $ promptly $ do
         let bytes = encodeProgram program
@@ -583,10 +601,11 @@ spec = do
             Text.length (errMessage e) `shouldSatisfy` (< 1000)
 
   describe "top entity" $ do
-    for_ ["Counter", "", "module", "gin_counter", "a__b", "counter_", "9lives", "wire"] $ \name ->
+    for_ ["Counter", "", "module", "gin_counter", "a__b", "counter_", "9lives", "wire"]
+      $ \name ->
       it ("[check-rules] rejects the illegal top name " <> show name) $
         rejectedWith "top name" $
-          checkProgram (withTop (\t -> t{topName = name}) counterProgram)
+          checkProgram (withTop (\t -> t {topName = name}) counterProgram)
     for_ illegalPortNames $ \name -> do
       it ("[check-ports] rejects the illegal input port name " <> show name) $
         rejectedWith "illegal port name" $
@@ -604,13 +623,14 @@ spec = do
     for_ [("clk", "clock"), ("rst", "reset")] $ \(name, what) ->
       it ("[check-ports] rejects a top entity named " <> show name) $
         rejectedWith ("top name " <> name <> " is reserved for the " <> what) $
-          checkProgram (withTop (\t -> t{topName = name}) counterProgram)
+          checkProgram (withTop (\t -> t {topName = name}) counterProgram)
     it "[check-ports] rejects an input port named like the top entity" $
       rejectedWith "port name consts equals the top name" $
         checkProgram (constantTop [Port "consts" (bv 8)] [Port "q" TBool] TBool)
     it "[check-ports] rejects an output port named like the top entity" $
       rejectedWith "port name counter equals the top name" $
-        checkProgram (withTop (\t -> t{topOutputs = [Port "counter" (bv 8)]}) counterProgram)
+        checkProgram (withTop (\t -> t {topOutputs =
+          [Port "counter" (bv 8)]}) counterProgram)
     it "[check-ports] accepts port names that only contain clk, rst or the top name" $
       checkProgram
         ( constantTop
@@ -619,8 +639,10 @@ spec = do
             (TProd [TBool, TProd [TBool, bv 8]])
         )
         `shouldBe` Right ()
-    it "[check-ports] reports a port name with control characters escaped, in the top entity" $
-      case checkProgram (constantTop [Port "x\nsim-core: PASS\ESC[2J" (bv 8)] [Port "q" TBool] TBool) of
+    it "[check-ports] reports a port name with control characters escaped, in the top \
+      \entity" $
+      case checkProgram (constantTop [Port "x\nsim-core: PASS\ESC[2J" (bv 8)] [Port "q"
+        TBool] TBool) of
         Left e -> do
           errStage e `shouldBe` StCheck
           errContext e `shouldBe` ["in top entity"]
@@ -632,32 +654,36 @@ spec = do
         checkProgram (constantTop [Port "en" (bv 8)] [Port "en" TBool] TBool)
     it "[check-rules] rejects two inputs with the same name" $
       rejectedWith "duplicate port name x" $
-        checkProgram (constantTop [Port "x" (bv 8), Port "x" TBool] [Port "q" TBool] TBool)
+        checkProgram (constantTop [Port "x" (bv 8)
+          , Port "x" TBool] [Port "q" TBool] TBool)
     it "[check-rules] rejects a product-typed port" $
       rejectedWith "scalar" $
-        checkProgram (constantTop [] [Port "q" (TProd [TBool, TBool])] (TProd [TBool, TBool]))
+        checkProgram (constantTop [] [Port "q" (TProd [TBool, TBool])] (TProd [TBool
+          , TBool]))
     it "[check-rules] rejects a signal-typed port" $
       rejectedWith "scalar" $
         checkProgram (constantTop [Port "x" (sig TBool)] [Port "q" TBool] TBool)
     it "[check-rules] rejects a top entity with no outputs" $
       rejectedWith "output" $
-        checkProgram (withTop (\t -> t{topOutputs = []}) counterProgram)
+        checkProgram (withTop (\t -> t {topOutputs = []}) counterProgram)
     it "[check-rules] rejects a top definition that does not exist" $
       rejectedWith "Counter.missing" $
-        checkProgram (withTop (\t -> t{topDef = "Counter.missing"}) counterProgram)
+        checkProgram (withTop (\t -> t {topDef = "Counter.missing"}) counterProgram)
     it "[check-rules] rejects a top definition whose type differs from the ports" $
       rejectedWith "top definition" $
-        checkProgram (withTop (\t -> t{topInputs = [Port "en" (bv 1)]}) counterProgram)
+        checkProgram (withTop (\t -> t {topInputs = [Port "en" (bv 1)]}) counterProgram)
     it "[check-rules] rejects three outputs as a left-nested product" $
       rejectedWith "top definition" $
         checkProgram
-          (constantTop [Port "x" (bv 8)] threeOutputs (TProd [TProd [TBool, TBool], bv 8]))
+          (constantTop [Port "x" (bv 8)] threeOutputs (TProd [TProd [TBool, TBool]
+            , bv 8]))
     it "[check-rules] rejects three outputs as a flat product" $
       rejectedWith "top definition" $
-        checkProgram (constantTop [Port "x" (bv 8)] threeOutputs (TProd [TBool, TBool, bv 8]))
+        checkProgram (constantTop [Port "x" (bv 8)] threeOutputs (TProd [TBool, TBool
+          , bv 8]))
     it "[check-rules] rejects a top entity in a domain its signals do not use" $
       rejectedWith "domain" $
-        checkProgram (withTop (\t -> t{topDomain = Domain "Fast" 5000}) counterProgram)
+        checkProgram (withTop (\t -> t {topDomain = Domain "Fast" 5000}) counterProgram)
     it "[check-rules] rejects a signal in another domain in any definition" $
       rejectedWith "domain" $
         checkProgram

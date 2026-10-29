@@ -100,9 +100,12 @@ together. The optimization implementation requires Yolk's Pareto extraction API.
 
 ```sh
 cabal build all
-GIN_REQUIRE_TOOLS=1 cabal test   # without the variable, tests whose HDL tools are missing are pending
+# Require HDL tools instead of leaving their tests pending when unavailable.
+GIN_REQUIRE_TOOLS=1 cabal test
 sh test/check-types.sh          # reject forged bounded settings at compile time
-scripts/validate.sh              # the whole pipeline, from the Lean sources to HDL simulation
+sh test/check-width.sh          # enforce the 90-column source limit
+# Run the whole pipeline, from the Lean sources to HDL simulation.
+scripts/validate.sh
 ```
 
 `scripts/validate.sh` builds and tests the Lean package, replays it
@@ -119,13 +122,31 @@ and `validate` also take its vectors.
 
 ```sh
 gin check     examples/counter/counter.gin.json
-gin compile   examples/counter/counter.gin.json -o out              # out/counter.{v,sv,vhd}
-gin testbench examples/counter/counter.gin.json --vectors examples/counter/counter.vectors.json -o out
-gin sim       examples/counter/counter.gin.json --vectors examples/counter/counter.vectors.json
-gin validate  examples/counter/counter.gin.json --vectors examples/counter/counter.vectors.json
+gin compile examples/counter/counter.gin.json -o out  # out/counter.{v,sv,vhd}
+gin testbench examples/counter/counter.gin.json \
+  --vectors examples/counter/counter.vectors.json -o out
+gin sim examples/counter/counter.gin.json \
+  --vectors examples/counter/counter.vectors.json
+gin validate examples/counter/counter.gin.json \
+  --vectors examples/counter/counter.vectors.json
 ```
 
 From a checkout, run them as `cabal run -v0 gin -- check …`.
+
+Authored source and code examples have a hard 90-column limit, including
+comments and literals. `fourmolu.yaml` sets the Haskell formatting target;
+run `sh test/check-width.sh` afterward because the formatter's limit is soft.
+The check counts Unicode characters and tab stops. Canonical JSON and generated
+golden files retain their reproducible bytes.
+
+Fourmolu 0.12 predates the project's `GHC2024` setting. With that version,
+format Haskell using the compatible parser options below, then check widths:
+
+```sh
+fourmolu --no-cabal -o -XGHC2021 -o -XDerivingStrategies \
+  -o -XLambdaCase -o -XOverloadedStrings -i PATH.hs
+sh test/check-width.sh
+```
 
 `gin optimize` searches a shared-circuit Pareto portfolio from a bounded JSON
 policy. `--optimize POLICY --candidate SHA256` selects that implementation for

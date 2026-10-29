@@ -117,8 +117,10 @@ sanitizeSpec = do
     prop "[nl-sanitize] never returns a taken name, compared case-insensitively" $
       forAll genSanitizeInput $ \(taken, raw) ->
         let r = sanitize taken raw
-         in counterexample (show r) (Text.toLower r `Set.notMember` Set.map Text.toLower taken)
-    prop "[nl-sanitize] is deterministic: the base name when free, else its least free suffix" $
+         in counterexample (show r) (Text.toLower r `Set.notMember` Set.map
+           Text.toLower taken)
+    prop "[nl-sanitize] is deterministic: the base name when free, else its least free \
+      \suffix" $
       checkCoverage . forAll genSanitizeInput $ \(taken, raw) ->
         let collided = sanitize taken raw /= sanitize Set.empty raw
          in cover 40 collided "collision" . cover 10 (not collided) "no collision" $
@@ -127,7 +129,8 @@ sanitizeSpec = do
       forAll genSanitizeInput $ \(taken, raw) ->
         sanitize (Set.map asciiUpper taken) raw === sanitize taken raw
     prop "[nl-sanitize] keeps legal names of at most 56 characters other than gin" $
-      forAll genShortLegal $ \raw -> sanitize Set.empty raw === raw
+      forAll genShortLegal $
+        \raw -> sanitize Set.empty raw === raw
 
 -- | Inputs and their sanitized forms when nothing is taken.
 sanitizeCases :: [(Text, Text)]
@@ -178,15 +181,21 @@ collisionCases =
   , ("the clock name is avoided", ["clk"], "CLK", "clk_1")
   , ("the empty name collides as n", ["n"], "", "n_1")
   , ("a prefixed reserved word collides too", ["n_module"], "module", "n_module_1")
-  , ( "a 70-character name collides after truncation"
+  ,
+    ( "a 70-character name collides after truncation"
     , [long56]
     , Text.replicate 70 "a"
     , long56 <> "_1"
     )
-  , ("suffixes go past one digit", "y" : ["y_" <> tshow k | k <- [1 .. 10 :: Int]], "y", "y_11")
+  ,
+    ( "suffixes go past one digit"
+    , "y" : ["y_" <> tshow k | k <- [1 .. 10 :: Int]]
+    , "y"
+    , "y_11"
+    )
   ]
-  where
-    long56 = Text.replicate 56 "a"
+ where
+  long56 = Text.replicate 56 "a"
 
 -- | The result is the base name ('sanitize' with nothing taken) when that
 -- is free; otherwise it is the base name with the least suffix @_k@ that
@@ -205,15 +214,15 @@ leastFreeSuffix taken raw =
                 not (any (free . suffixed) [1 .. k - 1])
             ]
         Nothing -> counterexample "not the base name with a numeric suffix" False
-  where
-    r = sanitize taken raw
-    base = sanitize Set.empty raw
-    lowered = Set.map Text.toLower taken
-    free c = Text.toLower c `Set.notMember` lowered && isLegalIdent c
-    suffixed k = base <> "_" <> tshow k
-    readSuffix ks = case readMaybe (Text.unpack ks) of
-      Just k | tshow k == ks -> Just (k :: Int)
-      _ -> Nothing
+ where
+  r = sanitize taken raw
+  base = sanitize Set.empty raw
+  lowered = Set.map Text.toLower taken
+  free c = Text.toLower c `Set.notMember` lowered && isLegalIdent c
+  suffixed k = base <> "_" <> tshow k
+  readSuffix ks = case readMaybe (Text.unpack ks) of
+    Just k | tshow k == ks -> Just (k :: Int)
+    _ -> Nothing
 
 genSanitizeInput :: Gen (Set Text, Text)
 genSanitizeInput = do
@@ -275,7 +284,9 @@ bindNamesSpec = do
   -- Each search for a free suffix resumes where the previous one for the
   -- same base name stopped; restarting at 1 makes this quadratic (about
   -- five minutes at this size).
-  it "[nl-sanitize] names as many binds as normal form allows, all with one base name, quickly" $ do
+  it
+    "[nl-sanitize] names as many binds as normal form allows, all with one base name, \
+      \quickly" $ do
     let raw = [Name (Text.pack ['x', chr (0x10000 + i)]) | i <- [0 .. maxNormalBinds - 1]]
         names = chainDeclNames (chainModule raw)
         expected = Ident <$> "x" : ["x_" <> tshow k | k <- [1 .. maxNormalBinds - 1]]
@@ -295,7 +306,8 @@ chainModule names =
     , nmDomain = sysDomain
     , nmInputs = [("a", TBool)]
     , nmOutputs = [NOutput "o" TBool (AVar (NE.last ("a" :| names)))]
-    , nmBinds = zipWith (\prev n -> NBind n TBool (NPrim BoolNot [AVar prev])) ("a" : names) names
+    , nmBinds =
+        zipWith (\prev n -> NBind n TBool (NPrim BoolNot [AVar prev])) ("a" : names) names
     , nmCertificate = testCertificate "Chain.chain_correct"
     }
 
@@ -307,24 +319,25 @@ chainDeclNames nm = fmap (netName . declNet) . modDecls <$> buildNetlist nm
 -- ports and the binds named before it.
 chainNames :: [Name] -> [Ident]
 chainNames = fmap Ident . snd . mapAccumL claim reserved . fmap unName
-  where
-    reserved = Set.fromList ["top", "clk", "rst", "a", "o"]
-    claim taken raw = let r = sanitize taken raw in (Set.insert r taken, r)
+ where
+  reserved = Set.fromList ["top", "clk", "rst", "a", "o"]
+  claim taken raw = let r = sanitize taken raw in (Set.insert r taken, r)
 
 -- | Did some base name need a suffix for two binds or more?
 searchedTwice :: [Name] -> [Ident] -> Bool
 searchedTwice names idents = any (> 1) (Map.fromListWith (+) suffixed)
-  where
-    suffixed =
-      [ (base, 1 :: Int)
-      | (n, i) <- zip names idents
-      , let base = sanitize Set.empty (unName n)
-      , unIdent i /= base
-      ]
+ where
+  suffixed =
+    [ (base, 1 :: Int)
+    | (n, i) <- zip names idents
+    , let base = sanitize Set.empty (unName n)
+    , unIdent i /= base
+    ]
 
 -- | Distinct bind names other than the input @a@, many sharing a base.
 genChainNames :: Gen [Name]
-genChainNames = uniquify (Set.singleton "a") <$> (chooseInt (0, 40) >>= (`vectorOf` genBindName))
+genChainNames =
+  uniquify (Set.singleton "a") <$> (chooseInt (0, 40) >>= (`vectorOf` genBindName))
 
 ----------------------------------------------------------------------
 -- limits
@@ -344,12 +357,15 @@ limitsSpec = do
     let taken = Set.fromList ("x" : ["x_" <> tshow k | k <- [1 .. 100000 :: Int]])
     finished <- timeout (30 * 1000000) (evaluate (sanitize taken "X"))
     finished `shouldBe` Just "x_100001"
-  it "[backend-minors] finds a free suffix in a gap of a long run of taken ones, within 30 s" $ do
-    let taken = Set.fromList ("x" : ["x_" <> tshow k | k <- [1 .. 100000 :: Int], k /= 99999])
+  it
+    "[backend-minors] finds a free suffix in a gap of a long run of taken ones, within \
+      \30 s" $ do
+    let taken = Set.fromList ("x" : ["x_" <> tshow k | k <-
+          [1 .. 100000 :: Int], k /= 99999])
     finished <- timeout (30 * 1000000) (evaluate (sanitize taken "x"))
     finished `shouldBe` Just "x_99999"
-  where
-    numbered n = [Name ("b" <> tshow i) | i <- [1 .. n]]
+ where
+  numbered n = [Name ("b" <> tshow i) | i <- [1 .. n]]
 
 ----------------------------------------------------------------------
 -- lowering
@@ -359,7 +375,8 @@ loweringSpec = do
   for_ loweringCases $ \(label, t, rhs, expected) ->
     it ("lowers " <> label) $ do
       let nm = singleBind t rhs
-      modDecls <$> buildNetlist nm `shouldBe` Right [DAssign (Net (Ident "r") (hwOf t)) expected]
+      modDecls <$> buildNetlist nm
+        `shouldBe` Right [DAssign (Net (Ident "r") (hwOf t)) expected]
       validate <$> buildNetlist nm `shouldBe` Right []
   it "lowers a bit-vector register to a register with its initial value as reset value" $
     modDecls <$> buildNetlist (singleBind (bv 8) (NReg (VBV 8 7) a8))
@@ -437,12 +454,18 @@ loweringCases =
   , ("bv.zext", bv 16, NPrim (BvZext 16) [a8], HZext 16 (ref "a"))
   , ("bv.ofBool", bv 1, NPrim BvOfBool [pB], HBitToVec (ref "p"))
   , ("a mux", bv 8, NMux pB a8 b8, HMux (ref "p") (ref "a") (ref "b"))
-  , ("a Bool literal", TBool, NPrim BoolAnd [pB, ALit (VBool True)], HBin BAnd (ref "p") true)
-  , ("a bit-vector literal", bv 8, NPrim BvAdd [a8, lit8 200], HBin BAdd (ref "a") (vconst 8 200))
+  , ("a Bool literal", TBool, NPrim BoolAnd [pB, ALit (VBool True)]
+    , HBin BAnd (ref "p") true)
+  ,
+    ( "a bit-vector literal"
+    , bv 8
+    , NPrim BvAdd [a8, lit8 200]
+    , HBin BAdd (ref "a") (vconst 8 200)
+    )
   , ("an atom", bv 8, NAtom (lit8 9), HOperand (vconst 8 9))
   ]
-  where
-    true = OConst (HLitBit True)
+ where
+  true = OConst (HLitBit True)
 
 -- | Inputs a, b : BitVec 8 and p, q : Bool; one bind r of the given type
 -- and right-hand side; one output o reading r.
@@ -507,10 +530,11 @@ examplesSpec =
   for_ examples $ \(name, normal, expected) -> do
     it ("[nl-examples] " <> name <> " lowers to the hand-written netlist, header aside") $
       withoutHeader <$> buildNetlist normal `shouldBe` Right (withoutHeader expected)
-    it ("[nl-invariants] " <> name <> " lowers to a netlist that satisfies every invariant") $
+    it ("[nl-invariants] " <> name <> " lowers to a netlist that satisfies every \
+      \invariant") $
       validate <$> buildNetlist normal `shouldBe` Right []
-  where
-    withoutHeader m = m {modHeader = []}
+ where
+  withoutHeader m = m {modHeader = []}
 
 examples :: [(String, NModule, Module)]
 examples =
@@ -530,7 +554,8 @@ portsSpec = do
   it "[nl-ports] accepts legal, distinct port names" $ do
     let result = buildNetlist (portsModule "top" ["a", "b_2"] ["o", "count"])
     fmap netName . modInputs <$> result `shouldBe` Right [Ident "a", Ident "b_2"]
-    fmap (netName . outNet) . modOutputs <$> result `shouldBe` Right [Ident "o", Ident "count"]
+    fmap (netName . outNet) . modOutputs <$> result
+      `shouldBe` Right [Ident "o", Ident "count"]
     validate <$> result `shouldBe` Right []
 
 -- | Label, input port names, output port names, the name to blame.
@@ -617,7 +642,8 @@ foldSpec = do
     foldModule [NBind "r" (bv 8) (NPrim (BvLshr 7) [x8])]
       `foldsTo` [DAssign (vec8 "r") (HLshr 7 (ref "x"))]
   it "[nl-fold] folds a shift of a literal by the operand width to zero" $
-    foldModule [NBind "r" (bv 8) (NPrim (BvShl 8) [lit8 255])] `foldsTo` [assign8 "r" zero8]
+    foldModule [NBind "r" (bv 8) (NPrim (BvShl 8) [lit8 255])] `foldsTo` [assign8 "r"
+      zero8]
   it "[nl-fold] folds bv.extract of a literal to the selected bits" $ do
     -- 180 = 0b1011_0100: bits 5..2 are 0b1101 = 13.
     foldModuleOf (bv 4) [NBind "r" (bv 4) (NPrim (BvExtract 5 2) [lit8 180])]
@@ -653,7 +679,9 @@ foldSpec = do
                 , assign8 "u" zero8
                 , assign8 "r" (HBin BXor (ref "t") (ref "u"))
                 ]
-  it "[nl-fold] keeps a register loop that a folded shift read, since its nets read each other" $
+  it
+    "[nl-fold] keeps a register loop that a folded shift read, since its nets read each \
+      \other" $
     foldModule
       [ NBind "s" (bv 8) (NReg (VBV 8 0) (AVar "s_next"))
       , NBind "s_next" (bv 8) (NPrim BvAdd [AVar "s", lit8 1])
@@ -688,7 +716,8 @@ foldSpec = do
                 }
             kept = if isLeft then HShl k (ref "x") else HLshr k (ref "x")
             expected = if k < w then kept else HOperand (vconst w 0)
-         in fmap modDecls (buildNetlist nm) === Right [DAssign (Net (Ident "r") (HVec w)) expected]
+         in fmap modDecls (buildNetlist nm)
+           === Right [DAssign (Net (Ident "r") (HVec w)) expected]
 
 -- | Input x : BitVec 8, the given binds and an output y : BitVec 8 reading r.
 foldModule :: [NBind] -> NModule
@@ -754,7 +783,8 @@ invariantsSpec = do
     validate detectorNetlist `shouldBe` []
     validate (sliceNetlist (ref "s")) `shouldBe` []
   for_ mutants $ \(k, label, m) ->
-    it ("[nl-invariants] the validator rejects " <> label <> " (invariant " <> show k <> ")") $
+    it ("[nl-invariants] the validator rejects " <> label <> " (invariant " <> show k
+      <> ")") $
       invariantsBroken m `shouldBe` [k]
   it "[nl-invariants] the validator compares names case-insensitively" $
     invariantsBroken counterNetlist {modName = Ident "EN"} `shouldBe` [1, 2]
@@ -764,25 +794,29 @@ invariantsSpec = do
         Left e -> counterexample (show e) False
         Right m ->
           let bindNames = Set.fromList (fmap (unName . nbName) (nmBinds nm))
-              renamed = any ((`Set.notMember` bindNames) . unIdent . netName . declNet) (modDecls m)
+              renamed =
+                any ((`Set.notMember` bindNames) . unIdent . netName . declNet)
+                  (modDecls m)
            in cover 50 renamed "a bind was renamed"
-                . cover 2 (length (modDecls m) < length (nmBinds nm)) "a declaration was dropped"
+                . cover 2 (length (modDecls m) < length (nmBinds nm))
+                  "a declaration was dropped"
                 . cover 8 (any foldsShift (nmBinds nm)) "a shift was folded"
                 . counterexample (show m)
                 $ conjoin
                   [ validate m === []
                   , modName m === Ident (nmName nm)
-                  , fmap netName (modInputs m) === [Ident (unName n) | (n, _) <- nmInputs nm]
+                  , fmap netName (modInputs m) === [Ident (unName n) | (n, _) <-
+                    nmInputs nm]
                   , fmap (netName . outNet) (modOutputs m)
                       === [Ident (noName o) | o <- nmOutputs nm]
                   , counterexample "more declarations than binds" $
                       length (modDecls m) <= length (nmBinds nm)
                   ]
-  where
-    foldsShift b = case (nbRhs b, nbTy b) of
-      (NPrim (BvShl k) _, TBitVec w) -> k >= w
-      (NPrim (BvLshr k) _, TBitVec w) -> k >= w
-      _ -> False
+ where
+  foldsShift b = case (nbRhs b, nbTy b) of
+    (NPrim (BvShl k) _, TBitVec w) -> k >= w
+    (NPrim (BvLshr k) _, TBitVec w) -> k >= w
+    _ -> False
 
 -- | One mutant of a valid netlist per invariant, breaking only that one.
 mutants :: [(Int, String, Module)]
@@ -790,27 +824,34 @@ mutants =
   [ (1, "an uppercase module name", counterNetlist {modName = Ident "Counter"})
   , (2, "a module name equal to an input", counterNetlist {modName = Ident "en"})
   , (3, "an output driven by the clock", counterNetlist {modOutputs = [clockOutput]})
-  , (4, "an 8-bit adder with a 4-bit constant", withInc (HBin BAdd (ref "s") (vconst 4 1)))
+  , (4, "an 8-bit adder with a 4-bit constant"
+    , withInc (HBin BAdd (ref "s") (vconst 4 1)))
   , (5, "a combinational loop", withInc (HBin BAdd (ref "s_next") (vconst 8 1)))
   , (6, "a slice of a constant", sliceNetlist (vconst 8 5))
   , (7, "a shift by the operand width", withInc (HShl 8 (ref "s")))
-  , (8, "an unread declared net", counterNetlist {modDecls = modDecls counterNetlist <> [spare]})
+  ,
+    ( 8
+    , "an unread declared net"
+    , counterNetlist {modDecls = modDecls counterNetlist <> [spare]}
+    )
   ]
-  where
-    withInc e = counterNetlist {modDecls = fmap (replaceInc e) (modDecls counterNetlist)}
-    replaceInc e d
-      | netName (declNet d) == Ident "inc" = DAssign (vec8 "inc") e
-      | otherwise = d
-    spare = DAssign (Net (Ident "spare") HBit) (HOperand (ref "en"))
-    clockOutput = Output (vec8 "count") (ref "clk")
+ where
+  withInc e = counterNetlist {modDecls = fmap (replaceInc e) (modDecls counterNetlist)}
+  replaceInc e d
+    | netName (declNet d) == Ident "inc" = DAssign (vec8 "inc") e
+    | otherwise = d
+  spare = DAssign (Net (Ident "spare") HBit) (HOperand (ref "en"))
+  clockOutput = Output (vec8 "count") (ref "clk")
 
 -- | The counter with a 4-bit slice of the given operand driving a second
 -- output.
 sliceNetlist :: Operand -> Module
 sliceNetlist o =
   counterNetlist
-    { modOutputs = modOutputs counterNetlist <> [Output (Net (Ident "low") (HVec 4)) (ref "low4")]
-    , modDecls = modDecls counterNetlist <> [DAssign (Net (Ident "low4") (HVec 4)) (HSlice 3 0 o)]
+    { modOutputs =
+        modOutputs counterNetlist <> [Output (Net (Ident "low") (HVec 4)) (ref "low4")]
+    , modDecls =
+        modDecls counterNetlist <> [DAssign (Net (Ident "low4") (HVec 4)) (HSlice 3 0 o)]
     }
 
 -- | The invariants of "Gin.Netlist.Types", by number, that a module breaks,
@@ -818,8 +859,12 @@ sliceNetlist o =
 validate :: Module -> [(Int, String)]
 validate m =
   concat
-    [ [(1, "illegal identifier " <> show i) | i <- defined <> refs, not (isLegalIdent (unIdent i))]
-    , [(2, "duplicate name " <> show n) | n <- duplicates (fmap (Text.toLower . unIdent) defined)]
+    [ [ (1, "illegal identifier " <> show i) | i <-
+      defined <> refs, not (isLegalIdent (unIdent i))
+      ]
+    , [ (2, "duplicate name " <> show n) | n <-
+      duplicates (fmap (Text.toLower . unIdent) defined)
+      ]
     , [(3, "dangling reference " <> show i) | i <- refs, i `Map.notMember` moduleNets m]
     , [(4, e) | e <- typeErrors m]
     , [ (5, "combinational cycle through " <> show (flattenSCC c))
@@ -837,22 +882,24 @@ validate m =
       , netName n `notElem` refs
       ]
     ]
-  where
-    defined =
-      [modName m, modClock m, modReset m]
-        <> fmap netName (modInputs m <> fmap outNet (modOutputs m) <> fmap declNet (modDecls m))
-    refs = [i | ORef i <- moduleOperands m]
-    exprs = [e | DAssign _ e <- modDecls m]
-    assignGraph = [(n, n, [i | ORef i <- exprOperands e]) | DAssign (Net n _) e <- modDecls m]
-    isCyclic = \case
-      AcyclicSCC _ -> False
-      _ -> True
-    shiftOf = \case
-      HShl k o -> [(k, o)]
-      HLshr k o -> [(k, o)]
-      _ -> []
-    duplicates xs =
-      [x | (x, c) <- Map.toList (Map.fromListWith (+) [(x, 1 :: Int) | x <- xs]), c > 1]
+ where
+  defined =
+    [modName m, modClock m, modReset m]
+      <> fmap netName (modInputs m <> fmap outNet (modOutputs m)
+        <> fmap declNet (modDecls m))
+  refs = [i | ORef i <- moduleOperands m]
+  exprs = [e | DAssign _ e <- modDecls m]
+  assignGraph = [(n, n, [i | ORef i <- exprOperands e]) | DAssign (Net n _) e <-
+    modDecls m]
+  isCyclic = \case
+    AcyclicSCC _ -> False
+    _ -> True
+  shiftOf = \case
+    HShl k o -> [(k, o)]
+    HLshr k o -> [(k, o)]
+    _ -> []
+  duplicates xs =
+    [x | (x, c) <- Map.toList (Map.fromListWith (+) [(x, 1 :: Int) | x <- xs]), c > 1]
 
 -- | Invariant 4: net widths, literals and the typing table on 'HExpr'.
 -- Declarations and outputs with a dangling reference are left to
@@ -871,16 +918,16 @@ typeErrors m =
        , resolved [outDriver o]
        , operandType m (outDriver o) /= Just (netType (outNet o))
        ]
-  where
-    nets = modInputs m <> fmap outNet (modOutputs m) <> fmap declNet (modDecls m)
-    literals = [l | OConst l <- moduleOperands m] <> [l | DReg _ l _ <- modDecls m]
-    resolved = all (isJust . operandType m)
-    validLit = \case
-      HLitBit _ -> True
-      HLitVec w v -> w >= 1 && v >= 0 && v < 2 ^ w
-    declTyped = \case
-      DAssign n e -> exprType m e == Just (netType n)
-      DReg n l o -> hlitType l == netType n && operandType m o == Just (netType n)
+ where
+  nets = modInputs m <> fmap outNet (modOutputs m) <> fmap declNet (modDecls m)
+  literals = [l | OConst l <- moduleOperands m] <> [l | DReg _ l _ <- modDecls m]
+  resolved = all (isJust . operandType m)
+  validLit = \case
+    HLitBit _ -> True
+    HLitVec w v -> w >= 1 && v >= 0 && v < 2 ^ w
+  declTyped = \case
+    DAssign n e -> exprType m e == Just (netType n)
+    DReg n l o -> hlitType l == netType n && operandType m o == Just (netType n)
 
 -- | The result type of a well-typed expression, per the table on 'HExpr'.
 exprType :: Module -> HExpr -> Maybe HwType
@@ -918,12 +965,12 @@ exprType m = \case
     n <- width =<< ty o
     HVec w <$ guard (w >= n)
   HBitToVec o -> HVec 1 <$ guard (ty o == Just HBit)
-  where
-    ty = operandType m
-    vec o = ty o >>= \t -> t <$ width t
-    width = \case
-      HVec n -> Just n
-      HBit -> Nothing
+ where
+  ty = operandType m
+  vec o = ty o >>= \t -> t <$ width t
+  width = \case
+    HVec n -> Just n
+    HBit -> Nothing
 
 invariantsBroken :: Module -> [Int]
 invariantsBroken = Set.toAscList . Set.fromList . fmap fst . validate
@@ -946,7 +993,8 @@ genNormal = do
   let scope = scopeOf (inputs <> [(nbName b, nbTy b) | b <- binds])
   closed <- traverse (closeRegister scope) binds
   let recent = take 3 (reverse (fmap nbTy binds))
-      outputTy = if null recent then genTy else frequency [(4, elements recent), (1, genTy)]
+      outputTy =
+        if null recent then genTy else frequency [(4, elements recent), (1, genTy)]
   outputs <- traverse (\o -> outputTy >>= \t -> NOutput o t <$> genAtom scope t) outNames
   pure
     NModule
@@ -1005,9 +1053,9 @@ trickyNames =
 uniquify :: Set Name -> [Text] -> [Name]
 uniquify _ [] = []
 uniquify used (t : ts) = n : uniquify (Set.insert n used) ts
-  where
-    n = primed t
-    primed c = if Name c `Set.member` used then primed (c <> "'") else Name c
+ where
+  n = primed t
+  primed c = if Name c `Set.member` used then primed (c <> "'") else Name c
 
 genTy :: Gen Ty
 genTy =
@@ -1050,41 +1098,44 @@ genBinds scope (n : ns) = do
 -- placeholder until 'closeRegister' picks it from every bind.
 genRhs :: Map Ty [Name] -> Ty -> Gen NRhs
 genRhs scope t = frequency (shared <> specific)
-  where
-    atom = genAtom scope
-    atoms = traverse atom
-    widths = [w | TBitVec w <- Map.keys scope]
-    shared =
-      [ (2, NMux <$> atom TBool <*> atom t <*> atom t)
-      , (2, (`NReg` ALit (VBool False)) <$> genValue t)
+ where
+  atom = genAtom scope
+  atoms = traverse atom
+  widths = [w | TBitVec w <- Map.keys scope]
+  shared =
+    [ (2, NMux <$> atom TBool <*> atom t <*> atom t)
+    , (2, (`NReg` ALit (VBool False)) <$> genValue t)
+    ]
+  specific = case t of
+    TBitVec w ->
+      [ (3, NPrim <$> elements [BvAdd, BvSub, BvMul, BvAnd, BvOr, BvXor] <*> atoms [t, t])
+      , (2, NPrim <$> elements [BvNeg, BvNot] <*> atoms [t])
+      , (5, shiftAmount w >>= \k -> NPrim <$> elements [BvShl k, BvLshr k] <*> atoms [t])
+      , (3, extract w)
+      , (2, natIn 1 w >>= \n -> NPrim (BvZext w) <$> atoms [TBitVec n])
       ]
-    specific = case t of
-      TBitVec w ->
-        [ (3, NPrim <$> elements [BvAdd, BvSub, BvMul, BvAnd, BvOr, BvXor] <*> atoms [t, t])
-        , (2, NPrim <$> elements [BvNeg, BvNot] <*> atoms [t])
-        , (5, shiftAmount w >>= \k -> NPrim <$> elements [BvShl k, BvLshr k] <*> atoms [t])
-        , (3, extract w)
-        , (2, natIn 1 w >>= \n -> NPrim (BvZext w) <$> atoms [TBitVec n])
-        ]
-          <> [ (2, natIn 1 (w - 1) >>= \k -> NPrim BvConcat <$> atoms [TBitVec k, TBitVec (w - k)])
-             | w >= 2
-             ]
-          <> [(1, NPrim BvOfBool <$> atoms [TBool]) | w == 1]
-      _ ->
-        [ (3, NPrim <$> elements [BoolAnd, BoolOr, BoolXor, BoolEq] <*> atoms [TBool, TBool])
-        , (1, NPrim BoolNot <$> atoms [TBool])
-        , ( 3
-          , do
-              n <- elements (widths <> [1, 8])
-              op <- elements [BvEq, BvUlt, BvUle]
-              NPrim op <$> atoms [TBitVec n, TBitVec n]
-          )
-        ]
-    shiftAmount w = oneof [natIn 0 (w - 1), natIn w (w + 2)]
-    extract w = do
-      n <- elements (filter (>= w) widths <> [w .. w + 4])
-      lo <- natIn 0 (n - w)
-      NPrim (BvExtract (lo + w - 1) lo) <$> atoms [TBitVec n]
+        <> [ (2, natIn 1 (w - 1) >>= \k ->
+          NPrim BvConcat <$> atoms [TBitVec k, TBitVec (w - k)])
+           | w >= 2
+           ]
+        <> [(1, NPrim BvOfBool <$> atoms [TBool]) | w == 1]
+    _ ->
+      [ (3, NPrim <$> elements [BoolAnd, BoolOr, BoolXor, BoolEq]
+        <*> atoms [TBool, TBool])
+      , (1, NPrim BoolNot <$> atoms [TBool])
+      ,
+        ( 3
+        , do
+            n <- elements (widths <> [1, 8])
+            op <- elements [BvEq, BvUlt, BvUle]
+            NPrim op <$> atoms [TBitVec n, TBitVec n]
+        )
+      ]
+  shiftAmount w = oneof [natIn 0 (w - 1), natIn w (w + 2)]
+  extract w = do
+    n <- elements (filter (>= w) widths <> [w .. w + 4])
+    lo <- natIn 0 (n - w)
+    NPrim (BvExtract (lo + w - 1) lo) <$> atoms [TBitVec n]
 
 closeRegister :: Map Ty [Name] -> NBind -> Gen NBind
 closeRegister scope b = case nbRhs b of
@@ -1094,14 +1145,14 @@ closeRegister scope b = case nbRhs b of
 -- | Keep only the binds some output depends on.
 pruneDead :: [NOutput] -> [NBind] -> [NBind]
 pruneDead outputs binds = filter ((`Set.member` live) . nbName) binds
-  where
-    deps = Map.fromList [(nbName b, toListOf (nbRhsL . rhsAtoms . _AVar) b) | b <- binds]
-    live = reach Set.empty [n | NOutput _ _ (AVar n) <- outputs]
-    reach seen = \case
-      [] -> seen
-      n : rest
-        | n `Set.member` seen -> reach seen rest
-        | otherwise -> reach (Set.insert n seen) (Map.findWithDefault [] n deps <> rest)
+ where
+  deps = Map.fromList [(nbName b, toListOf (nbRhsL . rhsAtoms . _AVar) b) | b <- binds]
+  live = reach Set.empty [n | NOutput _ _ (AVar n) <- outputs]
+  reach seen = \case
+    [] -> seen
+    n : rest
+      | n `Set.member` seen -> reach seen rest
+      | otherwise -> reach (Set.insert n seen) (Map.findWithDefault [] n deps <> rest)
 
 ----------------------------------------------------------------------
 -- precondition violations
@@ -1112,7 +1163,9 @@ preconditionSpec = do
     it ("reports " <> label <> " as a netlist error") $
       buildNetlist nm `shouldFailMentioning` culprit
   it "names the offending bind in the error context" $
-    errContext <$> either Just (const Nothing) (buildNetlist (singleBind (bv 8) (NPrim BvAdd [a8])))
+    errContext
+      <$> either Just (const Nothing) (buildNetlist (singleBind (bv 8) (NPrim BvAdd
+        [a8])))
       `shouldBe` Just ["in bind " <> tshow ("r" :: Text)]
 
 -- | Label, a module that breaks the builder's precondition, and a word the
@@ -1122,20 +1175,40 @@ violations =
   [ ("an unknown variable", singleBind (bv 8) (NPrim BvAdd [AVar "nope", a8]), "nope")
   , ("a non-scalar bind type", singleBind (TProd [bv 8, bv 8]) (NAtom a8), "TProd")
   , ("a zero-width type", singleBind (TBitVec 0) (NAtom a8), "TBitVec 0")
-  , ("a signal primitive", singleBind (bv 8) (NPrim (SigRegister (VBV 8 0)) [a8]), "sig.register")
+  ,
+    ( "a signal primitive"
+    , singleBind (bv 8) (NPrim (SigRegister (VBV 8 0)) [a8])
+    , "sig.register"
+    )
   , ("an unsaturated primitive", singleBind (bv 8) (NPrim BvAdd [a8]), "bv.add")
-  , ("bv.extract with hi below lo", singleBind (bv 4) (NPrim (BvExtract 2 5) [a8]), "bv.extract")
-  , ("bv.extract past the operand width", singleBind (bv 9) (NPrim (BvExtract 8 0) [a8]), "8 0")
+  ,
+    ( "bv.extract with hi below lo"
+    , singleBind (bv 4) (NPrim (BvExtract 2 5) [a8])
+    , "bv.extract"
+    )
+  ,
+    ( "bv.extract past the operand width"
+    , singleBind (bv 9) (NPrim (BvExtract 8 0) [a8])
+    , "8 0"
+    )
   , ("a shift of a Bool", singleBind TBool (NPrim (BvShl 1) [pB]), "TBool")
   , ("a tuple register value", singleBind TBool (NReg pair pB), "Tuple")
   , ("an out-of-range literal", singleBind (bv 8) (NAtom (lit8 256)), "256")
-  , ("a duplicated bind name", (singleBind (bv 8) (NAtom a8)) {nmBinds = [rBind, rBind]}, "\"r\"")
-  , ("a bind named like an input", (singleBind (bv 8) (NAtom a8)) {nmBinds = [aBind]}, "\"a\"")
+  ,
+    ( "a duplicated bind name"
+    , (singleBind (bv 8) (NAtom a8)) {nmBinds = [rBind, rBind]}
+    , "\"r\""
+    )
+  ,
+    ( "a bind named like an input"
+    , (singleBind (bv 8) (NAtom a8)) {nmBinds = [aBind]}
+    , "\"a\""
+    )
   ]
-  where
-    rBind = NBind "r" (bv 8) (NAtom a8)
-    aBind = NBind "a" (bv 8) (NAtom b8)
-    pair = VTuple [VBool True, VBool False]
+ where
+  rBind = NBind "r" (bv 8) (NAtom a8)
+  aBind = NBind "a" (bv 8) (NAtom b8)
+  pair = VTuple [VBool True, VBool False]
 
 -- | The build fails in the netlist stage with a message containing the
 -- given text.
@@ -1155,7 +1228,9 @@ headerSpec = do
     case buildNetlist counterNormal of
       Left e -> expectationFailure (show e)
       Right m -> goldenText "netlist/counter.header" (Text.unlines (modHeader m))
-  it "[nl-header] tags and neutralises a statement with CR, U+202E and a verilator lint_off line" $
+  it
+    "[nl-header] tags and neutralises a statement with CR, U+202E and a verilator \
+      \lint_off line" $
     headerFor hostile
       `shouldBe` Right
         ( [ "generated by gin 0.1.0.0"
@@ -1172,7 +1247,8 @@ headerSpec = do
           ]
             <> notices
         )
-  it "[nl-header] neutralises line breaks and controls in the theorem and axiom names" $ do
+  it "[nl-header] neutralises line breaks and controls in the theorem and axiom \
+    \names" $ do
     let cert =
           Certificate
             { certTheorem = "Counter.counter_correct\n// verilator lint_off"
@@ -1195,11 +1271,13 @@ headerSpec = do
         )
   it "[nl-header] names the package version from gin.cabal" $ do
     cabal <- Text.readFile "gin.cabal"
-    let versions = [Text.strip v | l <- Text.lines cabal, Just v <- [Text.stripPrefix "version:" l]]
+    let versions = [Text.strip v | l <- Text.lines cabal, Just v <-
+          [Text.stripPrefix "version:" l]]
     fmap (take 1) (headerFor (testCertificate "T.t"))
       `shouldBe` Right ["generated by gin " <> Text.concat (take 1 versions)]
     length versions `shouldBe` 1
-  it "[nl-header] has no statement or spec lines for an empty statement and no definitions" $ do
+  it "[nl-header] has no statement or spec lines for an empty statement and no \
+    \definitions" $ do
     let cert = Certificate "T.t" "" [] [] []
     headerFor cert
       `shouldBe` Right
@@ -1216,7 +1294,8 @@ headerSpec = do
     case headerFor specCertificate of
       Left e -> expectationFailure (show e)
       Right header -> goldenText "netlist/counter_spec.header" (Text.unlines header)
-  it "[nl-header-spec] lists every line of every definition, in order, before the spec hash" $
+  it "[nl-header-spec] lists every line of every definition, in order, before the spec \
+    \hash" $
     headerFor specCertificate
       `shouldBe` Right
         ( [ "generated by gin 0.1.0.0"
@@ -1227,7 +1306,8 @@ headerSpec = do
           , "spec: Counter.count : (Nat \8594 Bool) \8594 Nat \8594 BitVec 8 :="
           , "spec:   fun en t =>"
           , "spec:     Nat.rec (BitVec.ofNat 8 0)"
-          , "spec:       (fun n acc => cond (en n) (HAdd.hAdd acc (BitVec.ofNat 8 1)) acc) t"
+          , "spec:       (fun n acc => cond (en n) (HAdd.hAdd acc (BitVec.ofNat 8 1)) \
+            \acc) t"
           , "spec: Counter.spec : (Nat \8594 Bool) \8594 Nat \8594 BitVec 8 :="
           , "spec:   fun en t => Counter.count en t"
           , "spec hash: " <> certificateSpecHash specCertificate
@@ -1236,14 +1316,18 @@ headerSpec = do
           ]
             <> notices
         )
-  it "[nl-header-spec] states the spec hash as 64 lowercase hex digits of certificateSpecHash" $ do
+  it
+    "[nl-header-spec] states the spec hash as 64 lowercase hex digits of \
+      \certificateSpecHash" $ do
     let hashes = filter ("spec hash: " `Text.isPrefixOf`) <$> headerFor specCertificate
     hashes `shouldBe` Right ["spec hash: " <> certificateSpecHash specCertificate]
     let digits = Text.drop (Text.length "spec hash: ") . Text.concat <$> hashes
     Text.length <$> digits `shouldBe` Right 64
     Text.all (`elem` ("0123456789abcdef" :: String)) <$> digits `shouldBe` Right True
-  it "[nl-header-spec] changes the spec line and the spec hash when one definition changes" $ do
-    let redefined = specCertificate {certSpecDefs = fmap bump (certSpecDefs specCertificate)}
+  it "[nl-header-spec] changes the spec line and the spec hash when one definition \
+    \changes" $ do
+    let redefined = specCertificate {certSpecDefs =
+          fmap bump (certSpecDefs specCertificate)}
         bump d = d {specDefBody = Text.replace "ofNat 8 1" "ofNat 8 2" (specDefBody d)}
         differing = do
           before <- headerFor specCertificate
@@ -1256,12 +1340,14 @@ headerSpec = do
         hashLine c = "spec hash: " <> certificateSpecHash c
     certificateSpecHash redefined `shouldSatisfy` (/= certificateSpecHash specCertificate)
     differing
-      `shouldBe` Right [(step "1", step "2"), (hashLine specCertificate, hashLine redefined)]
+      `shouldBe` Right [(step "1", step "2"), (hashLine specCertificate
+        , hashLine redefined)]
   it "[nl-header-spec] tags and neutralises definition bodies like the statement" $ do
     let cert =
           specCertificate
             { certSpecDefs =
-                [ SpecDef "Evil.spec" "Evil.spec :=\r\n  0 -- \x202E\&1\n// verilator lint_off"
+                [ SpecDef "Evil.spec" "Evil.spec :=\r\n  0 -- \x202E\&1\n// verilator \
+                  \lint_off"
                 , SpecDef "Evil.more" "*/ Evil.more\x2028:= \x85\&1\n"
                 ]
             }
@@ -1280,36 +1366,42 @@ headerSpec = do
         , "validation: run gin validate with the exported vectors"
         ]
   modifyMaxSuccess (const 1000) $
-    prop "[nl-header-spec] tags every line and leaves no control, format or separator character" $
+    prop
+      "[nl-header-spec] tags every line and leaves no control, format or separator \
+        \character" $
       forAll genCertificate $ \cert -> case headerFor cert of
         Left e -> counterexample (show e) False
         Right header ->
           let statementLines = length (Text.lines (certStatement cert))
-              specLines = sum (fmap (length . Text.lines . specDefBody) (certSpecDefs cert))
+              specLines =
+                sum (fmap (length . Text.lines . specDefBody) (certSpecDefs cert))
               tags =
                 ["generated by gin ", "top: ", "theorem: "]
                   <> replicate statementLines "statement: "
                   <> replicate specLines "spec: "
-                  <> ["spec hash: ", "axioms: ", "impl axioms: ", "certificate: ", "validation: "]
+                  <> ["spec hash: ", "axioms: ", "impl axioms: ", "certificate: "
+                    , "validation: "]
            in counterexample (show header) $
                 conjoin
                   [ length header === length tags
-                  , counterexample "untagged line" (and (zipWith Text.isPrefixOf tags header))
-                  , counterexample "unsafe character" (not (any (Text.any unsafeChar) header))
+                  , counterexample "untagged line" (and (zipWith Text.isPrefixOf tags
+                    header))
+                  , counterexample "unsafe character" (not (any (Text.any unsafeChar)
+                    header))
                   , counterexample "spec hash" $
                       ("spec hash: " <> certificateSpecHash cert) `elem` header
                   ]
-  where
-    hostile =
-      Certificate
-        { certTheorem = "Counter.counter_correct"
-        , certStatement =
-            "\8704 t,\r\n  impl t = spec t\n// verilator lint_off WIDTH\n\
-            \/* verilator lint_off UNUSED */\nabc\x202E\&def"
-        , certAxioms = ["propext", "Quot.sound"]
-        , certImplAxioms = ["propext"]
-        , certSpecDefs = []
-        }
+ where
+  hostile =
+    Certificate
+      { certTheorem = "Counter.counter_correct"
+      , certStatement =
+          "\8704 t,\r\n  impl t = spec t\n// verilator lint_off WIDTH\n\
+          \/* verilator lint_off UNUSED */\nabc\x202E\&def"
+      , certAxioms = ["propext", "Quot.sound"]
+      , certImplAxioms = ["propext"]
+      , certSpecDefs = []
+      }
 
 -- | The last two header lines: what gin did not check, and how to check it.
 notices :: [Text]
@@ -1327,7 +1419,8 @@ specCertificate =
   Certificate
     { certTheorem = "Counter.counter_correct"
     , certStatement =
-        "\8704 (en : Nat \8594 Bool) (t : Nat),\n  Eq (Counter.counter en t) (Counter.spec en t)"
+        "\8704 (en : Nat \8594 Bool) (t : Nat),\n  Eq (Counter.counter en t) \
+          \(Counter.spec en t)"
     , certAxioms = ["propext", "Classical.choice", "Quot.sound"]
     , certImplAxioms = ["propext"]
     , certSpecDefs =
@@ -1347,7 +1440,8 @@ specCertificate =
 -- | Check the counter built from its normal form with 'specCertificate',
 -- whose header lists spec definitions and the spec hash.
 withSpecCounter :: (Module -> Expectation) -> Expectation
-withSpecCounter check = case buildNetlist counterNormal {nmCertificate = specCertificate} of
+withSpecCounter check = case buildNetlist counterNormal {nmCertificate =
+  specCertificate} of
   Left e -> expectationFailure (show e)
   Right m -> check m
 
@@ -1368,31 +1462,33 @@ genCertificate =
     <*> listOf genText
     <*> listOf genText
     <*> (chooseInt (0, 4) >>= (`vectorOf` (SpecDef <$> genShortText <*> genShortText)))
-  where
-    genShortText = scale (`div` 2) genText
-    genText =
-      Text.concat <$> listOf (oneof [Text.pack <$> listOf arbitraryUnicodeChar, elements specials])
-    specials =
-      [ "\n"
-      , "\r"
-      , "\r\n"
-      , "\t"
-      , "\x85"
-      , "\x202E"
-      , "\x200B"
-      , "\xFEFF"
-      , "\x2028"
-      , "\x2029"
-      , "\xE000"
-      , "\x0378"
-      , "*/"
-      , "// verilator lint_off WIDTH"
-      , "-- pragma translate_off"
-      ]
+ where
+  genShortText = scale (`div` 2) genText
+  genText =
+    Text.concat
+      <$> listOf (oneof [Text.pack <$> listOf arbitraryUnicodeChar, elements specials])
+  specials =
+    [ "\n"
+    , "\r"
+    , "\r\n"
+    , "\t"
+    , "\x85"
+    , "\x202E"
+    , "\x200B"
+    , "\xFEFF"
+    , "\x2028"
+    , "\x2029"
+    , "\xE000"
+    , "\x0378"
+    , "*/"
+    , "// verilator lint_off WIDTH"
+    , "-- pragma translate_off"
+    ]
 
 -- | Characters the header must not carry: Unicode categories Cc, Cf, Zl,
 -- Zp, Cs, Co and Cn.
 unsafeChar :: Char -> Bool
 unsafeChar c =
   generalCategory c
-    `elem` [Control, Format, LineSeparator, ParagraphSeparator, Surrogate, PrivateUse, NotAssigned]
+    `elem` [Control, Format, LineSeparator, ParagraphSeparator, Surrogate, PrivateUse
+      , NotAssigned]

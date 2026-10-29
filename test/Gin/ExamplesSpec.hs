@@ -23,20 +23,23 @@ import Gin.Vectors (Cycle (..), Vectors (..))
 import Test.Hspec
 
 netlists :: [(String, Module)]
-netlists = [("counter", counterNetlist), ("mac", macNetlist), ("detector", detectorNetlist)]
+netlists =
+  [("counter", counterNetlist), ("mac", macNetlist), ("detector", detectorNetlist)]
 
 normals :: [(String, NModule)]
 normals = [("counter", counterNormal), ("mac", macNormal), ("detector", detectorNormal)]
 
 vectors :: [(String, Vectors)]
-vectors = [("counter", counterVectors), ("mac", macVectors), ("detector", detectorVectors)]
+vectors =
+  [("counter", counterVectors), ("mac", macVectors), ("detector", detectorVectors)]
 
 moduleIdents :: Module -> [Ident]
 moduleIdents m =
   modName m
     : modClock m
     : modReset m
-    : fmap netName (modInputs m <> fmap outNet (modOutputs m) <> fmap declNet (modDecls m))
+    : fmap netName (modInputs m <> fmap outNet (modOutputs m)
+      <> fmap declNet (modDecls m))
 
 spec :: Spec
 spec = do
@@ -60,5 +63,5 @@ spec = do
           || fmap valueTy (cycOutputs c) /= fmap portTy (vecOutputs vs)
       ]
         `shouldBe` []
-  where
-    for_ xs f = mapM_ f xs
+ where
+  for_ xs f = mapM_ f xs

@@ -110,7 +110,8 @@ def freshName (fv : FVarId) : TrM String := do
     while used.contains s!"{base}_{k}" do
       k := k + 1
     name := s!"{base}_{k}"
-  modify fun st => { st with names := st.names.insert fv name, used := st.used.insert name }
+  modify fun st =>
+    { st with names := st.names.insert fv name, used := st.used.insert name }
   return name
 
 /-- The IR name of a bound variable. -/
@@ -142,7 +143,9 @@ def isCanonical (e canonical : Lean.Expr) : MetaM Bool :=
 def domainName (d : Lean.Expr) : TrM String := do
   match ← whnf (mkApp (mkConst ``Gin.Domain.name) d) with
   | .lit (.strVal s) => return s
-  | n => trFail m!"the name of clock domain {d} does not reduce to a string literal (got {n})"
+  | n =>
+    trFail m!"the name of clock domain {d} does not reduce to a string literal \
+      (got {n})"
 
 /-- The name and period of a clock domain. The period must be at most
 `maxJsonNumber` picoseconds (about 2.1 µs), the largest number gin reads. -/
@@ -150,7 +153,8 @@ def domainInfo (d : Lean.Expr) : TrM DomainInfo := do
   let name ← domainName d
   let period ← natValue (← whnf (mkApp (mkConst ``Gin.Domain.periodPs) d)) "clock period"
   unless period ≤ maxJsonNumber do
-    trFail m!"clock domain {d} ({repr name}) has a period of {period} ps; gin reads periods of at most {maxJsonNumber} ps"
+    trFail m!"clock domain {d} ({repr
+      name}) has a period of {period} ps; gin reads periods of at most {maxJsonNumber} ps"
   return { name, periodPs := period }
 
 /-- Unfold one reducible head (an `abbrev`), if any. Never unfolds
@@ -192,7 +196,9 @@ partial def trTy (ty : Lean.Expr) : TrM Ty := do
       return .fn (← trTy a) (← trTy b)
     match ← unfoldReducible? ty with
     | some ty' => trTy ty'
-    | none => trFail m!"unsupported type {ty}; only Bool, BitVec n, products, functions and Gin.Signal are"
+    | none =>
+      trFail m!"unsupported type {ty}; only Bool, BitVec n, products, functions \
+        and Gin.Signal are"
 
 /-- Does `ty` translate to an IR type? -/
 def isHardwareType (ty : Lean.Expr) : TrM Bool :=
@@ -222,7 +228,8 @@ partial def litValue (e : Lean.Expr) : TrM Value := do
   | _ => trFail m!"register and Mealy initial values must be literals, got {e}"
 
 /-- `prim op type` applied to `args`. -/
-def primApp (op : PrimOp) (type : Ty) (args : List Expr) : Expr := .app (.prim op type) args
+def primApp (op : PrimOp) (type : Ty) (args : List Expr) : Expr := .app (.prim op type)
+  args
 
 /-- Apply a translated head to already translated arguments. -/
 def applyTo (f : Expr) (args : List Expr) : Expr :=
@@ -314,7 +321,9 @@ partial def trExpr (e : Lean.Expr) : TrM Expr := do
   | .proj s _ _ => trFail m!"projection out of structure {s} is not supported"
   | .const .. | .app .. => trApp e
   | .lit (.natVal n) =>
-    trFail m!"natural number {n} in a hardware position; only Bool, BitVec and products are hardware values"
+    trFail
+      m!"natural number {n} in a hardware position; only Bool, BitVec and products are \
+        hardware values"
   | .lit (.strVal s) => trFail m!"string {repr s} in a hardware position"
   | _ => trFail m!"unsupported term {e}"
 
@@ -352,7 +361,8 @@ partial def trApp (e : Lean.Expr) : TrM Expr := do
   | _ => trFail m!"unsupported application {e}"
 
 /-- Translate an application headed by the constant `c`. -/
-partial def trConst (e : Lean.Expr) (c : Name) (us : List Level) (args : Array Lean.Expr) :
+partial def trConst (e : Lean.Expr) (c : Name) (us : List Level) (args : Array
+  Lean.Expr) :
     TrM Expr := do
   if (← read).exported.contains c then
     return applyTo (.global (← irName c)) (← args.toList.mapM trExpr)
@@ -385,7 +395,8 @@ partial def trPrim (e : Lean.Expr) (c : Name) (args : Array Lean.Expr) : TrM Exp
   match c with
   | ``Neg.neg | ``Complement.complement | ``BitVec.neg | ``BitVec.not =>
     let (op, canonical) : PrimOp × Name :=
-      if c == ``Neg.neg || c == ``BitVec.neg then (.bvNeg, ``BitVec.neg) else (.bvNot, ``BitVec.not)
+      if c == ``Neg.neg || c == ``BitVec.neg then (.bvNeg, ``BitVec.neg) else (.bvNot,
+        ``BitVec.not)
     let ty := if args.size == 3 then args[0]! else mkApp (mkConst ``BitVec) args[0]!
     let some (w, n) ← bvWidth? ty
       | trFail m!"{c} at type {ty} is not supported; only BitVec arithmetic is hardware"
@@ -403,7 +414,9 @@ partial def trPrim (e : Lean.Expr) (c : Name) (args : Array Lean.Expr) : TrM Exp
     let some (w, n) ← bvWidth? ty
       | trFail m!"{c} at type {ty} is not supported; only BitVec shifts are hardware"
     unless ← isCanonical e (mkApp3 (mkConst canonical) w a k) do
-      trFail m!"{c} at type {ty} does not use the standard instance (shift amounts must be Nat numerals)"
+      trFail
+        m!"{c} at type {ty} does not use the standard instance (shift amounts must be \
+          Nat numerals)"
     -- Shifting by the width or more gives 0 (docs/semantics.md), so an amount
     -- past the width means the same as the width itself. Clamping keeps the
     -- number within what gin reads, which an amount such as 2^40 is not.
@@ -413,16 +426,20 @@ partial def trPrim (e : Lean.Expr) (c : Name) (args : Array Lean.Expr) : TrM Exp
   | ``HAppend.hAppend | ``BitVec.append =>
     let (tyA, tyB, a, b) :=
       if c == ``HAppend.hAppend then (args[0]!, args[1]!, args[4]!, args[5]!)
-      else (mkApp (mkConst ``BitVec) args[0]!, mkApp (mkConst ``BitVec) args[1]!, args[2]!, args[3]!)
+      else (mkApp (mkConst ``BitVec) args[0]!, mkApp (mkConst ``BitVec) args[1]!,
+        args[2]!, args[3]!)
     let some (wa, na) ← bvWidth? tyA
-      | trFail m!"{c} at type {tyA} is not supported; only BitVec concatenation is hardware"
+      | trFail m!"{c} at type {tyA} is not supported; only BitVec concatenation \
+          is hardware"
     let some (wb, nb) ← bvWidth? tyB
-      | trFail m!"{c} at type {tyB} is not supported; only BitVec concatenation is hardware"
+      | trFail m!"{c} at type {tyB} is not supported; only BitVec concatenation \
+          is hardware"
     unless ← isCanonical e (mkApp4 (mkConst ``BitVec.append) wa wb a b) do
       trFail m!"{c} at type {tyA} does not use the standard instance"
     unless na + nb ≤ maxWidth do
       trFail m!"concatenation width {na + nb} exceeds {maxWidth}"
-    return primApp .bvConcat (.funs [.bv na, .bv nb] (.bv (na + nb))) [← trExpr a, ← trExpr b]
+    return primApp .bvConcat (.funs [.bv na, .bv nb] (.bv (na + nb))) [← trExpr a, ←
+      trExpr b]
   | ``BitVec.setWidth =>
     let n ← widthValue args[0]!
     let m ← widthValue args[1]!
@@ -437,14 +454,16 @@ partial def trPrim (e : Lean.Expr) (c : Name) (args : Array Lean.Expr) : TrM Exp
     let lo ← natValue args[2]! "extract bound"
     unless lo ≤ hi && hi < n do
       trFail m!"extractLsb {hi} {lo} of a {n}-bit vector needs {n} > hi ≥ lo"
-    return primApp (.bvExtract hi lo) (.fn (.bv n) (.bv (hi - lo + 1))) [← trExpr args[3]!]
+    return primApp (.bvExtract hi lo) (.fn (.bv n) (.bv (hi - lo + 1))) [← trExpr
+      args[3]!]
   | ``BitVec.extractLsb' =>
     let n ← widthValue args[0]!
     let start ← natValue args[1]! "extract start"
     let len ← widthValue args[2]!
     unless start + len ≤ n do
       trFail m!"extractLsb' {start} {len} of a {n}-bit vector reads past bit {n - 1}"
-    return primApp (.bvExtract (start + len - 1) start) (.fn (.bv n) (.bv len)) [← trExpr args[3]!]
+    return primApp (.bvExtract (start + len - 1) start) (.fn (.bv n) (.bv len)) [←
+      trExpr args[3]!]
   | ``BitVec.ult | ``BitVec.ule =>
     let n ← widthValue args[0]!
     let op := if c == ``BitVec.ult then PrimOp.bvUlt else PrimOp.bvUle
@@ -452,18 +471,23 @@ partial def trPrim (e : Lean.Expr) (c : Name) (args : Array Lean.Expr) : TrM Exp
   | ``BitVec.ofBool => return primApp .bvOfBool (.fn .bool (.bv 1)) [← trExpr args[0]!]
   | ``BitVec.ofNat | ``OfNat.ofNat =>
     if c == ``OfNat.ofNat && (← bvWidth? args[0]!).isNone then
-      trFail m!"numeral {e} has type {args[0]!}; only Bool, BitVec and products are hardware values"
+      trFail
+        m!"numeral {e} has type {args[0]!}; only Bool, BitVec and products are hardware \
+          values"
     return .lit (← litValue e)
   | ``Bool.true => return .lit (.bool true)
   | ``Bool.false => return .lit (.bool false)
   | ``Bool.and | ``Bool.or | ``Bool.xor =>
-    let op := if c == ``Bool.and then PrimOp.boolAnd else if c == ``Bool.or then .boolOr else .boolXor
+    let op := if c == ``Bool.and then PrimOp.boolAnd else if c == ``Bool.or then
+      .boolOr else .boolXor
     return primApp op (.funs [.bool, .bool] .bool) [← trExpr args[0]!, ← trExpr args[1]!]
   | ``Bool.not => return notE (← trExpr args[0]!)
   | ``BEq.beq | ``bne =>
     let inst := (← instantiateMVars args[1]!).consumeMData
     unless inst.isAppOfArity ``instBEqOfDecidableEq 2 do
-      trFail m!"{c} at type {args[0]!} must use the BEq instance derived from DecidableEq, got {inst}"
+      trFail
+        m!"{c} at type {args[0]!} must use the BEq instance derived from DecidableEq, \
+          got {inst}"
     let eq ← trEq args[0]! args[2]! args[3]!
     return if c == ``bne then notE eq else eq
   | ``decide => trProp args[0]!
@@ -496,7 +520,8 @@ partial def trPrim (e : Lean.Expr) (c : Name) (args : Array Lean.Expr) : TrM Exp
     let init ← litValue args[2]!
     unless init.ty == a do
       trFail m!"register initial value {args[2]!} does not have type {args[1]!}"
-    return primApp (.sigRegister init) (.fn (.signal d a) (.signal d a)) [← trExpr args[3]!]
+    return primApp (.sigRegister init) (.fn (.signal d a) (.signal d a)) [← trExpr
+      args[3]!]
   | ``Gin.mealy =>
     let d ← domainName args[0]!
     let s ← trTy args[1]!
@@ -519,12 +544,16 @@ partial def checkIfType (e ty : Lean.Expr) : TrM Unit := do
     | _ => false
   let t ← trTy ty
   unless valueTy t do
-    trFail m!"if-then-else {e} chooses between values of type {ty}; only Bool, BitVec and products of these can be chosen (apply a function-typed if to its arguments, and choose inside `lift` rather than between signals)"
+    trFail
+      m!"if-then-else {e} chooses between values of type {ty}; only Bool, BitVec and \
+        products of these can be chosen (apply a function-typed if to its arguments, \
+          and choose inside `lift` rather than between signals)"
 
 /-- `ite`/`cond` applied to more arguments than it takes: rebuild it with
 the extra arguments applied (and beta-reduced) in each branch, at the
 branches' result type. -/
-partial def pushIntoBranches (c : Name) (now extra : Array Lean.Expr) : TrM Lean.Expr := do
+partial def pushIntoBranches (c : Name) (now extra : Array Lean.Expr) : TrM Lean.Expr
+  := do
   let (tIdx, eIdx) := if c == ``ite then (3, 4) else (2, 3)
   let t := (mkAppN now[tIdx]! extra).headBeta
   let f := (mkAppN now[eIdx]! extra).headBeta
@@ -555,7 +584,8 @@ partial def trProp (p : Lean.Expr) : TrM Expr := do
   | Eq ty a b => trEq ty a b
   | Ne ty a b => return notE (← trEq ty a b)
   | Not q => return notE (← trProp q)
-  | And q r => return primApp .boolAnd (.funs [.bool, .bool] .bool) [← trProp q, ← trProp r]
+  | And q r => return primApp .boolAnd (.funs [.bool, .bool] .bool) [← trProp q, ←
+    trProp r]
   | Or q r => return primApp .boolOr (.funs [.bool, .bool] .bool) [← trProp q, ← trProp r]
   | LT.lt ty _ a b => trCompare p ty ``LT.lt ``instLTBitVec .bvUlt a b
   | LE.le ty _ a b => trCompare p ty ``LE.le ``instLEBitVec .bvUle a b
@@ -565,13 +595,16 @@ partial def trProp (p : Lean.Expr) : TrM Expr := do
 
 /-- An unsigned comparison `lhs op rhs` on `BitVec n`, at the standard
 order instance. With `swap`, `p` is `rhs > lhs` (or `≥`) as written. -/
-partial def trCompare (p ty : Lean.Expr) (rel inst : Name) (op : PrimOp) (lhs rhs : Lean.Expr)
+partial def trCompare (p ty : Lean.Expr) (rel inst : Name) (op : PrimOp) (lhs rhs :
+  Lean.Expr)
     (swap : Bool := false) : TrM Expr := do
   let some (w, n) ← bvWidth? ty
-    | trFail m!"comparison {p} at type {ty} is not supported; only BitVec comparisons are hardware"
+    | trFail m!"comparison {p} at type {ty} is not supported; only BitVec \
+        comparisons are hardware"
   let (a, b) := if swap then (rhs, lhs) else (lhs, rhs)
   let canonical :=
-    mkApp4 (mkConst rel [Level.zero]) (mkApp (mkConst ``BitVec) w) (mkApp (mkConst inst) w) a b
+    mkApp4 (mkConst rel [Level.zero]) (mkApp (mkConst ``BitVec) w) (mkApp (mkConst
+      inst) w) a b
   unless ← isCanonical p canonical do
     trFail m!"comparison {p} does not use the standard order on BitVec"
   return primApp op (.funs [.bv n, .bv n] .bool) [← trExpr lhs, ← trExpr rhs]
@@ -581,7 +614,9 @@ the alternative applied to the two projections. Any other pattern match
 is an error naming the matcher. -/
 partial def trMatcher (e : Lean.Expr) (c : Name) : TrM Expr := do
   let unsupported : TrM Expr :=
-    trFail m!"pattern match {c} is not supported; only destructuring one pair, `let (a, b) := p`, is"
+    trFail
+      m!"pattern match {c} is not supported; only destructuring one pair, `let (a, b) \
+        := p`, is"
   let some m ← matchMatcherApp? e | unsupported
   unless m.discrs.size == 1 && m.alts.size == 1 && m.altNumParams == #[2] do
     return ← unsupported
@@ -603,15 +638,18 @@ partial def trMatcher (e : Lean.Expr) (c : Name) : TrM Expr := do
 /-- Inline a definition. This terminates because the definitions of a Lean
 environment cannot refer to themselves: recursion is compiled to recursors
 or `WellFounded.fix`, which are rejected. -/
-partial def inlineConst (c : Name) (us : List Level) (args : Array Lean.Expr) : TrM Expr := do
+partial def inlineConst (c : Name) (us : List Level) (args : Array Lean.Expr) : TrM
+  Expr := do
   if c == ``dite then
-    trFail m!"dependent if-then-else (`if h : c then …`) is not supported; use `if c then …`"
+    trFail
+      m!"dependent if-then-else (`if h : c then …`) is not supported; use `if c then …`"
   let env ← getEnv
   if isAuxRecursor env c || isRecCore env c || isCasesOnRecursor env c then
     trFail m!"recursor {c} is not supported (recursive definitions are not hardware)"
   let some ci := env.find? c | trFail m!"unknown constant {c}"
   let .defnInfo d := ci
-    | trFail m!"unsupported constant {c}: it has no definition to inline (constructors, opaque definitions, axioms and theorems are not hardware)"
+    | trFail m!"unsupported constant {c}: it has no definition to inline \
+        (constructors, opaque definitions, axioms and theorems are not hardware)"
   unless d.safety == .safe do
     trFail m!"unsupported constant {c}: unsafe and partial definitions are not hardware"
   let value := ci.instantiateValueLevelParams! us

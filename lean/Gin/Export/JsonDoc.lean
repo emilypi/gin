@@ -44,7 +44,8 @@ def escape (s : String) : String :=
     | '\t' => acc ++ "\\t"
     | c =>
       if c.toNat < 0x20 then
-        acc ++ "\\u00" ++ (hexDigit (c.toNat / 16)).toString ++ (hexDigit (c.toNat % 16)).toString
+        acc ++ "\\u00" ++ (hexDigit (c.toNat / 16)).toString ++ (hexDigit (c.toNat %
+          16)).toString
       else acc.push c
 
 /-- A quoted, escaped JSON string. -/
@@ -57,7 +58,8 @@ partial def compact : JsonDoc → String
   | .nat n => toString n
   | .str s => quote s
   | .arr xs => "[" ++ ", ".intercalate (xs.map compact) ++ "]"
-  | .obj kvs => "{" ++ ", ".intercalate (kvs.map fun (k, v) => quote k ++ ": " ++ compact v) ++ "}"
+  | .obj kvs => "{" ++ ", ".intercalate (kvs.map fun (k, v) => quote k ++ ": " ++
+    compact v) ++ "}"
 
 /-- Render at the given indentation, assuming the cursor is at column `col`.
 A value is written on one line when that line stays within `width`

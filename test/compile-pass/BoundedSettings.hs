@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+
 module BoundedSettings where
 
 import Control.Lens (set, view)

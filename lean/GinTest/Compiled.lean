@@ -30,19 +30,22 @@ run_meta do
   expectError (translateTop (entry `viaExtern))
     ["GinTest.Fixture.Overrides.incExtern is marked @[extern]"]
   expectError (translateTop (entry `viaCsimp))
-    ["GinTest.Fixture.Overrides.incSlow_eq_incFast replaces GinTest.Fixture.Overrides.incSlow"]
+    ["GinTest.Fixture.Overrides.incSlow_eq_incFast replaces \
+      GinTest.Fixture.Overrides.incSlow"]
   expectError (translateTop (entry `viaCoreCsimp))
     ["GinTest.Fixture.Overrides.bvNot_eq replaces BitVec.not"]
   discard <| translateTop (entry `plain)
 
 -- the same refusals, read as `gin-check-export` reads the modules
 run_meta do
-  let env ← importModules #[{ module := `GinTest.Fixture.Overrides }] {} (loadExts := false)
+  let env ← importModules #[{ module := `GinTest.Fixture.Overrides }] {} (loadExts :=
+    false)
   let reasons (top : Name) := compiledOverrides env #[`GinTest.Fixture.Overrides ++ top]
   unless (reasons `viaImplementedBy).size == 1 && (reasons `viaExtern).size == 1 &&
       (reasons `viaCsimp).size == 1 && (reasons `viaCoreCsimp).size == 1 &&
       (reasons `plain).isEmpty do
-    throwError "compiledOverrides on the imported fixture: {[`viaImplementedBy, `viaExtern,
+    throwError "compiledOverrides on the imported fixture: {[`viaImplementedBy,
+      `viaExtern,
       `viaCsimp, `viaCoreCsimp, `plain].map reasons}"
 
 /-- An entry for the one-input design `top` of the native reduction
@@ -61,23 +64,30 @@ run_meta do
 
 -- the same, read as `gin-check-export` reads the modules
 run_meta do
-  let env ← importModules #[{ module := `GinTest.Fixture.NativeReduction }] {} (loadExts := false)
-  let found (top : Name) := nativeReductions env #[`GinTest.Fixture.NativeReduction ++ top]
-  unless found `viaReduceBool == #[(`GinTest.Fixture.NativeReduction.boolDomain, ``Lean.reduceBool)]
-      && found `viaReduceNat == #[(`GinTest.Fixture.NativeReduction.natDomain, ``Lean.reduceNat)] do
-    throwError "nativeReductions on the imported fixture: {found `viaReduceBool}, {found `viaReduceNat}"
+  let env ← importModules #[{ module := `GinTest.Fixture.NativeReduction }] {}
+    (loadExts := false)
+  let found (top : Name) := nativeReductions env #[`GinTest.Fixture.NativeReduction ++
+    top]
+  unless found `viaReduceBool == #[(`GinTest.Fixture.NativeReduction.boolDomain,
+    ``Lean.reduceBool)]
+      && found `viaReduceNat == #[(`GinTest.Fixture.NativeReduction.natDomain,
+        ``Lean.reduceNat)] do
+    throwError "nativeReductions on the imported fixture: {found
+      `viaReduceBool}, {found `viaReduceNat}"
 
 -- every unsafe, partial, extern and implemented_by constant of a
 -- project module is found, used by a design or not, as `gin-check-export`
 -- reads the modules; the exporter's own modules are not checked
 run_meta do
-  let env ← importModules #[{ module := `GinTest.Fixture.LinkedCode }, { module := `Gin.Export.Main }] {}
+  let env ← importModules #[{ module := `GinTest.Fixture.LinkedCode }, { module :=
+    `Gin.Export.Main }] {}
     (loadExts := false)
   let found := linkedCodeOverrides env
   let expected := #[(`GinTest.Fixture.LinkedCode, #[
     "GinTest.Fixture.LinkedCode.viaUnsafeIO is unsafe",
     "GinTest.Fixture.LinkedCode.viaPartial is partial",
-    "GinTest.Fixture.LinkedCode.viaImplementedBy is implemented by GinTest.Fixture.LinkedCode.other",
+    "GinTest.Fixture.LinkedCode.viaImplementedBy is implemented by \
+      GinTest.Fixture.LinkedCode.other",
     "GinTest.Fixture.LinkedCode.foreign calls foreign code (@[extern])"])]
   unless found == expected do
     throwError "linkedCodeOverrides on the imported fixture: {found}"

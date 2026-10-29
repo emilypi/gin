@@ -6,7 +6,6 @@
 -- Maintainer   : Emily Pillmore <emilypi@cohomolo.gy>
 -- Stability    : experimental
 -- Portability  : non-portable (GHC extensions)
---
 module Gin.DriverSpec (spec) where
 
 import Control.Concurrent (forkIO, killThread, threadDelay, yield)
@@ -87,78 +86,137 @@ optimizationSpec = describe "optimization CLI" $ do
     withTempDir $ \dir -> do
       source <- writeProgram dir "counter" counterProgram
       vectors <- writeVectors dir "counter" counterVectors
-      let bytes = "{\"format\":\"gin-policy/1\",\"objectives\":[{\"name\":\"ops\"}],\"search\":{\"iterations\":2,\"expansions\":1000}}"
+      let bytes =
+            "{\"format\":\"gin-policy/1\",\"objectives\":[{\"name\":\"ops\"}],\"search\":\
+              \{\"iterations\":2,\"expansions\":1000}}"
       policyFile <- writeRaw dir "policy.json" (Text.decodeUtf8 (LBS.toStrict bytes))
-      case decodePolicy bytes >>= \p -> normalize counterProgram >>= buildPortfolio p >>= selectCandidate Nothing of
+      case decodePolicy bytes >>= \p ->
+        normalize counterProgram >>= buildPortfolio p >>= selectCandidate Nothing of
         Left e -> expectationFailure (show e)
         Right candidate -> do
           let ident = Text.unpack (candidateId candidate)
               portfolioDir = dir </> "portfolio"
-              selected = ["--optimize",policyFile,"--candidate",ident]
-          result <- gin ["optimize",source,"--policy",policyFile,"--vectors",vectors,"-o",portfolioDir]
+              selected = ["--optimize", policyFile, "--candidate", ident]
+          result <-
+            gin ["optimize", source, "--policy", policyFile, "--vectors", vectors, "-o"
+              , portfolioDir]
           result `shouldExit` ExitSuccess
-          forM_ ["portfolio.json","policy.json","validation.json"] $ \name ->
+          forM_ ["portfolio.json", "policy.json", "validation.json"] $ \name ->
             doesFileExist (portfolioDir </> name) `shouldReturn` True
-          compiled <- gin (["compile",source,"-o",dir </> "selected"] <> selected)
+          compiled <- gin (["compile", source, "-o", dir </> "selected"] <> selected)
           compiled `shouldExit` ExitSuccess
-          forM_ ["v","sv","vhd"] $ \ext -> do
+          forM_ ["v", "sv", "vhd"] $ \ext -> do
             actual <- BS.readFile (dir </> "selected" </> "counter." <> ext)
             expected <- BS.readFile (portfolioDir </> ident </> "counter." <> ext)
             actual `shouldBe` expected
-          simulated <- gin (["sim",source,"--vectors",vectors] <> selected)
+          simulated <- gin (["sim", source, "--vectors", vectors] <> selected)
           simulated `shouldExit` ExitSuccess
-          bench <- gin (["testbench",source,"--vectors",vectors,"-o",dir </> "tb"] <> selected)
+          bench <-
+            gin (["testbench", source, "--vectors", vectors, "-o", dir </> "tb"]
+              <> selected)
           bench `shouldExit` ExitSuccess
-          again <- gin ["optimize",source,"--policy",policyFile,"-o",portfolioDir]
+          again <- gin ["optimize", source, "--policy", policyFile, "-o", portfolioDir]
           again `shouldExit` ExitFailure 1
-          wrong <- gin ["compile",source,"--optimize",policyFile,"--candidate","forged","-o",dir </> "wrong"]
+          wrong <-
+            gin ["compile", source, "--optimize", policyFile, "--candidate", "forged"
+              , "-o", dir </> "wrong"]
           wrong `shouldExit` ExitFailure 1
   it "rejects candidate selection without a policy" $
     withTempDir $ \dir -> do
       source <- writeProgram dir "counter" counterProgram
-      result <- gin ["compile",source,"--candidate","forged","-o",dir </> "unselected"]
+      result <-
+        gin ["compile", source, "--candidate", "forged", "-o", dir </> "unselected"]
       result `shouldExit` ExitFailure 1
       runErr result `shouldSatisfy` Text.isInfixOf "--candidate requires --optimize"
   it "validates the baseline even when every candidate is outside policy bounds" $
     withTempDir $ \dir -> do
       source <- writeProgram dir "counter" counterProgram
-      vectors <- writeVectors dir "counter" (counterExpecting [(0,99)])
-      policyFile <- writeRaw dir "policy.json" "{\"format\":\"gin-policy/1\",\"objectives\":[{\"name\":\"ops\"}],\"upperBounds\":[0]}"
-      result <- gin ["optimize",source,"--policy",policyFile,"--vectors",vectors,"-o",dir </> "portfolio"]
+      vectors <- writeVectors dir "counter" (counterExpecting [(0, 99)])
+      policyFile <-
+        writeRaw
+          dir
+          "policy.json"
+          "{\"format\":\"gin-policy/1\",\"objectives\":[{\"name\":\"ops\"}],\"upperBounds\
+            \\":[0]}"
+      result <-
+        gin ["optimize", source, "--policy", policyFile, "--vectors", vectors, "-o"
+          , dir </> "portfolio"]
       result `shouldExit` ExitFailure 1
       runOut result `shouldSatisfy` Text.isInfixOf "sim-normal: FAIL"
   it "rejects stateful pipelining and keeps missing proof tools unverified" $
     withTempDir $ \dir -> do
       source <- writeProgram dir "counter" counterProgram
-      policyFile <- writeRaw dir "policy.json" "{\"format\":\"gin-policy/1\",\"objectives\":[{\"name\":\"ops\"}]}"
-      pipeline <- gin ["pipeline",source,"--max-depth","1","-o",dir </> "pipeline"]
+      policyFile <-
+        writeRaw
+          dir
+          "policy.json"
+          "{\"format\":\"gin-policy/1\",\"objectives\":[{\"name\":\"ops\"}]}"
+      pipeline <- gin ["pipeline", source, "--max-depth", "1", "-o", dir </> "pipeline"]
       pipeline `shouldExit` ExitFailure 1
       runErr pipeline `shouldSatisfy` Text.isInfixOf "combinational kernel"
-      proof <- gin ["prove",source,"--optimize",policyFile,"-o",dir </> "proof"]
+      proof <- gin ["prove", source, "--optimize", policyFile, "-o", dir </> "proof"]
       proof `shouldExit` ExitFailure 1
       evidence <- BS.readFile (dir </> "proof" </> "evidence.json")
       evidence `shouldSatisfy` BS.isInfixOf "unverified"
   it "bounds pipeline warmup preparation by the simulation deadline" $
     withTempDir $ \dir -> do
       source <- writeProgram dir "boolchain" (booleanChain 4097)
-      vectors <- writeVectors dir "boolchain" (Vectors "boolchain" [Port "x" TBool] [Port "y" TBool]
-        [Cycle [VBool False] [VBool True]])
-      result <- gin ["pipeline",source,"--max-depth","1","--vectors",vectors,"--sim-timeout","1","-o",dir </> "pipeline"]
+      vectors <-
+        writeVectors
+          dir
+          "boolchain"
+          ( Vectors
+              "boolchain"
+              [Port "x" TBool]
+              [Port "y" TBool]
+              [Cycle [VBool False] [VBool True]]
+          )
+      result <-
+        gin
+          [ "pipeline"
+          , source
+          , "--max-depth"
+          , "1"
+          , "--vectors"
+          , vectors
+          , "--sim-timeout"
+          , "1"
+          , "-o"
+          , dir </> "pipeline"
+          ]
       result `shouldExit` ExitFailure 1
       runErr result `shouldSatisfy` Text.isInfixOf "timeout"
 
 booleanChain :: Int -> Program Ty Name
-booleanChain count = Program (Producer "gin-test" "n/a")
-  (TopEntity "boolchain" sysDomain [Port "x" TBool] [Port "y" TBool] "Chain.top")
-  [Def "Chain.top" (TFun (sig TBool) (sig TBool))
-    (ELam [("x",sig TBool)] (EApp (lift1 TBool TBool)
-      [ELam [(name 0,TBool)] (ELet
-        [Bind (name i) TBool (EApp (EPrim BoolNot (TFun TBool TBool)) [EVar (name (i-1))]) | i <- [1..count]]
-        (EVar (name count))), EVar "x"]))]
-  (testCertificate "Chain.correct")
-  where
-    name :: Int -> Name
-    name i = Name ("b" <> Text.pack (show i))
+booleanChain count =
+  Program
+    (Producer "gin-test" "n/a")
+    (TopEntity "boolchain" sysDomain [Port "x" TBool] [Port "y" TBool] "Chain.top")
+    [ Def
+        "Chain.top"
+        (TFun (sig TBool) (sig TBool))
+        ( ELam
+            [("x", sig TBool)]
+            ( EApp
+                (lift1 TBool TBool)
+                [ ELam
+                    [(name 0, TBool)]
+                    ( ELet
+                        [ Bind (name i) TBool (EApp (EPrim BoolNot (TFun TBool TBool))
+                          [EVar (name (i - 1))])
+                        | i <- [1 .. count]
+                        ]
+                        (EVar (name count))
+                    )
+                , EVar "x"
+                ]
+            )
+        )
+    ]
+    (testCertificate "Chain.correct")
+ where
+  name :: Int -> Name
+  name i = Name ("b" <> Text.pack (show i))
 
 ----------------------------------------------------------------------
 -- Exit codes and usage
@@ -190,7 +248,7 @@ exitCodeSpec = describe "exit codes" $ do
   it "[check-ports] check and compile both reject a top entity named clk or rst" $
     withTempDir $ \dir ->
       forM_ ["clk", "rst"] $ \name -> do
-        let p = counterProgram{progTop = (progTop counterProgram){topName = name}}
+        let p = counterProgram {progTop = (progTop counterProgram) {topName = name}}
         file <- writeProgram dir (Text.unpack name) p
         c <- gin ["check", file]
         c `shouldExit` ExitFailure 1
@@ -273,7 +331,8 @@ compileFilesSpec = describe "compile and testbench output" $ do
       file <- writeProgram dir "counter" counterProgram
       forM_
         [ (["--target", "verilog"], ["counter.v"])
-        , (["--target", "vhdl", "--target", "systemverilog"], ["counter.sv", "counter.vhd"])
+        , (["--target", "vhdl", "--target", "systemverilog"], ["counter.sv"
+          , "counter.vhd"])
         , (["--target", "vhdl", "--target", "vhdl"], ["counter.vhd"])
         , ([], ["counter.sv", "counter.v", "counter.vhd"])
         ]
@@ -310,7 +369,8 @@ compileFilesSpec = describe "compile and testbench output" $ do
                    ]
       written <- readText (out </> "counter_tb.vhd")
       written `shouldBe` backendTestbench vhdl m counterVectors
-  it "[cli-compile-files] writes nothing, and creates no directory, when compiling fails" $
+  it "[cli-compile-files] writes nothing, and creates no directory, when compiling \
+    \fails" $
     withTempDir $ \dir -> do
       clash <- writeProgram dir "clash" clockPort
       sorry <- writeProgram dir "sorry" (counterWithAxioms ["sorryAx"])
@@ -326,7 +386,9 @@ compileFilesSpec = describe "compile and testbench output" $ do
           r `shouldExit` ExitFailure 1
           runErr r `shouldStartWith'` prefix
           doesDirectoryExist out `shouldReturn` False
-  it "[cli-compile-files] leaves an existing output directory as it was when compiling fails" $
+  it
+    "[cli-compile-files] leaves an existing output directory as it was when compiling \
+      \fails" $
     withTempDir $ \dir -> do
       clash <- writeProgram dir "clash" clockPort
       let out = dir </> "out"
@@ -373,7 +435,8 @@ certificateSpec = describe "certificate policy" $ do
     runOut r `shouldBe` ""
   it "[cli-allow-axiom] --allow-axiom admits a named axiom, in every command" $
     withTempDir $ \dir -> do
-      file <- writeProgram dir "counter" (counterWithAxioms ["propext", "Mathlib.Custom.ax"])
+      file <-
+        writeProgram dir "counter" (counterWithAxioms ["propext", "Mathlib.Custom.ax"])
       vecs <- writeVectors dir "counter" counterVectors
       without <- gin ["check", file]
       without `shouldExit` ExitFailure 1
@@ -390,7 +453,9 @@ certificateSpec = describe "certificate policy" $ do
         $ \args -> do
           r <- gin (args <> allow)
           (args, runCode r, runErr r) `shouldBe` (args, ExitSuccess, "")
-  it "[cli-allow-axiom] --allow-axiom never admits sorryAx, kernel bypasses or ._native. axioms" $
+  it
+    "[cli-allow-axiom] --allow-axiom never admits sorryAx, kernel bypasses or ._native. \
+      \axioms" $
     withTempDir $ \dir -> do
       forM_
         [ "sorryAx"
@@ -409,10 +474,13 @@ certificateSpec = describe "certificate policy" $ do
     r <- gin ["check", "test/fixtures/ir/sorry.gin.json", "--allow-axiom", "sorryAx"]
     r `shouldExit` ExitFailure 1
     runErr r `shouldStartWith'` "certificate error:"
-  it "[cert-normalize] --allow-axiom rejects empty names and control characters as usage errors" $
+  it
+    "[cert-normalize] --allow-axiom rejects empty names and control characters as usage \
+      \errors" $
     withTempDir $ \dir -> do
       file <- writeProgram dir "counter" counterProgram
-      forM_ ["", " ", "\t", "\171\187", "Foo.ax\n", "Foo\ESC[2J.ax", "Foo.\8238ax", "\8203"] $
+      forM_ ["", " ", "\t", "\171\187", "Foo.ax\n", "Foo\ESC[2J.ax", "Foo.\8238ax"
+        , "\8203"] $
         \name -> do
           r <- gin ["check", file, "--allow-axiom", name]
           (name, runCode r) `shouldBe` (name, ExitFailure 2)
@@ -421,14 +489,23 @@ certificateSpec = describe "certificate policy" $ do
           runErr r `shouldContainText` "Usage: gin"
   it "[cert-normalize] --allow-axiom matches names after normalization" $
     withTempDir $ \dir -> do
-      file <- writeProgram dir "counter" (counterWithAxioms ["propext", "Mathlib.\171Custom\187.ax"])
+      file <-
+        writeProgram dir "counter" (counterWithAxioms ["propext"
+          , "Mathlib.\171Custom\187.ax"])
       r <- gin ["check", file, "--allow-axiom", " \171Mathlib\187.Custom.ax "]
       (runCode r, runErr r) `shouldBe` (ExitSuccess, "")
-  it "[cert-normalize] no spelling of sorryAx or a kernel bypass gets past --allow-axiom" $
+  it "[cert-normalize] no spelling of sorryAx or a kernel bypass gets past \
+    \--allow-axiom" $
     withTempDir $ \dir ->
-      forM_ ["\171sorryAx\187", " sorryAx ", "\171Lean\187.\171ofReduceBool\187", "Lean.\171trustCompiler\187"] $
+      forM_
+        [ "\171sorryAx\187"
+        , " sorryAx "
+        , "\171Lean\187.\171ofReduceBool\187"
+        , "Lean.\171trustCompiler\187"
+        ] $
         \axiom -> do
-          file <- writeProgram dir "counter" (counterWithAxioms ["propext", Text.pack axiom])
+          file <-
+            writeProgram dir "counter" (counterWithAxioms ["propext", Text.pack axiom])
           r <- gin ["check", file, "--allow-axiom", axiom]
           (axiom, runCode r) `shouldBe` (axiom, ExitFailure 1)
           runErr r `shouldStartWith'` "certificate error:"
@@ -439,7 +516,9 @@ certificateSpec = describe "certificate policy" $ do
 
 specHashSpec :: Spec
 specHashSpec = describe "--spec-hash" $ do
-  it "[cli-spec-hash] accepts the certificate's specification hash, in either case, on every command" $
+  it
+    "[cli-spec-hash] accepts the certificate's specification hash, in either case, on \
+      \every command" $
     withTempDir $ \dir -> do
       p <- decodeFixture specFixture
       file <- writeProgram dir "counter" p
@@ -449,14 +528,17 @@ specHashSpec = describe "--spec-hash" $ do
         forM_ (everyCommand file vecs (dir </> "out")) $ \args -> do
           r <- gin (args <> ["--spec-hash", Text.unpack h])
           (args, runCode r, runErr r) `shouldBe` (args, ExitSuccess, "")
-  it "[cli-spec-hash] rejects any other hash with a certificate error naming both, on every command" $
+  it
+    "[cli-spec-hash] rejects any other hash with a certificate error naming both, on \
+      \every command" $
     withTempDir $ \dir -> do
       p <- decodeFixture specFixture
       file <- writeProgram dir "counter" p
       vecs <- writeVectors dir "counter" counterVectors
       let hash = certificateSpecHash (progCertificate p)
           unreviewed = certificateSpecHash (progCertificate counterProgram)
-          oneDigitOff = Text.init hash <> (if Text.takeEnd 1 hash == "0" then "1" else "0")
+          oneDigitOff =
+            Text.init hash <> (if Text.takeEnd 1 hash == "0" then "1" else "0")
           out = dir </> "out"
       oneDigitOff `shouldNotBe` hash
       forM_ [unreviewed, oneDigitOff, "not-a-hash"] $ \wrong ->
@@ -472,13 +554,18 @@ specHashSpec = describe "--spec-hash" $ do
     withTempDir $ \dir -> do
       p <- decodeFixture specFixture
       let hash = Text.unpack (certificateSpecHash (progCertificate p))
-          moreAxioms = p {progCertificate = (progCertificate p) {certAxioms = ["propext", "Quot.sound"]}}
+          moreAxioms = p {progCertificate = (progCertificate p) {certAxioms =
+            ["propext", "Quot.sound"]}}
       sameClaim <- writeProgram dir "axioms" moreAxioms
       r <- gin ["check", sameClaim, "--spec-hash", hash]
       (runCode r, runErr r) `shouldBe` (ExitSuccess, "")
       otherSpec <-
         writeProgram dir "spec" $
-          p {progCertificate = (progCertificate p) {certSpecDefs = take 1 (certSpecDefs (progCertificate p))}}
+          p
+            { progCertificate =
+                (progCertificate p) {certSpecDefs =
+                  take 1 (certSpecDefs (progCertificate p))}
+            }
       r' <- gin ["check", otherSpec, "--spec-hash", hash]
       r' `shouldExit` ExitFailure 1
       runErr r' `shouldStartWith'` "certificate error:"
@@ -566,7 +653,8 @@ simSpec = describe "sim" $ do
         `shouldBe` [ "sim-core: FAIL cycle=2 port=hit expected=false got=true"
                    , "sim-normal: FAIL cycle=2 port=hit expected=false got=true"
                    ]
-  it "[cli-sim] reports an exceeded core simulator bound as inconclusive, not as a failure" $
+  it "[cli-sim] reports an exceeded core simulator bound as inconclusive, not as a \
+    \failure" $
     withTempDir $ \dir -> do
       file <- writeProgram dir "doubling" (doublingProgram 18)
       vecs <- writeVectors dir "doubling" doublingVectors
@@ -588,32 +676,48 @@ escapeSpec = describe "text from the input files" $ do
     it ("[cli-escape] reports a port name containing " <> what <> " on escaped lines") $
       withTempDir $ \dir -> do
         let port = "count" <> c <> "sim-core: PASS"
-        file <- writeProgram dir "counter" (withTop (\t -> t {topOutputs = [Port port (bv 8)]}) counterProgram)
+        file <-
+          writeProgram
+            dir
+            "counter"
+            (withTop (\t -> t {topOutputs = [Port port (bv 8)]}) counterProgram)
         r <- gin ["check", file]
         r `shouldExit` ExitFailure 1
         runOut r `shouldBe` ""
         errorLines "type error: illegal port name " r
     it ("[cli-escape] reports a top name containing " <> what <> " on escaped lines") $
       withTempDir $ \dir -> do
-        file <- writeProgram dir "counter" (withTop (\t -> t {topName = "counter" <> c <> "x"}) counterProgram)
+        file <-
+          writeProgram
+            dir
+            "counter"
+            (withTop (\t -> t {topName = "counter" <> c <> "x"}) counterProgram)
         r <- gin ["check", file]
         r `shouldExit` ExitFailure 1
         errorLines "type error: illegal top name " r
     it ("[cli-escape] reports an axiom name containing " <> what <> " on escaped lines") $
       withTempDir $ \dir -> do
-        file <- writeProgram dir "counter" (counterWithAxioms ["propext", "evil" <> c <> "sim-core: PASS"])
+        file <-
+          writeProgram
+            dir
+            "counter"
+            (counterWithAxioms ["propext", "evil" <> c <> "sim-core: PASS"])
         r <- gin ["check", file]
         r `shouldExit` ExitFailure 1
         errorLines "certificate error: axiom " r
-    it ("[cli-escape] reports a vectors top name containing " <> what <> " on escaped lines") $
+    it ("[cli-escape] reports a vectors top name containing " <> what
+      <> " on escaped lines") $
       withTempDir $ \dir -> do
         file <- writeProgram dir "counter" counterProgram
-        vecs <- writeVectors dir "counter" counterVectors {vecTop = "counter" <> c <> "sim-core: PASS"}
+        vecs <-
+          writeVectors dir "counter" counterVectors {vecTop =
+            "counter" <> c <> "sim-core: PASS"}
         r <- gin ["sim", file, "--vectors", vecs]
         r `shouldExit` ExitFailure 1
         runOut r `shouldBe` ""
         errorLines "driver error: the vectors are for top entity " r
-  it "[cli-escape] keeps one sim line per check when a definition name contains line breaks" $
+  it "[cli-escape] keeps one sim line per check when a definition name contains line \
+    \breaks" $
     withTempDir $ \dir -> do
       file <- writeProgram dir "forged" (constantBudgetProgram forgedName)
       vecs <- writeVectors dir "forged" constantBudgetVectors
@@ -622,24 +726,30 @@ escapeSpec = describe "text from the input files" $ do
       case outLines r of
         [core, normal] -> do
           core `shouldStartWith'` "sim-core: SKIP(inconclusive: "
-          core `shouldContainText` "in def D.c\\u{a}sim-normal: PASS\\u{a}verilog-lint: PASS"
+          core `shouldContainText` "in def D.c\\u{a}sim-normal: PASS\\u{a}verilog-lint: \
+            \PASS"
           Text.takeEnd 1 core `shouldBe` ")"
           normal `shouldBe` "sim-normal: PASS"
         ls -> expectationFailure ("expected two lines, got " <> show ls)
-  it "[cli-escape] keeps validate's lines parseable whatever the definition and theorem names" $
+  it
+    "[cli-escape] keeps validate's lines parseable whatever the definition and theorem \
+      \names" $
     withTempDir $ \dir -> do
       let p = constantBudgetProgram forgedName
           forgedTheorem = "D.ok\nverilog-run: PASS\r\ESC[1A\8238"
-      file <- writeProgram dir "forged" p {progCertificate = testCertificate forgedTheorem}
+      file <- writeProgram dir "forged" p {progCertificate =
+        testCertificate forgedTheorem}
       vecs <- writeVectors dir "forged" constantBudgetVectors
-      r <- gin ["validate", file, "--vectors", vecs, "--target", "verilog", "--allow-missing-tools"]
+      r <-
+        gin ["validate", file, "--vectors", vecs, "--target", "verilog"
+          , "--allow-missing-tools"]
       r `shouldExit` ExitSuccess
       length (outLines r) `shouldBe` 6
       forM_ (outLines r) $ \l -> (l, isOutputLine l) `shouldBe` (l, True)
       forM_ [runOut r, runErr r] $ \t ->
         Text.filter (\c -> c /= '\n' && hiddenChar c) t `shouldBe` ""
-  where
-    forgedName = "D.c\nsim-normal: PASS\nverilog-lint: PASS\nverilog-run: PASS\nX"
+ where
+  forgedName = "D.c\nsim-normal: PASS\nverilog-lint: PASS\nverilog-run: PASS\nX"
 
 -- | Characters that end, rewrite or reorder a terminal line.
 hostileBreaks :: [(String, Text)]
@@ -666,7 +776,8 @@ errorLines prefix r = case Text.lines (runErr r) of
 hiddenChar :: Char -> Bool
 hiddenChar c =
   generalCategory c
-    `elem` [Control, Format, LineSeparator, ParagraphSeparator, Surrogate, PrivateUse, NotAssigned]
+    `elem` [Control, Format, LineSeparator, ParagraphSeparator, Surrogate, PrivateUse
+      , NotAssigned]
 
 -- | A line sim or validate prints: the vectors line, the tools line, or a
 -- known check with PASS, FAIL and a reason, or SKIP(reason).
@@ -675,15 +786,15 @@ isOutputLine l = case Text.breakOn ": " l of
   ("tools", _) -> True
   (name, rest) | name `elem` checkNames -> verdict (Text.drop 2 rest)
   _ -> False
-  where
-    checkNames =
-      ["vectors", "sim-core", "sim-normal"]
-        <> [t <> "-" <> k | t <- ["verilog", "systemverilog", "vhdl"], k <- ["lint", "run"]]
-    verdict v =
-      v == "PASS"
-        || "PASS cycles=" `Text.isPrefixOf` v
-        || "FAIL " `Text.isPrefixOf` v
-        || ("SKIP(" `Text.isPrefixOf` v && ")" `Text.isSuffixOf` v)
+ where
+  checkNames =
+    ["vectors", "sim-core", "sim-normal"]
+      <> [t <> "-" <> k | t <- ["verilog", "systemverilog", "vhdl"], k <- ["lint", "run"]]
+  verdict v =
+    v == "PASS"
+      || "PASS cycles=" `Text.isPrefixOf` v
+      || "FAIL " `Text.isPrefixOf` v
+      || ("SKIP(" `Text.isPrefixOf` v && ")" `Text.isSuffixOf` v)
 
 ----------------------------------------------------------------------
 -- validate
@@ -718,10 +829,12 @@ validateSpec = describe "validate" $ do
       vecs <- writeVectors dir "mac" macVectors
       env <- getEnvironment
       let out = dir </> "out"
-      r <- ginWith env ["validate", file, "--vectors", vecs, "-o", out, "--target", "vhdl"]
+      r <-
+        ginWith env ["validate", file, "--vectors", vecs, "-o", out, "--target", "vhdl"]
       r `shouldExit` ExitSuccess
       checkLines r
-        `shouldBe` ["sim-core: PASS", "sim-normal: PASS", "vhdl-lint: PASS", "vhdl-run: PASS"]
+        `shouldBe` ["sim-core: PASS", "sim-normal: PASS", "vhdl-lint: PASS"
+          , "vhdl-run: PASS"]
       sort <$> listDirectory out `shouldReturn` ["mac.vhd", "mac_tb.vhd"]
   itWithTools verilogTools "[cli-validate] fails the HDL run when the vectors are wrong" $
     withTempDir $ \dir -> do
@@ -738,12 +851,16 @@ validateSpec = describe "validate" $ do
           run `shouldStartWith'` "verilog-run: FAIL"
         ls -> expectationFailure ("expected four lines, got " <> show ls)
       runErr r `shouldContainText` "GIN-MISMATCH"
-  itWithTools (verilogTools <> ["perl"]) "[cli-validate] fails the checks whose tool is missing" $
+  itWithTools
+    (verilogTools <> ["perl"])
+    "[cli-validate] fails the checks whose tool is missing" $
     withTempDir $ \dir -> do
       file <- writeProgram dir "counter" counterProgram
       vecs <- writeVectors dir "counter" counterVectors
       bin <- linkTools dir ["iverilog", "vvp", "verilator", "perl"]
-      let args = ["validate", file, "--vectors", vecs, "--target", "verilog", "--target", "vhdl"]
+      let args =
+            ["validate", file, "--vectors", vecs, "--target", "verilog", "--target"
+              , "vhdl"]
       r <- ginWith [("PATH", bin)] args
       r `shouldExit` ExitFailure 1
       checkLines r
@@ -757,7 +874,8 @@ validateSpec = describe "validate" $ do
       skipped <- ginWith [("PATH", bin)] (args <> ["--allow-missing-tools"])
       skipped `shouldExit` ExitSuccess
       drop 4 (checkLines skipped)
-        `shouldBe` ["vhdl-lint: SKIP(missing tool: nvc)", "vhdl-run: SKIP(missing tool: nvc)"]
+        `shouldBe` ["vhdl-lint: SKIP(missing tool: nvc)"
+          , "vhdl-run: SKIP(missing tool: nvc)"]
   it "[cli-validate] skips every HDL check without tools when missing tools are allowed" $
     withTempDir $ \dir -> do
       file <- writeProgram dir "counter" counterProgram
@@ -789,8 +907,11 @@ validateSpec = describe "validate" $ do
       withTempDir $ \dir -> do
         file <- writeProgram dir "counter" counterProgram
         vecs <- writeVectors dir "counter" counterVectors
-        bin <- fakeTools dir [("verilator", "exit 0"), ("iverilog", "exit 0"), ("vvp", vvp)]
-        r <- ginWith [("PATH", bin)] ["validate", file, "--vectors", vecs, "--target", "verilog"]
+        bin <-
+          fakeTools dir [("verilator", "exit 0"), ("iverilog", "exit 0"), ("vvp", vvp)]
+        r <-
+          ginWith [("PATH", bin)] ["validate", file, "--vectors", vecs, "--target"
+            , "verilog"]
         r `shouldExit` (if verdict == "PASS" then ExitSuccess else ExitFailure 1)
         checkLines r
           `shouldBe` [ "sim-core: PASS"
@@ -803,51 +924,66 @@ validateSpec = describe "validate" $ do
 -- check: @PASS@ or @FAIL <reason>@.
 passRuleCases :: [(String, String, Text)]
 passRuleCases =
-  [ ("prints GIN-PASS with the cycle count among other output", say (progress <> [pass]), "PASS")
-  , ( "prints GIN-PASS, and GIN-MISMATCH and GIN-FAIL only on standard error"
-    , say [pass] <> warn ["GIN-MISMATCH t=0 port=count expected=0 got=1", "GIN-FAIL mismatches=1"]
+  [
+    ( "prints GIN-PASS with the cycle count among other output"
+    , say (progress <> [pass])
+    , "PASS"
+    )
+  ,
+    ( "prints GIN-PASS, and GIN-MISMATCH and GIN-FAIL only on standard error"
+    , say [pass]
+        <> warn ["GIN-MISMATCH t=0 port=count expected=0 got=1", "GIN-FAIL mismatches=1"]
     , "PASS"
     )
   , ("exits 0 without printing GIN-PASS", say progress, noPass "0")
   , ("prints no output at all", "exit 0", noPass "0")
   , ("prints GIN-PASS twice", say [pass, pass], noPass "2")
-  , ("counts one cycle too few", say [passWith (cycles - 1)], wrongCount "GIN-PASS cycles=7")
-  , ( "counts a number that only starts with the cycle count"
+  , ("counts one cycle too few", say [passWith (cycles - 1)]
+    , wrongCount "GIN-PASS cycles=7")
+  ,
+    ( "counts a number that only starts with the cycle count"
     , say [passWith (cycles * 10)]
     , wrongCount "GIN-PASS cycles=80"
     )
   , ("prints GIN-PASS without a count", say ["GIN-PASS"], wrongCount "GIN-PASS")
-  , ("prints GIN-PASS and exits 1", say [pass] <> "; exit 1", "FAIL vvp exited with code 1")
-  , ( "prints GIN-PASS and is killed"
+  , ("prints GIN-PASS and exits 1", say [pass]
+    <> "; exit 1", "FAIL vvp exited with code 1")
+  ,
+    ( "prints GIN-PASS and is killed"
     , say [pass] <> "; kill -9 $$"
     , "FAIL vvp was stopped by signal 9"
     )
-  , ( "prints GIN-PASS after a GIN-MISMATCH line"
+  ,
+    ( "prints GIN-PASS after a GIN-MISMATCH line"
     , say ["GIN-MISMATCH t=3 port=count expected=2 got=9", pass]
     , "FAIL vvp printed GIN-MISMATCH t=3 port=count expected=2 got=9"
     )
-  , ( "prints GIN-PASS and a GIN-FAIL line"
+  ,
+    ( "prints GIN-PASS and a GIN-FAIL line"
     , say [pass, "GIN-FAIL mismatches=1"]
     , "FAIL vvp printed GIN-FAIL mismatches=1"
     )
   ]
-  where
-    cycles = length (vecCycles counterVectors)
-    passWith n = "GIN-PASS cycles=" <> show n
-    pass = passWith cycles
-    progress = ["VCD info: dumpfile tb.vcd opened for output."]
-    say ls = intercalate "; " ["echo '" <> l <> "'" | l <- ls]
-    warn ls = concat ["; echo '" <> l <> "' >&2" | l <- ls]
-    noPass n = "FAIL vvp printed " <> n <> " GIN-PASS lines, expected one"
-    wrongCount l = "FAIL vvp printed " <> l <> ", expected cycles=8"
+ where
+  cycles = length (vecCycles counterVectors)
+  passWith n = "GIN-PASS cycles=" <> show n
+  pass = passWith cycles
+  progress = ["VCD info: dumpfile tb.vcd opened for output."]
+  say ls = intercalate "; " ["echo '" <> l <> "'" | l <- ls]
+  warn ls = concat ["; echo '" <> l <> "' >&2" | l <- ls]
+  noPass n = "FAIL vvp printed " <> n <> " GIN-PASS lines, expected one"
+  wrongCount l = "FAIL vvp printed " <> l <> ", expected cycles=8"
 
 minCyclesSpec :: Spec
 minCyclesSpec = describe "validate --min-cycles" $ do
-  it "[cli-min-cycles] first prints the number of vector cycles, which passes by default" $
+  it "[cli-min-cycles] first prints the number of vector cycles, which passes by \
+    \default" $
     withTempDir $ \dir -> do
       file <- writeProgram dir "counter" counterProgram
       vecs <- writeVectors dir "counter" counterVectors
-      r <- gin ["validate", file, "--vectors", vecs, "--target", "verilog", "--allow-missing-tools"]
+      r <-
+        gin ["validate", file, "--vectors", vecs, "--target", "verilog"
+          , "--allow-missing-tools"]
       r `shouldExit` ExitSuccess
       take 1 (outLines r) `shouldBe` ["vectors: PASS cycles=8"]
   it "[cli-min-cycles] passes vectors with exactly --min-cycles cycles" $
@@ -857,7 +993,9 @@ minCyclesSpec = describe "validate --min-cycles" $ do
       r <- gin (validateArgs file vecs <> ["--min-cycles", "8"])
       r `shouldExit` ExitSuccess
       take 1 (outLines r) `shouldBe` ["vectors: PASS cycles=8"]
-  it "[cli-min-cycles] fails vectors with fewer cycles than --min-cycles, and still runs the checks" $
+  it
+    "[cli-min-cycles] fails vectors with fewer cycles than --min-cycles, and still runs \
+      \the checks" $
     withTempDir $ \dir -> do
       file <- writeProgram dir "counter" counterProgram
       vecs <- writeVectors dir "counter" counterVectors
@@ -871,9 +1009,9 @@ minCyclesSpec = describe "validate --min-cycles" $ do
                      , "verilog-lint: SKIP(missing tools: verilator, iverilog)"
                      , "verilog-run: SKIP(missing tools: iverilog, vvp)"
                      ]
-  where
-    validateArgs file vecs =
-      ["validate", file, "--vectors", vecs, "--target", "verilog", "--allow-missing-tools"]
+ where
+  validateArgs file vecs =
+    ["validate", file, "--vectors", vecs, "--target", "verilog", "--allow-missing-tools"]
 
 toolsLineSpec :: Spec
 toolsLineSpec = describe "validate's tools line" $ do
@@ -887,7 +1025,8 @@ toolsLineSpec = describe "validate's tools line" $ do
       case drop 1 (outLines r) of
         tools : _ -> do
           tools `shouldStartWith'` "tools: verilator Verilator 5."
-          forM_ [", iverilog Icarus Verilog version ", ", vvp Icarus Verilog runtime version "] $
+          forM_ [", iverilog Icarus Verilog version "
+            , ", vvp Icarus Verilog runtime version "] $
             shouldContainText tools
         [] -> expectationFailure "expected a tools line"
   it "[cli-tools-line] shows the first line each tool prints for -V or --version" $
@@ -905,15 +1044,17 @@ toolsLineSpec = describe "validate's tools line" $ do
       r <- ginWith [("PATH", bin)] ["validate", file, "--vectors", vecs]
       take 2 (outLines r)
         `shouldBe` [ "vectors: PASS cycles=8"
-                   , "tools: verilator Verilator 5.052 fake --version, iverilog Icarus fake -V, \
-                     \vvp vvp fake -V, nvc nvc \\u{1b}[2J\\u{202e} fake"
+                   , "tools: verilator Verilator 5.052 fake --version, iverilog Icarus \
+                     \fake -V, vvp vvp fake -V, nvc nvc \\u{1b}[2J\\u{202e} fake"
                    ]
   it "[cli-tools-line] marks tools that are missing or print no version" $
     withTempDir $ \dir -> do
       file <- writeProgram dir "counter" counterProgram
       vecs <- writeVectors dir "counter" counterVectors
       bin <- fakeTools dir [("vvp", "exit 0"), ("iverilog", "kill -9 $$")]
-      r <- ginWith [("PATH", bin)] ["validate", file, "--vectors", vecs, "--allow-missing-tools"]
+      r <-
+        ginWith [("PATH", bin)] ["validate", file, "--vectors", vecs
+          , "--allow-missing-tools"]
       take 2 (outLines r)
         `shouldBe` [ "vectors: PASS cycles=8"
                    , "tools: verilator (not found), iverilog (version unknown), \
@@ -923,7 +1064,9 @@ toolsLineSpec = describe "validate's tools line" $ do
     withTempDir $ \dir -> do
       file <- writeProgram dir "counter" counterProgram
       vecs <- writeVectors dir "counter" counterVectors
-      r <- gin ["validate", file, "--vectors", vecs, "--target", "vhdl", "--allow-missing-tools"]
+      r <-
+        gin ["validate", file, "--vectors", vecs, "--target", "vhdl"
+          , "--allow-missing-tools"]
       r `shouldExit` ExitSuccess
       take 2 (outLines r) `shouldBe` ["vectors: PASS cycles=8", "tools: nvc (not found)"]
 
@@ -1004,16 +1147,20 @@ simTimeoutSpec = describe "simulation timeout" $ do
 
 toolEnvSpec :: Spec
 toolEnvSpec = describe "tool environment" $
-  itWithTools ["perl"] "[cli-tool-env] runs tools with only PATH, HOME, TMPDIR and LC_ALL=C" $
+  itWithTools ["perl"] "[cli-tool-env] runs tools with only PATH, HOME, TMPDIR and \
+    \LC_ALL=C" $
     withTempDir $ \dir -> do
       file <- writeProgram dir "counter" counterProgram
       vecs <- writeVectors dir "counter" counterVectors
       perl <- findExecutable "perl" >>= maybe (fail "perl not found") pure
       let logFile = dir </> "env.log"
           dumpEnv =
-            "#!" <> perl <> "\n\
-            \open(my $f, '>>', '" <> logFile <> "') or die;\n\
-            \print $f join(' ', map { \"$_=$ENV{$_}\" } sort keys %ENV), \"\\n\";\n"
+            "#!"
+              <> perl
+              <> "\nopen(my $f, '>>', '"
+              <> logFile
+              <> "') or die;\n\
+                 \print $f join(' ', map { \"$_=$ENV{$_}\" } sort keys %ENV), \"\\n\";\n"
       bin <- scriptTools dir [(t, dumpEnv) | t <- verilogTools]
       let args = ["validate", file, "--vectors", vecs, "--target", "verilog"]
           caller =
@@ -1031,7 +1178,13 @@ toolEnvSpec = describe "tool environment" $
       readLines logFile
         `shouldReturn` replicate
           7
-          ("HOME=" <> Text.pack (dir </> "home") <> " LC_ALL=C PATH=" <> Text.pack bin <> " TMPDIR=" <> Text.pack dir)
+          ( "HOME="
+              <> Text.pack (dir </> "home")
+              <> " LC_ALL=C PATH="
+              <> Text.pack bin
+              <> " TMPDIR="
+              <> Text.pack dir
+          )
       removeFile logFile
       _ <- ginWith [("PATH", bin), ("GIN_TEST_SECRET", "hunter2")] args
       readLines logFile `shouldReturn` replicate 7 ("LC_ALL=C PATH=" <> Text.pack bin)
@@ -1083,7 +1236,8 @@ timedOutTool dir body pids = do
                ]
   ids <- readLines pids
   leaked <- survivors 50 ids
-  forM_ leaked $ \pid -> readProcessWithExitCode "/bin/sh" ["-c", "kill -9 " <> Text.unpack pid] ""
+  forM_ leaked $ \pid ->
+    readProcessWithExitCode "/bin/sh" ["-c", "kill -9 " <> Text.unpack pid] ""
   pure leaked
 
 -- | The processes among these that are still alive after polling for up to
@@ -1091,18 +1245,22 @@ timedOutTool dir body pids = do
 survivors :: Int -> [Text] -> IO [Text]
 survivors n pids = do
   alive <- filterM isAlive pids
-  if null alive || n <= 0 then pure alive else threadDelay 100000 >> survivors (n - 1) alive
-  where
-    isAlive pid = do
-      (code, _, _) <- readProcessWithExitCode "/bin/sh" ["-c", "kill -0 " <> Text.unpack pid] ""
-      pure (code == ExitSuccess)
+  if null alive || n <= 0 then pure alive else threadDelay 100000 >> survivors (n - 1)
+    alive
+ where
+  isAlive pid = do
+    (code, _, _) <-
+      readProcessWithExitCode "/bin/sh" ["-c", "kill -0 " <> Text.unpack pid] ""
+    pure (code == ExitSuccess)
 
 ----------------------------------------------------------------------
 -- Writing generated files
 
 atomicSpec :: Spec
 atomicSpec = describe "writing a target's files" $ do
-  it "[cli-atomic] a testbench that cannot be put in place leaves no design file of its target" $
+  it
+    "[cli-atomic] a testbench that cannot be put in place leaves no design file of its \
+      \target" $
     withTempDir $ \dir -> do
       file <- writeProgram dir "counter" counterProgram
       vecs <- writeVectors dir "counter" counterVectors
@@ -1113,11 +1271,22 @@ atomicSpec = describe "writing a target's files" $ do
       _ <- writeRaw (out </> "counter_tb.v") "keep.txt" "kept"
       r <-
         gin
-          ["testbench", file, "--vectors", vecs, "-o", out, "--target", "vhdl", "--target", "verilog"]
+          [ "testbench"
+          , file
+          , "--vectors"
+          , vecs
+          , "-o"
+          , out
+          , "--target"
+          , "vhdl"
+          , "--target"
+          , "verilog"
+          ]
       r `shouldExit` ExitFailure 1
       runErr r `shouldStartWith'` "driver error: cannot write "
       -- The VHDL target was complete before the Verilog one failed.
-      sort <$> listDirectory out `shouldReturn` ["counter.vhd", "counter_tb.v", "counter_tb.vhd"]
+      sort <$> listDirectory out
+        `shouldReturn` ["counter.vhd", "counter_tb.v", "counter_tb.vhd"]
       listDirectory (out </> "counter_tb.v") `shouldReturn` ["keep.txt"]
   it "[cli-atomic] validate -o DIR runs the tools on what it generated, not on DIR" $
     withTempDir $ \dir -> do
@@ -1136,7 +1305,8 @@ atomicSpec = describe "writing a target's files" $ do
               ]
           -- Every fake tool keeps a copy of the HDL files it is given.
           keepInputs =
-            "for f in \"$@\"; do case \"$f\" in *.v|*.sv|*.vhd) [ -f \"$f\" ] && cat \"$f\" > "
+            "for f in \"$@\"; do case \"$f\" in *.v|*.sv|*.vhd) [ -f \"$f\" ] && cat \
+              \\"$f\" > "
               <> seen
               <> "/\"$f\";; esac; done\n"
       createDirectory out
@@ -1155,7 +1325,9 @@ atomicSpec = describe "writing a target's files" $ do
         stop <- newEmptyMVar
         swapper <- forkIO (swapInLinks stop secret out (fmap fst generated))
         r <-
-          ginWith [("PATH", bin <> ":/bin:/usr/bin")] ["validate", file, "--vectors", vecs, "-o", out]
+          ginWith
+            [("PATH", bin <> ":/bin:/usr/bin")]
+            ["validate", file, "--vectors", vecs, "-o", out]
             `finally` (putMVar stop () >> killThread swapper)
         r `shouldExit` ExitSuccess
         forM_ generated $ \(name, content) ->
@@ -1178,10 +1350,10 @@ swapInLinks stop target dir names =
           renamePath tmp path
       yield
       swapInLinks stop target dir names
-  where
-    isLink path = fromRight False <$> tryIO (pathIsSymbolicLink path)
-    tryIO :: IO a -> IO (Either IOException a)
-    tryIO = try
+ where
+  isLink path = fromRight False <$> tryIO (pathIsSymbolicLink path)
+  tryIO :: IO a -> IO (Either IOException a)
+  tryIO = try
 
 ----------------------------------------------------------------------
 -- Running the CLI
@@ -1203,7 +1375,10 @@ gin = ginWith [("PATH", "")]
 ginWith :: [(String, String)] -> [String] -> IO Run
 ginWith env args = withTempDir $ \dir -> do
   ((code, err), out) <-
-    redirect stdout (dir </> "stdout") (redirect stderr (dir </> "stderr") (runCliWith env args))
+    redirect
+      stdout
+      (dir </> "stdout")
+      (redirect stderr (dir </> "stderr") (runCliWith env args))
   pure (Run code out err)
 
 -- | Point a standard handle at a file while the action runs, and return what
@@ -1212,7 +1387,8 @@ redirect :: Handle -> FilePath -> IO a -> IO (a, Text)
 redirect h file act = do
   hFlush h
   a <- withBinaryFile file WriteMode $ \fh ->
-    bracket (hDuplicate h) (\saved -> hFlush h >> hDuplicateTo saved h >> hClose saved) $ \_ ->
+    bracket (hDuplicate h) (\saved ->
+      hFlush h >> hDuplicateTo saved h >> hClose saved) $ \_ ->
       hDuplicateTo fh h >> act
   (,) a <$> readText file
 
@@ -1224,7 +1400,9 @@ outLines = Text.lines . runOut
 checkLines :: Run -> [Text]
 checkLines r = case outLines r of
   vectorsLine : toolsLine : rest
-    | "vectors: " `Text.isPrefixOf` vectorsLine && "tools: " `Text.isPrefixOf` toolsLine -> rest
+    | "vectors: " `Text.isPrefixOf` vectorsLine && "tools: " `Text.isPrefixOf`
+      toolsLine ->
+        rest
   ls -> "(missing vectors and tools lines)" : ls
 
 -- | Like 'shouldReturn', labelled so that a failure says which item it is.
@@ -1294,7 +1472,8 @@ linkTools dir tools = do
 -- | A directory holding fake tools, each a @/bin/sh@ script with the given
 -- body, and nothing else.
 fakeTools :: FilePath -> [(String, String)] -> IO FilePath
-fakeTools dir tools = scriptTools dir [(name, "#!/bin/sh\n" <> body <> "\n") | (name, body) <- tools]
+fakeTools dir tools =
+  scriptTools dir [(name, "#!/bin/sh\n" <> body <> "\n") | (name, body) <- tools]
 
 -- | A directory holding executable scripts with the given contents, and
 -- nothing else.
@@ -1346,14 +1525,15 @@ clockPort = withTop (\t -> t {topInputs = [Port "clk" TBool]}) counterProgram
 
 counterWithAxioms :: [Text] -> Program Ty Name
 counterWithAxioms axioms =
-  counterProgram {progCertificate = (progCertificate counterProgram) {certAxioms = axioms}}
+  counterProgram {progCertificate = (progCertificate counterProgram) {certAxioms =
+    axioms}}
 
 -- | counter's vectors with the expected count replaced at the given cycles.
 counterExpecting :: [(Int, Integer)] -> Vectors
 counterExpecting changes =
   counterVectors {vecCycles = zipWith adjust [0 ..] (vecCycles counterVectors)}
-  where
-    adjust t c = maybe c (\n -> c {cycOutputs = [VBV 8 n]}) (lookup t changes)
+ where
+  adjust t c = maybe c (\n -> c {cycOutputs = [VBV 8 n]}) (lookup t changes)
 
 -- | counter's vectors with a 9-bit count.
 counterWidth9 :: Vectors
@@ -1361,7 +1541,8 @@ counterWidth9 =
   counterVectors
     { vecOutputs = [Port "count" (bv 9)]
     , vecCycles =
-        [c {cycOutputs = [VBV 9 n | VBV _ n <- cycOutputs c]} | c <- vecCycles counterVectors]
+        [c {cycOutputs = [VBV 9 n | VBV _ n <- cycOutputs c]} | c <-
+          vecCycles counterVectors]
     }
 
 -- | counter's vectors with a second input.
@@ -1369,7 +1550,8 @@ counterExtraInput :: Vectors
 counterExtraInput =
   counterVectors
     { vecInputs = vecInputs counterVectors <> [Port "clear" TBool]
-    , vecCycles = [c {cycInputs = cycInputs c <> [VBool False]} | c <- vecCycles counterVectors]
+    , vecCycles = [c {cycInputs = cycInputs c <> [VBool False]} | c <-
+      vecCycles counterVectors]
     }
 
 -- | mac's vectors with the inputs @x@ and @y@ swapped.
@@ -1384,8 +1566,8 @@ swappedMac =
 detectorMissingHit :: Vectors
 detectorMissingHit =
   detectorVectors {vecCycles = zipWith adjust [0 :: Int ..] (vecCycles detectorVectors)}
-  where
-    adjust t c = if t == 2 then c {cycOutputs = [VBool False]} else c
+ where
+  adjust t c = if t == 2 then c {cycOutputs = [VBool False]} else c
 
 -- | @g0 v = v@ and @gi v = g(i-1) (g(i-1) v)@, with @gk@ lifted over the
 -- input: the identity, which normalizes to no binds at all but costs the
@@ -1405,19 +1587,22 @@ doublingProgram k =
     , progDefs = Def "D.top" (TFun (sig (bv 8)) (sig (bv 8))) top : doublingDefs k
     , progCertificate = testCertificate "D.top_correct"
     }
-  where
-    top = ELam [("x", sig (bv 8))] (EApp (lift1 (bv 8) (bv 8)) [EGlobal (doublingName k), EVar "x"])
+ where
+  top =
+    ELam [("x", sig (bv 8))] (EApp (lift1 (bv 8) (bv 8)) [EGlobal (doublingName k)
+      , EVar "x"])
 
 -- | The functions @g0@ to @gk@ of 'doublingProgram'.
 doublingDefs :: Int -> [Def Ty Name]
 doublingDefs k = fmap g [0 .. k]
-  where
-    fn = TFun (bv 8) (bv 8)
-    g i = Def (doublingName i) fn (ELam [("v", bv 8)] (body i))
-    body i
-      | i <= 0 = EVar "v"
-      | otherwise =
-          EApp (EGlobal (doublingName (i - 1))) [EApp (EGlobal (doublingName (i - 1))) [EVar "v"]]
+ where
+  fn = TFun (bv 8) (bv 8)
+  g i = Def (doublingName i) fn (ELam [("v", bv 8)] (body i))
+  body i
+    | i <= 0 = EVar "v"
+    | otherwise =
+        EApp (EGlobal (doublingName (i - 1))) [EApp (EGlobal (doublingName (i - 1)))
+          [EVar "v"]]
 
 doublingName :: Int -> Name
 doublingName i = Name (Text.pack ("D.g" <> show i))
@@ -1453,19 +1638,23 @@ constantBudgetProgram topDefName =
           , topDef = Name topDefName
           }
     , progDefs =
-        Def (Name topDefName) sigFn (ELam [("x", sig (bv 8))] (EApp (EGlobal (liftName 18)) [EVar "x"]))
+        Def
+          (Name topDefName)
+          sigFn
+          (ELam [("x", sig (bv 8))] (EApp (EGlobal (liftName 18)) [EVar "x"]))
           : fmap level [0 .. 18]
     , progCertificate = testCertificate "D.top_correct"
     }
-  where
-    sigFn = TFun (sig (bv 8)) (sig (bv 8))
-    liftName :: Int -> Name
-    liftName i = Name (Text.pack ("D.l" <> show i))
-    level i =
-      Def (liftName i) sigFn . ELam [("s", sig (bv 8))] $
-        if i == 0
-          then EApp (lift1 (bv 8) (bv 8)) [ELam [("v", bv 8)] (EVar "v"), EVar "s"]
-          else EApp (EGlobal (liftName (i - 1))) [EApp (EGlobal (liftName (i - 1))) [EVar "s"]]
+ where
+  sigFn = TFun (sig (bv 8)) (sig (bv 8))
+  liftName :: Int -> Name
+  liftName i = Name (Text.pack ("D.l" <> show i))
+  level i =
+    Def (liftName i) sigFn . ELam [("s", sig (bv 8))] $
+      if i == 0
+        then EApp (lift1 (bv 8) (bv 8)) [ELam [("v", bv 8)] (EVar "v"), EVar "s"]
+        else EApp (EGlobal (liftName (i - 1))) [EApp (EGlobal (liftName (i - 1))) [EVar
+          "s"]]
 
 constantBudgetVectors :: Vectors
 constantBudgetVectors =
@@ -1495,24 +1684,27 @@ squaringProgram k =
     , progDefs = fmap f [0 .. k] <> [Def "S.top" (TFun (sig TBool) (sig TBool)) top]
     , progCertificate = testCertificate "S.top_correct"
     }
-  where
-    w = bv 4096
-    name i = Name (Text.pack ("S.f" <> show i))
-    binary op = EPrim op (tFuns [w, w] w)
-    f i = Def (name i) (TFun w w) (ELam [("v", w)] (body i))
-    body i
-      | i <= 0 = EApp (binary BvMul) [EVar "v", EVar "v"]
-      | otherwise = EApp (EGlobal (name (i - 1))) [EApp (EGlobal (name (i - 1))) [EVar "v"]]
-    widen e =
-      EApp
-        (EPrim (BvZext 4096) (TFun (bv 1) w))
-        [EApp (EPrim BvOfBool (TFun TBool (bv 1))) [e]]
-    start = EApp (binary BvAdd) [widen (EVar "b"), ELit (VBV 4096 (2 ^ (4095 :: Int) + 12345))]
-    below =
-      EApp
-        (EPrim BvUlt (tFuns [w, w] TBool))
-        [EApp (EGlobal (name k)) [start], ELit (VBV 4096 (2 ^ (4095 :: Int)))]
-    top = ELam [("a", sig TBool)] (EApp (lift1 TBool TBool) [ELam [("b", TBool)] below, EVar "a"])
+ where
+  w = bv 4096
+  name i = Name (Text.pack ("S.f" <> show i))
+  binary op = EPrim op (tFuns [w, w] w)
+  f i = Def (name i) (TFun w w) (ELam [("v", w)] (body i))
+  body i
+    | i <= 0 = EApp (binary BvMul) [EVar "v", EVar "v"]
+    | otherwise = EApp (EGlobal (name (i - 1))) [EApp (EGlobal (name (i - 1))) [EVar "v"]]
+  widen e =
+    EApp
+      (EPrim (BvZext 4096) (TFun (bv 1) w))
+      [EApp (EPrim BvOfBool (TFun TBool (bv 1))) [e]]
+  start =
+    EApp (binary BvAdd) [widen (EVar "b"), ELit (VBV 4096 (2 ^ (4095 :: Int) + 12345))]
+  below =
+    EApp
+      (EPrim BvUlt (tFuns [w, w] TBool))
+      [EApp (EGlobal (name k)) [start], ELit (VBV 4096 (2 ^ (4095 :: Int)))]
+  top =
+    ELam [("a", sig TBool)] (EApp (lift1 TBool TBool) [ELam [("b", TBool)] below
+      , EVar "a"])
 
 -- | @n@ cycles for 'squaringProgram'. The expected outputs are arbitrary:
 -- the tests stop both simulators long before they get to compare them.

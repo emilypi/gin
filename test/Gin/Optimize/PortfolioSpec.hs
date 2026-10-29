@@ -17,7 +17,8 @@ spec = describe "circuit portfolios" $ do
     metricRegisterBits m `shouldBe` 8
     metricLogicDepth m `shouldSatisfy` (> 0)
   it "identifies selected candidates and rejects foreign digests" $ do
-    case decodePolicy "{\"format\":\"gin-policy/1\",\"objectives\":[{\"name\":\"ops\"}]}" >>= \p -> buildPortfolio p identityCircuit of
+    case decodePolicy "{\"format\":\"gin-policy/1\",\"objectives\":[{\"name\":\"ops\"}]}\
+      \" >>= \p -> buildPortfolio p identityCircuit of
       Left e -> expectationFailure (show e)
       Right portfolio -> do
         map candidateObjectives (portfolioCandidates portfolio) `shouldBe` [[0]]
@@ -29,18 +30,35 @@ spec = describe "circuit portfolios" $ do
             selectCandidate (Just (candidateId c)) portfolio `shouldBe` Right c
         selectCandidate (Just "forged") portfolio `shouldSatisfy` isLeft
   it "does not select an infeasible baseline when the archive is empty" $ do
-    let expensive = identityCircuit {nmBinds = [NBind "b" TBool (NPrim BoolNot [AVar "x"])], nmOutputs = [NOutput "y" TBool (AVar "b")]}
-    case decodePolicy "{\"format\":\"gin-policy/1\",\"objectives\":[{\"name\":\"ops\"}],\"upperBounds\":[0]}" >>= \p -> buildPortfolio p expensive of
+    let expensive =
+          identityCircuit
+            { nmBinds = [NBind "b" TBool (NPrim BoolNot [AVar "x"])]
+            , nmOutputs = [NOutput "y" TBool (AVar "b")]
+            }
+    case decodePolicy
+      "{\"format\":\"gin-policy/1\",\"objectives\":[{\"name\":\"ops\"}],\"upperBounds\":[\
+        \0]}" >>= \p -> buildPortfolio p expensive of
       Left e -> expectationFailure (show e)
       Right portfolio -> selectCandidate Nothing portfolio `shouldSatisfy` isLeft
   it "revalidates updated policy records at the library boundary" $ do
-    case decodePolicy "{\"format\":\"gin-policy/1\",\"objectives\":[{\"name\":\"ops\"}]}" of
+    case decodePolicy "{\"format\":\"gin-policy/1\",\"objectives\":[{\"name\":\"ops\"}]}\
+      \" of
       Left e -> expectationFailure (show e)
       Right p -> do
         buildPortfolio p {policyObjectives = []} identityCircuit `shouldSatisfy` isLeft
-        buildPortfolio p {policyObjectives = policyObjectives p <> policyObjectives p} identityCircuit `shouldSatisfy` isLeft
-        buildPortfolio p {policyPreferences = ["missing"]} identityCircuit `shouldSatisfy` isLeft
+        buildPortfolio
+          p {policyObjectives = policyObjectives p <> policyObjectives p}
+          identityCircuit
+          `shouldSatisfy` isLeft
+        buildPortfolio p {policyPreferences =
+          ["missing"]} identityCircuit `shouldSatisfy` isLeft
 
 identityCircuit :: NModule
-identityCircuit = NModule "identity" sysDomain [("x",TBool)]
-  [NOutput "y" TBool (AVar "x")] [] (testCertificate "Identity.correct")
+identityCircuit =
+  NModule
+    "identity"
+    sysDomain
+    [("x", TBool)]
+    [NOutput "y" TBool (AVar "x")]
+    []
+    (testCertificate "Identity.correct")

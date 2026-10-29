@@ -113,34 +113,34 @@ primResultTy :: PrimOp -> [Ty] -> Maybe Ty
 primResultTy op args
   | all isScalar args = result >>= \t -> if isScalar t then Just t else Nothing
   | otherwise = Nothing
-  where
-    result = case (op, args) of
-      (BoolAnd, [TBool, TBool]) -> Just TBool
-      (BoolOr, [TBool, TBool]) -> Just TBool
-      (BoolXor, [TBool, TBool]) -> Just TBool
-      (BoolEq, [TBool, TBool]) -> Just TBool
-      (BoolNot, [TBool]) -> Just TBool
-      (BvAdd, _) -> sameWidth
-      (BvSub, _) -> sameWidth
-      (BvMul, _) -> sameWidth
-      (BvAnd, _) -> sameWidth
-      (BvOr, _) -> sameWidth
-      (BvXor, _) -> sameWidth
-      (BvNeg, [TBitVec n]) -> Just (TBitVec n)
-      (BvNot, [TBitVec n]) -> Just (TBitVec n)
-      (BvShl _, [TBitVec n]) -> Just (TBitVec n)
-      (BvLshr _, [TBitVec n]) -> Just (TBitVec n)
-      (BvEq, _) -> TBool <$ sameWidth
-      (BvUlt, _) -> TBool <$ sameWidth
-      (BvUle, _) -> TBool <$ sameWidth
-      (BvConcat, [TBitVec a, TBitVec b]) -> Just (TBitVec (a + b))
-      (BvExtract hi lo, [TBitVec n]) | n > hi && hi >= lo -> Just (TBitVec (hi - lo + 1))
-      (BvZext m, [TBitVec n]) | m >= n -> Just (TBitVec m)
-      (BvOfBool, [TBool]) -> Just (TBitVec 1)
-      _ -> Nothing
-    sameWidth = case args of
-      [TBitVec n, TBitVec m] | n == m -> Just (TBitVec n)
-      _ -> Nothing
+ where
+  result = case (op, args) of
+    (BoolAnd, [TBool, TBool]) -> Just TBool
+    (BoolOr, [TBool, TBool]) -> Just TBool
+    (BoolXor, [TBool, TBool]) -> Just TBool
+    (BoolEq, [TBool, TBool]) -> Just TBool
+    (BoolNot, [TBool]) -> Just TBool
+    (BvAdd, _) -> sameWidth
+    (BvSub, _) -> sameWidth
+    (BvMul, _) -> sameWidth
+    (BvAnd, _) -> sameWidth
+    (BvOr, _) -> sameWidth
+    (BvXor, _) -> sameWidth
+    (BvNeg, [TBitVec n]) -> Just (TBitVec n)
+    (BvNot, [TBitVec n]) -> Just (TBitVec n)
+    (BvShl _, [TBitVec n]) -> Just (TBitVec n)
+    (BvLshr _, [TBitVec n]) -> Just (TBitVec n)
+    (BvEq, _) -> TBool <$ sameWidth
+    (BvUlt, _) -> TBool <$ sameWidth
+    (BvUle, _) -> TBool <$ sameWidth
+    (BvConcat, [TBitVec a, TBitVec b]) -> Just (TBitVec (a + b))
+    (BvExtract hi lo, [TBitVec n]) | n > hi && hi >= lo -> Just (TBitVec (hi - lo + 1))
+    (BvZext m, [TBitVec n]) | m >= n -> Just (TBitVec m)
+    (BvOfBool, [TBool]) -> Just (TBitVec 1)
+    _ -> Nothing
+  sameWidth = case args of
+    [TBitVec n, TBitVec m] | n == m -> Just (TBitVec n)
+    _ -> Nothing
 
 ----------------------------------------------------------------------
 -- Interned syntax
@@ -191,20 +191,21 @@ internExpr = \case
   EProj i e -> IProj i <$> internExpr e
   EIf arms e ->
     foldr (\(c, t) el -> IIf <$> internExpr c <*> internExpr t <*> el) (internExpr e) arms
-  where
-    internBind (Bind x t e) = IBind <$> intern x <*> pure t <*> internExpr e
+ where
+  internBind (Bind x t e) = IBind <$> intern x <*> pure t <*> internExpr e
 
 -- | The bodies of all definitions and the id of the top entity's
 -- definition, with the name of every id. A later definition with the same
 -- name replaces an earlier one.
 internProgram :: Program Ty Name -> (IntMap IExpr, Int, IntMap Name)
 internProgram prog = (IntMap.fromList defs, top, names)
-  where
-    ((defs, top), Interner _ names) = runState build (Interner Map.empty IntMap.empty)
-    build =
-      (,)
-        <$> traverse (\d -> (,) <$> intern (defName d) <*> internExpr (defBody d)) (progDefs prog)
-        <*> intern (topDef (progTop prog))
+ where
+  ((defs, top), Interner _ names) = runState build (Interner Map.empty IntMap.empty)
+  build =
+    (,)
+      <$> traverse (\d ->
+        (,) <$> intern (defName d) <*> internExpr (defBody d)) (progDefs prog)
+      <*> intern (topDef (progTop prog))
 
 ----------------------------------------------------------------------
 -- The semantic domain
@@ -309,7 +310,8 @@ spend :: Int -> M ()
 spend k = do
   n <- gets stSteps
   when (n > maxEvalSteps - k) $
-    failAt StNormalize ("normalization exceeds " <> showT maxEvalSteps <> " evaluation steps")
+    failAt StNormalize ("normalization exceeds " <> showT maxEvalSteps
+      <> " evaluation steps")
   modify' (\s -> s {stSteps = n + k})
 
 tick :: M ()
@@ -332,7 +334,9 @@ countBind :: M ()
 countBind = do
   n <- gets stEmitted
   when (n >= maxNormalBinds) $
-    failAt StNormalize ("normal form exceeds " <> showT maxNormalBinds <> " binds while inlining")
+    failAt
+      StNormalize
+      ("normal form exceeds " <> showT maxNormalBinds <> " binds while inlining")
   modify' (\s -> s {stEmitted = n + 1})
 
 -- | Emit a bind for a wire id allocated earlier.
@@ -375,19 +379,20 @@ alias :: Int -> SVal -> M ()
 alias x v0 = do
   base <- aliasBase x
   go base v0
-  where
-    go name v = do
-      tick
-      case v of
-        SAtom (WVar i) _ ->
-          modify' (\s -> s {stAliases = IntMap.insertWith (\_ old -> old) i name (stAliases s)})
-        STuple t vs
-          | Text.compareLength name maxAliasLength == LT -> do
-              named <- gets (IntSet.member t . stNamed)
-              unless named $ do
-                modify' (\s -> s {stNamed = IntSet.insert t (stNamed s)})
-                zipWithM_ (\k -> go (name <> "_" <> showT k)) [0 :: Int ..] vs
-        _ -> pure ()
+ where
+  go name v = do
+    tick
+    case v of
+      SAtom (WVar i) _ ->
+        modify' (\s -> s {stAliases = IntMap.insertWith (\_ old ->
+          old) i name (stAliases s)})
+      STuple t vs
+        | Text.compareLength name maxAliasLength == LT -> do
+            named <- gets (IntSet.member t . stNamed)
+            unless named $ do
+              modify' (\s -> s {stNamed = IntSet.insert t (stNamed s)})
+              zipWithM_ (\k -> go (name <> "_" <> showT k)) [0 :: Int ..] vs
+      _ -> pure ()
 
 -- | Longest prefix of a source binder name used to name wires, and length
 -- beyond which tuple components are no longer named after their binder.
@@ -401,13 +406,13 @@ bindVar x v env = env {envVars = IntMap.insert x v (envVars env)}
 -- so the cost is linear in the size of the value however its tuples nest.
 leaves :: SVal -> M [(W, Ty)]
 leaves v0 = go v0 []
-  where
-    go v acc = do
-      tick
-      case v of
-        SAtom w t -> pure ((w, t) : acc)
-        STuple _ vs -> foldrM go acc vs
-        SFun _ _ -> failAt StNormalize "a function value cannot be lowered to wires"
+ where
+  go v acc = do
+    tick
+    case v of
+      SAtom w t -> pure ((w, t) : acc)
+      STuple _ vs -> foldrM go acc vs
+      SFun _ _ -> failAt StNormalize "a function value cannot be lowered to wires"
 
 ----------------------------------------------------------------------
 -- Evaluation
@@ -498,13 +503,13 @@ literal :: Value -> M SVal
 literal v
   | validValue v = spend (size v) >> go v
   | otherwise = failAt StNormalize ("invalid literal " <> showT v)
-  where
-    go = \case
-      VTuple vs -> traverse go vs >>= tuple
-      scalar -> pure (SAtom (WLit scalar) (valueTy scalar))
-    size = \case
-      VTuple vs -> 1 + sum (fmap size vs)
-      _ -> 1
+ where
+  go = \case
+    VTuple vs -> traverse go vs >>= tuple
+    scalar -> pure (SAtom (WLit scalar) (valueTy scalar))
+  size = \case
+    VTuple vs -> 1 + sum (fmap size vs)
+    _ -> 1
 
 letBind :: Env -> IBind -> M Env
 letBind env (IBind x _ e) = do
@@ -522,15 +527,15 @@ recLet env binds body = do
   let env' = foldr (uncurry bindVar) env (zip (fmap ibName binds) holes)
   zipWithM_ (tieBind env') binds holes
   eval env' body
-  where
-    hole b = sourceName (ibName b) >>= (`placeholder` ibTy b)
-    tieBind env' b h = do
-      ctx <- bindContext (ibName b)
-      inContext ctx $ do
-        v <- eval env' (ibExpr b)
-        alias (ibName b) v
-        name <- sourceName (ibName b)
-        tie name h v
+ where
+  hole b = sourceName (ibName b) >>= (`placeholder` ibTy b)
+  tieBind env' b h = do
+    ctx <- bindContext (ibName b)
+    inContext ctx $ do
+      v <- eval env' (ibExpr b)
+      alias (ibName b) v
+      name <- sourceName (ibName b)
+      tie name h v
 
 -- | Fresh wires for every scalar component of a recursively bound value,
 -- named @x@ in error messages.
@@ -542,21 +547,27 @@ placeholder x = \case
   t
     | isScalar t -> (`SAtom` t) . WVar <$> freshId
     | otherwise ->
-        failAt StNormalize ("recursive binding " <> x <> " has a non-scalar type " <> showT t)
+        failAt StNormalize ("recursive binding " <> x <> " has a non-scalar type "
+          <> showT t)
 
 -- | Tie the wires of a recursive binding @x@ to its value with copies.
 tie :: Text -> SVal -> SVal -> M ()
 tie x hole v = case (hole, v) of
-  (SAtom (WVar i) t, SAtom w t') | t == t' -> emitAt i (Text.take maxAliasLength x) t (RCopy w)
+  (SAtom (WVar i) t, SAtom w t') | t == t' ->
+    emitAt i (Text.take maxAliasLength x) t (RCopy w)
   (STuple _ hs, STuple _ vs) | length hs == length vs -> zipWithM_ (tie x) hs vs
-  _ -> failAt StNormalize ("the value of recursive binding " <> x <> " does not match its type")
+  _ ->
+    failAt StNormalize ("the value of recursive binding " <> x
+      <> " does not match its type")
 
 project :: Int -> SVal -> M SVal
 project i v = do
   spend (clamp (0, maxEvalSteps) i)
   case v of
     STuple _ vs | i >= 0, x : _ <- drop i vs -> pure x
-    _ -> failAt StNormalize ("projection " <> showT i <> " out of a value without that component")
+    _ ->
+      failAt StNormalize ("projection " <> showT i
+        <> " out of a value without that component")
 
 -- | One mux per scalar component where the branches differ. Each pair of
 -- tuples is muxed once and the result reused wherever the pair recurs, so
@@ -564,22 +575,24 @@ project i v = do
 -- distinct pairs, not in the size of the branches written out as trees.
 mux :: W -> SVal -> SVal -> M SVal
 mux c a0 b0 = snd <$> go Map.empty a0 b0
-  where
-    go memo a b =
-      tick >> case (a, b) of
-        (SAtom x t, SAtom y t')
-          | t /= t' -> failAt StNormalize "the branches of an if have different types"
-          | x == y -> pure (memo, a)
-          | otherwise -> (\w -> (memo, SAtom w t)) <$> emitShared "mux" t (RMux c x y)
-        (STuple i xs, STuple j ys)
-          | Just r <- Map.lookup (i, j) memo -> pure (memo, r)
-          | length xs == length ys -> do
-              (memo', rs) <- mapAccumM (\m (x, y) -> go m x y) memo (zip xs ys)
-              r <- tuple rs
-              pure (Map.insert (i, j) r memo', r)
-        (SFun _ _, _) -> failAt StNormalize "an if whose branches carry a function is not supported"
-        (_, SFun _ _) -> failAt StNormalize "an if whose branches carry a function is not supported"
-        _ -> failAt StNormalize "the branches of an if have different shapes"
+ where
+  go memo a b =
+    tick >> case (a, b) of
+      (SAtom x t, SAtom y t')
+        | t /= t' -> failAt StNormalize "the branches of an if have different types"
+        | x == y -> pure (memo, a)
+        | otherwise -> (\w -> (memo, SAtom w t)) <$> emitShared "mux" t (RMux c x y)
+      (STuple i xs, STuple j ys)
+        | Just r <- Map.lookup (i, j) memo -> pure (memo, r)
+        | length xs == length ys -> do
+            (memo', rs) <- mapAccumM (\m (x, y) -> go m x y) memo (zip xs ys)
+            r <- tuple rs
+            pure (Map.insert (i, j) r memo', r)
+      (SFun _ _, _) -> failAt StNormalize "an if whose branches carry a function is not \
+        \supported"
+      (_, SFun _ _) -> failAt StNormalize "an if whose branches carry a function is not \
+        \supported"
+      _ -> failAt StNormalize "the branches of an if have different shapes"
 
 ----------------------------------------------------------------------
 -- Prims
@@ -587,9 +600,9 @@ mux c a0 b0 = snd <$> go Map.empty a0 b0
 -- | A prim as a curried function collecting 'primArity' arguments.
 primFun :: PrimOp -> SVal
 primFun op = collect (primArity op) []
-  where
-    collect n acc = SFun Nothing $ \a ->
-      if n <= 1 then runPrim op (reverse (a : acc)) else pure (collect (n - 1) (a : acc))
+ where
+  collect n acc = SFun Nothing $ \a ->
+    if n <= 1 then runPrim op (reverse (a : acc)) else pure (collect (n - 1) (a : acc))
 
 runPrim :: PrimOp -> [SVal] -> M SVal
 runPrim op args = case (op, args) of
@@ -607,10 +620,10 @@ combinational op args = do
   case primResultTy op (fmap snd ws) of
     Nothing -> failAt StNormalize ("ill-typed application of " <> primName op)
     Just t -> (`SAtom` t) <$> emitShared (primHint op) t (RPrim op (fmap fst ws))
-  where
-    scalarArg = \case
-      SAtom w t -> pure (w, t)
-      _ -> failAt StNormalize (primName op <> " applied to a value that is not a scalar")
+ where
+  scalarArg = \case
+    SAtom w t -> pure (w, t)
+    _ -> failAt StNormalize (primName op <> " applied to a value that is not a scalar")
 
 -- | @bv.add@ is hinted as @add@.
 primHint :: PrimOp -> Text
@@ -637,17 +650,20 @@ mealy v f i = do
     STuple _ [next, o] -> do
       ws <- leaves next
       unless (length ws == length regs) $
-        failAt StNormalize "the next state of a mealy machine does not match its initial value"
+        failAt StNormalize "the next state of a mealy machine does not match its initial \
+          \value"
       zipWithM_ feedBack regs ws
       pure o
     _ ->
-      failAt StNormalize
+      failAt
+        StNormalize
         "the step function of a mealy machine does not return a (state, output) pair"
-  where
-    feedBack (rid, initial) (w, t)
-      | valueTy initial == t = emitAt rid "state" t (RReg initial w)
-      | otherwise =
-          failAt StNormalize "the next state of a mealy machine does not match its initial value"
+ where
+  feedBack (rid, initial) (w, t)
+    | valueTy initial == t = emitAt rid "state" t (RReg initial w)
+    | otherwise =
+        failAt StNormalize "the next state of a mealy machine does not match its initial \
+          \value"
 
 -- | A fresh wire for every scalar component of a mealy machine's initial
 -- state, with the component it starts from, in order.
@@ -655,14 +671,14 @@ stateWires :: Value -> M (SVal, [(Int, Value)])
 stateWires v0 = do
   (regs, st) <- go [] v0
   pure (st, reverse regs)
-  where
-    go acc = \case
-      VTuple vs -> do
-        (acc', cs) <- mapAccumM go acc vs
-        (acc',) <$> tuple cs
-      v -> do
-        i <- freshId
-        pure ((i, v) : acc, SAtom (WVar i) (valueTy v))
+ where
+  go acc = \case
+    VTuple vs -> do
+      (acc', cs) <- mapAccumM go acc vs
+      (acc',) <$> tuple cs
+    v -> do
+      i <- freshId
+      pure ((i, v) : acc, SAtom (WVar i) (valueTy v))
 
 ----------------------------------------------------------------------
 -- Top level
@@ -706,15 +722,16 @@ elaborate top topId = inContext ("in top entity " <> topName top) $ do
   result <- foldM apply f args
   parts <- spine (length (topOutputs top)) result
   zipWithM output (topOutputs top) parts
-  where
-    input i port
-      | isScalar (portTy port) = pure (SAtom (WVar i) (portTy port))
-      | otherwise = failAt StNormalize ("input port " <> portName port <> " is not scalar")
-    output port = \case
-      SAtom w t | t == portTy port -> pure (port, w)
-      _ ->
-        failAt StNormalize
-          ("output port " <> portName port <> " is not driven by a " <> showT (portTy port))
+ where
+  input i port
+    | isScalar (portTy port) = pure (SAtom (WVar i) (portTy port))
+    | otherwise = failAt StNormalize ("input port " <> portName port <> " is not scalar")
+  output port = \case
+    SAtom w t | t == portTy port -> pure (port, w)
+    _ ->
+      failAt
+        StNormalize
+        ("output port " <> portName port <> " is not driven by a " <> showT (portTy port))
 
 -- | Split a result along the right-nested product spine of @n@ outputs.
 spine :: Int -> SVal -> M [SVal]
@@ -722,7 +739,8 @@ spine n v
   | n <= 1 = pure [v]
   | STuple _ [o, rest] <- v = (o :) <$> spine (n - 1) rest
   | otherwise =
-      failAt StNormalize ("the top entity's result does not have " <> showT n <> " outputs")
+      failAt StNormalize ("the top entity's result does not have " <> showT n
+        <> " outputs")
 
 operands :: RRhs -> [W]
 operands = \case
@@ -776,7 +794,8 @@ assemble prog outs st = do
         RMux c a b -> NMux <$> atom c <*> atom a <*> atom b
         RReg v w -> NReg v <$> atom w
         RCopy w -> NAtom <$> atom w
-  nbinds <- traverse (\(i, b) -> NBind <$> nameOf i <*> pure (rbTy b) <*> rhs (rbRhs b)) ordered
+  nbinds <-
+    traverse (\(i, b) -> NBind <$> nameOf i <*> pure (rbTy b) <*> rhs (rbRhs b)) ordered
   nouts <- traverse (\(p, w) -> NOutput (portName p) (portTy p) <$> atom w) outs'
   let top = progTop prog
   pure
@@ -788,28 +807,29 @@ assemble prog outs st = do
       , nmBinds = nbinds
       , nmCertificate = progCertificate prog
       }
-  where
-    internal i = ginError StNormalize ("internal error: wire #" <> showT i <> " has no bind")
+ where
+  internal i =
+    ginError StNormalize ("internal error: wire #" <> showT i <> " has no bind")
 
 -- | Map every copy bind to the non-copy wire or literal it denotes. A cycle
 -- of copies is a combinational loop.
 resolveCopies :: (Int -> Text) -> IntMap RBind -> Either GinError (IntMap W)
 resolveCopies label binds = foldM start IntMap.empty (IntMap.keys targets)
-  where
-    targets = IntMap.mapMaybe (\b -> case rbRhs b of RCopy w -> Just w; _ -> Nothing) binds
-    start done i
-      | IntMap.member i done = Right done
-      | otherwise = walk done [] IntSet.empty i
-    walk done path onPath i
-      | Just w <- IntMap.lookup i done = Right (settle w path done)
-      | Just target <- IntMap.lookup i targets =
-          if IntSet.member i onPath
-            then Left (loopError label (i : reverse (takeWhile (/= i) path)))
-            else case target of
-              WVar j -> walk done (i : path) (IntSet.insert i onPath) j
-              WLit _ -> Right (settle target (i : path) done)
-      | otherwise = Right (settle (WVar i) path done)
-    settle w path done = foldl' (\m k -> IntMap.insert k w m) done path
+ where
+  targets = IntMap.mapMaybe (\b -> case rbRhs b of RCopy w -> Just w; _ -> Nothing) binds
+  start done i
+    | IntMap.member i done = Right done
+    | otherwise = walk done [] IntSet.empty i
+  walk done path onPath i
+    | Just w <- IntMap.lookup i done = Right (settle w path done)
+    | Just target <- IntMap.lookup i targets =
+        if IntSet.member i onPath
+          then Left (loopError label (i : reverse (takeWhile (/= i) path)))
+          else case target of
+            WVar j -> walk done (i : path) (IntSet.insert i onPath) j
+            WLit _ -> Right (settle target (i : path) done)
+    | otherwise = Right (settle (WVar i) path done)
+  settle w path done = foldl' (\m k -> IntMap.insert k w m) done path
 
 -- | Wires a right-hand side reads within the cycle: all operands except a
 -- register's argument.
@@ -822,38 +842,40 @@ combinationalDeps = \case
 -- the earliest-emitted ready bind; a cycle is a combinational loop.
 topoOrder :: (Int -> Text) -> IntMap RBind -> Either GinError [Int]
 topoOrder label binds = go ready0 indeg0 [] (0 :: Int)
-  where
-    deps = IntMap.map (IntSet.filter (`IntMap.member` binds) . combinationalDeps . rbRhs) binds
-    users =
-      IntMap.fromListWith
-        IntSet.union
-        [(d, IntSet.singleton i) | (i, ds) <- IntMap.toList deps, d <- IntSet.toList ds]
-    indeg0 = IntMap.map IntSet.size deps
-    ready0 = IntMap.keysSet (IntMap.filter (== 0) indeg0)
-    go ready indeg acc done = case IntSet.minView ready of
-      Just (i, rest) ->
-        let readers = IntMap.findWithDefault IntSet.empty i users
-            (indeg', ready') = IntSet.foldl' release (indeg, rest) readers
-         in go ready' indeg' (i : acc) (done + 1)
-      Nothing
-        | done == IntMap.size binds -> Right (reverse acc)
-        | otherwise ->
-            Left (loopError label (findCycle deps (IntMap.keysSet (IntMap.filter (> 0) indeg))))
-    release (indeg, ready) u =
-      let k = IntMap.findWithDefault 0 u indeg - 1
-       in (IntMap.insert u k indeg, if k == 0 then IntSet.insert u ready else ready)
+ where
+  deps =
+    IntMap.map (IntSet.filter (`IntMap.member` binds) . combinationalDeps . rbRhs) binds
+  users =
+    IntMap.fromListWith
+      IntSet.union
+      [(d, IntSet.singleton i) | (i, ds) <- IntMap.toList deps, d <- IntSet.toList ds]
+  indeg0 = IntMap.map IntSet.size deps
+  ready0 = IntMap.keysSet (IntMap.filter (== 0) indeg0)
+  go ready indeg acc done = case IntSet.minView ready of
+    Just (i, rest) ->
+      let readers = IntMap.findWithDefault IntSet.empty i users
+          (indeg', ready') = IntSet.foldl' release (indeg, rest) readers
+       in go ready' indeg' (i : acc) (done + 1)
+    Nothing
+      | done == IntMap.size binds -> Right (reverse acc)
+      | otherwise ->
+          Left (loopError label (findCycle deps (IntMap.keysSet (IntMap.filter (> 0)
+            indeg))))
+  release (indeg, ready) u =
+    let k = IntMap.findWithDefault 0 u indeg - 1
+     in (IntMap.insert u k indeg, if k == 0 then IntSet.insert u ready else ready)
 
 -- | A cycle among binds that could not be ordered. Each of them reads at
 -- least one other, so walking reads from any of them must revisit a bind.
 findCycle :: IntMap IntSet -> IntSet -> [Int]
 findCycle deps stuck = maybe [] (walk IntMap.empty [] 0 . fst) (IntSet.minView stuck)
-  where
-    walk seen path k i = case IntMap.lookup i seen of
-      Just pos -> reverse (take (k - pos) path)
-      Nothing -> case IntSet.minView (IntSet.intersection stuck (readsOf i)) of
-        Nothing -> reverse (i : path)
-        Just (j, _) -> walk (IntMap.insert i k seen) (i : path) (k + 1 :: Int) j
-    readsOf i = IntMap.findWithDefault IntSet.empty i deps
+ where
+  walk seen path k i = case IntMap.lookup i seen of
+    Just pos -> reverse (take (k - pos) path)
+    Nothing -> case IntSet.minView (IntSet.intersection stuck (readsOf i)) of
+      Nothing -> reverse (i : path)
+      Just (j, _) -> walk (IntMap.insert i k seen) (i : path) (k + 1 :: Int) j
+  readsOf i = IntMap.findWithDefault IntSet.empty i deps
 
 loopError :: (Int -> Text) -> [Int] -> GinError
 loopError label ids =
@@ -865,33 +887,35 @@ loopError label ids =
 -- | Binds an output depends on, through any operand.
 reachable :: IntMap RBind -> [W] -> IntSet
 reachable binds = go IntSet.empty
-  where
-    go seen = \case
-      [] -> seen
-      WLit _ : rest -> go seen rest
-      WVar i : rest
-        | IntSet.member i seen -> go seen rest
-        | Just b <- IntMap.lookup i binds -> go (IntSet.insert i seen) (operands (rbRhs b) <> rest)
-        | otherwise -> go seen rest
+ where
+  go seen = \case
+    [] -> seen
+    WLit _ : rest -> go seen rest
+    WVar i : rest
+      | IntSet.member i seen -> go seen rest
+      | Just b <- IntMap.lookup i binds ->
+          go (IntSet.insert i seen) (operands (rbRhs b) <> rest)
+      | otherwise -> go seen rest
 
 -- | Names for inputs (their port names) and binds (the first source binder
 -- bound to the wire, else the emission hint), made unique with numeric
 -- suffixes in bind order.
 assignNames :: IntMap Text -> IntMap Text -> [(Int, RBind)] -> IntMap Text
 assignNames inputs aliases ordered = names
-  where
-    (names, _, _) = foldl' step (inputs, Set.fromList (IntMap.elems inputs), Map.empty) ordered
-    step (!acc, !used, !counters) (i, b) =
-      let base = nonEmpty (fromMaybe (rbHint b) (IntMap.lookup i aliases))
-          (name, counters') = fresh used counters base
-       in (IntMap.insert i name acc, Set.insert name used, counters')
-    nonEmpty t = if Text.null t then "w" else t
-    fresh used counters base
-      | not (Set.member base used) = (base, counters)
-      | otherwise = suffixed (Map.findWithDefault (1 :: Int) base counters)
-      where
-        suffixed k
-          | Set.member candidate used = suffixed (k + 1)
-          | otherwise = (candidate, Map.insert base (k + 1) counters)
-          where
-            candidate = base <> "_" <> showT k
+ where
+  (names, _, _) =
+    foldl' step (inputs, Set.fromList (IntMap.elems inputs), Map.empty) ordered
+  step (!acc, !used, !counters) (i, b) =
+    let base = nonEmpty (fromMaybe (rbHint b) (IntMap.lookup i aliases))
+        (name, counters') = fresh used counters base
+     in (IntMap.insert i name acc, Set.insert name used, counters')
+  nonEmpty t = if Text.null t then "w" else t
+  fresh used counters base
+    | not (Set.member base used) = (base, counters)
+    | otherwise = suffixed (Map.findWithDefault (1 :: Int) base counters)
+   where
+    suffixed k
+      | Set.member candidate used = suffixed (k + 1)
+      | otherwise = (candidate, Map.insert base (k + 1) counters)
+     where
+      candidate = base <> "_" <> showT k

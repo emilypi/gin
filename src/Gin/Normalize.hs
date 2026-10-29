@@ -96,7 +96,8 @@ checkNormal m = do
   -- 8: size, first, so the remaining checks run on bounded input.
   let count = length binds
   when (count > maxNormalBinds) $
-    failAt StNormalize
+    failAt
+      StNormalize
       ("too many binds: " <> showT count <> " exceeds the limit " <> showT maxNormalBinds)
   -- 1: scalar types.
   for_ inputs $ \(n, t) -> scalar ("input " <> unName n) t
@@ -104,29 +105,37 @@ checkNormal m = do
   for_ outputs $ \o -> scalar ("output " <> noName o) (noTy o)
   -- 2: unique names.
   inputNames <- foldM (fresh "duplicate input name ") Set.empty (fmap fst inputs)
-  foldM_ (fresh "duplicate bound name (already an input or a bind) ") inputNames (fmap nbName binds)
+  foldM_
+    (fresh "duplicate bound name (already an input or a bind) ")
+    inputNames
+    (fmap nbName binds)
   let env = Map.fromList (inputs <> [(nbName b, nbTy b) | b <- binds])
   -- 4: scoping, before typing so atom types can be looked up.
   for_ binds $ \b ->
     for_ (rhsVars (nbRhs b)) $ \n ->
       unless (Map.member n env) $
-        failAt StNormalize ("undefined variable " <> unName n <> " in bind " <> unName (nbName b))
+        failAt StNormalize ("undefined variable " <> unName n <> " in bind "
+          <> unName (nbName b))
   for_ outputs $ \o ->
     for_ (atomVars (noAtom o)) $ \n ->
       unless (Map.member n env) $
-        failAt StNormalize ("undefined variable " <> unName n <> " in output " <> noName o)
+        failAt StNormalize ("undefined variable " <> unName n <> " in output "
+          <> noName o)
   -- 3 and 6: typing.
   for_ binds (checkBind env)
   for_ outputs $ \o -> do
     t <- atomTy env (noAtom o)
     unless (t == noTy o) $
-      failAt StNormalize
-        ("ill-typed output " <> noName o <> ": " <> showT t <> " instead of " <> showT (noTy o))
+      failAt
+        StNormalize
+        ("ill-typed output " <> noName o <> ": " <> showT t <> " instead of "
+          <> showT (noTy o))
   -- 5: topological order of the combinational dependency graph.
   let step defined b = do
         for_ (combinationalVars (nbRhs b)) $ \n ->
           unless (Set.member n defined) $
-            failAt StNormalize
+            failAt
+              StNormalize
               ( "bind "
                   <> unName (nbName b)
                   <> " reads "
@@ -139,7 +148,8 @@ checkNormal m = do
   -- 7: no copies, no dead binds.
   for_ binds $ \b -> case nbRhs b of
     NAtom _ ->
-      failAt StNormalize ("copy bind " <> unName (nbName b) <> " (copies must be propagated)")
+      failAt StNormalize ("copy bind " <> unName (nbName b)
+        <> " (copies must be propagated)")
     _ -> pure ()
   let live =
         reachable
@@ -147,14 +157,16 @@ checkNormal m = do
           (concatMap (atomVars . noAtom) outputs)
   for_ binds $ \b ->
     unless (Set.member (nbName b) live) $
-      failAt StNormalize
+      failAt
+        StNormalize
         ("bind " <> unName (nbName b) <> " is unreachable from every output (dead bind)")
-  where
-    scalar what t =
-      unless (isScalar t) $ failAt StNormalize ("type of " <> what <> " is not scalar: " <> showT t)
-    fresh msg seen n
-      | Set.member n seen = failAt StNormalize (msg <> unName n)
-      | otherwise = Right (Set.insert n seen)
+ where
+  scalar what t =
+    unless (isScalar t) $
+      failAt StNormalize ("type of " <> what <> " is not scalar: " <> showT t)
+  fresh msg seen n
+    | Set.member n seen = failAt StNormalize (msg <> unName n)
+    | otherwise = Right (Set.insert n seen)
 
 checkBind :: Map Name Ty -> NBind -> Either GinError ()
 checkBind env (NBind n t rhs) = case rhs of
@@ -163,7 +175,9 @@ checkBind env (NBind n t rhs) = case rhs of
       illTyped (primName op <> " is not a combinational prim")
     let arity = primArity op
     unless (genericLength as == arity) $
-      illTyped (primName op <> " takes " <> showT arity <> " arguments, not " <> showT (length as))
+      illTyped
+        (primName op <> " takes " <> showT arity <> " arguments, not "
+          <> showT (length as))
     ts <- traverse (atomTy env) as
     case primResultTy op ts of
       Just r | r == t -> pure ()
@@ -177,25 +191,32 @@ checkBind env (NBind n t rhs) = case rhs of
     unless (ta == t && tb == t) $ illTyped ("mux branches have types " <> showT [ta, tb])
   NReg v a -> do
     unless (validValue v && valueTy v == t) $
-      failAt StNormalize
-        ("register " <> unName n <> " has an initial value of the wrong type: " <> showT v)
+      failAt
+        StNormalize
+        ("register " <> unName n <> " has an initial value of the wrong type: \
+          \" <> showT v)
     ta <- atomTy env a
     unless (ta == t) $ illTyped ("register argument has type " <> showT ta)
   NAtom a -> do
     ta <- atomTy env a
     unless (ta == t) $ illTyped ("copied atom has type " <> showT ta)
-  where
-    illTyped msg =
-      failAt StNormalize ("ill-typed bind " <> unName n <> " of type " <> showT t <> ": " <> msg)
+ where
+  illTyped msg =
+    failAt
+      StNormalize
+      ("ill-typed bind " <> unName n <> " of type " <> showT t <> ": " <> msg)
 
 -- | Type of an atom whose variable, if any, is in scope.
 atomTy :: Map Name Ty -> Atom -> Either GinError Ty
 atomTy env = \case
-  AVar n -> maybe (failAt StNormalize ("undefined variable " <> unName n)) Right (Map.lookup n env)
+  AVar n ->
+    maybe (failAt StNormalize ("undefined variable "
+      <> unName n)) Right (Map.lookup n env)
   ALit v
     | validValue v && isScalar (valueTy v) -> Right (valueTy v)
     | otherwise ->
-        failAt StNormalize ("ill-typed literal " <> showT v <> " (literals are valid scalars)")
+        failAt StNormalize ("ill-typed literal " <> showT v
+          <> " (literals are valid scalars)")
 
 atomVars :: Atom -> [Name]
 atomVars = toListOf _AVar
@@ -211,10 +232,10 @@ combinationalVars = \case
 
 reachable :: Map Name NRhs -> [Name] -> Set Name
 reachable rhss = go Set.empty
-  where
-    go seen = \case
-      [] -> seen
-      n : rest
-        | Set.member n seen -> go seen rest
-        | Just r <- Map.lookup n rhss -> go (Set.insert n seen) (rhsVars r <> rest)
-        | otherwise -> go seen rest
+ where
+  go seen = \case
+    [] -> seen
+    n : rest
+      | Set.member n seen -> go seen rest
+      | Just r <- Map.lookup n rhss -> go (Set.insert n seen) (rhsVars r <> rest)
+      | otherwise -> go seen rest

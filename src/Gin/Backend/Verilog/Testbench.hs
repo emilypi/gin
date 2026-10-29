@@ -80,91 +80,93 @@ renderTestbench dialect m vs =
       <> [""]
       <> fmap indent initial
       <> ["endmodule"]
-  where
-    variable = case dialect of
-      Verilog2005 -> "reg "
-      SystemVerilog2017 -> "logic "
-    net' = case dialect of
-      Verilog2005 -> "wire "
-      SystemVerilog2017 -> "logic "
-    clk = unIdent (modClock m)
-    rst = unIdent (modReset m)
-    outs = fmap outNet (modOutputs m)
-    signals =
-      [variable <> clk <> ";", variable <> rst <> ";"]
-        <> [variable <> typeRange (netType n) <> unIdent (netName n) <> ";" | n <- modInputs m]
-        <> [net' <> typeRange (netType n) <> unIdent (netName n) <> ";" | n <- outs]
-        <> ["integer gin_mismatches;"]
-    dut =
-      [unIdent (modName m) <> " gin_dut ("]
-        <> fmap indent (punctuate "," [connect i | i <- modClock m : modReset m : portIdents])
-        <> [");"]
-    portIdents = fmap netName (modInputs m <> outs)
-    connect i = "." <> unIdent i <> "(" <> unIdent i <> ")"
-    initial =
-      ["initial begin"]
-        <> fmap
-          indent
-          ( ["gin_mismatches = 0;", clk <> " = 1'b0;", rst <> " = 1'b1;"]
-              <> [drive n (Just 0) | n <- modInputs m]
-              <> ["#5 " <> clk <> " = 1'b1;", "#5 " <> clk <> " = 1'b0;", rst <> " = 1'b0;"]
-              <> concat (zipWith cycleLines [0 :: Int ..] (vecCycles vs))
-              <> verdict
-              <> ["$finish;"]
-          )
+ where
+  variable = case dialect of
+    Verilog2005 -> "reg "
+    SystemVerilog2017 -> "logic "
+  net' = case dialect of
+    Verilog2005 -> "wire "
+    SystemVerilog2017 -> "logic "
+  clk = unIdent (modClock m)
+  rst = unIdent (modReset m)
+  outs = fmap outNet (modOutputs m)
+  signals =
+    [variable <> clk <> ";", variable <> rst <> ";"]
+      <> [variable <> typeRange (netType n) <> unIdent (netName n) <> ";" | n <-
+        modInputs m]
+      <> [net' <> typeRange (netType n) <> unIdent (netName n) <> ";" | n <- outs]
+      <> ["integer gin_mismatches;"]
+  dut =
+    [unIdent (modName m) <> " gin_dut ("]
+      <> fmap indent (punctuate "," [connect i | i <-
+        modClock m : modReset m : portIdents])
+      <> [");"]
+  portIdents = fmap netName (modInputs m <> outs)
+  connect i = "." <> unIdent i <> "(" <> unIdent i <> ")"
+  initial =
+    ["initial begin"]
+      <> fmap
+        indent
+        ( ["gin_mismatches = 0;", clk <> " = 1'b0;", rst <> " = 1'b1;"]
+            <> [drive n (Just 0) | n <- modInputs m]
+            <> ["#5 " <> clk <> " = 1'b1;", "#5 " <> clk <> " = 1'b0;", rst <> " = 1'b0;"]
+            <> concat (zipWith cycleLines [0 :: Int ..] (vecCycles vs))
+            <> verdict
+            <> ["$finish;"]
+        )
+      <> ["end"]
+  cycleLines t c =
+    ["// cycle " <> showT t]
+      <> zipWith drive (modInputs m) inputBits
+      <> concat [report t (invalid n) | (n, Nothing) <- zip (modInputs m) inputBits]
+      <> extra t "extra-inputs" (length (cycInputs c) - length (modInputs m))
+      <> extra t "extra-outputs" (length (cycOutputs c) - length outs)
+      <> ["#1;"]
+      <> concat (zipWith (check t) outs (rowBits outs (cycOutputs c)))
+      <> ["#4 " <> clk <> " = 1'b1;", "#5 " <> clk <> " = 1'b0;"]
+   where
+    inputBits = rowBits (modInputs m) (cycInputs c)
+    invalid n = "port=" <> unIdent (netName n) <> " input=invalid"
+  -- a mismatch the generator found in the row itself
+  report t what =
+    [ "$display(\"" <> mismatchMarker <> " cycle=" <> showT t <> " " <> what <> "\");"
+    , "gin_mismatches = gin_mismatches + 1;"
+    ]
+  extra t what k = if k > 0 then report t (what <> "=" <> showT k) else []
+  drive n bits =
+    unIdent (netName n) <> " = " <> maybe (unknown ty) (valueLiteral ty) bits <> ";"
+   where
+    ty = netType n
+  check t n = \case
+    Just bits ->
+      ["if (" <> name <> " !== " <> valueLiteral (netType n) bits <> ") begin"]
+        <> fmap indent (mismatch (hexDigits (hwWidth (netType n)) bits))
         <> ["end"]
-    cycleLines t c =
-      ["// cycle " <> showT t]
-        <> zipWith drive (modInputs m) inputBits
-        <> concat [report t (invalid n) | (n, Nothing) <- zip (modInputs m) inputBits]
-        <> extra t "extra-inputs" (length (cycInputs c) - length (modInputs m))
-        <> extra t "extra-outputs" (length (cycOutputs c) - length outs)
-        <> ["#1;"]
-        <> concat (zipWith (check t) outs (rowBits outs (cycOutputs c)))
-        <> ["#4 " <> clk <> " = 1'b1;", "#5 " <> clk <> " = 1'b0;"]
-      where
-        inputBits = rowBits (modInputs m) (cycInputs c)
-        invalid n = "port=" <> unIdent (netName n) <> " input=invalid"
-    -- a mismatch the generator found in the row itself
-    report t what =
-      [ "$display(\"" <> mismatchMarker <> " cycle=" <> showT t <> " " <> what <> "\");"
+    Nothing -> mismatch "none"
+   where
+    name = unIdent (netName n)
+    mismatch expected =
+      [ "$display(\""
+          <> mismatchMarker
+          <> " cycle="
+          <> showT t
+          <> " port="
+          <> name
+          <> " expected="
+          <> expected
+          <> " got=%h\", "
+          <> name
+          <> ");"
       , "gin_mismatches = gin_mismatches + 1;"
       ]
-    extra t what k = if k > 0 then report t (what <> "=" <> showT k) else []
-    drive n bits =
-      unIdent (netName n) <> " = " <> maybe (unknown ty) (valueLiteral ty) bits <> ";"
-      where
-        ty = netType n
-    check t n = \case
-      Just bits ->
-        ["if (" <> name <> " !== " <> valueLiteral (netType n) bits <> ") begin"]
-          <> fmap indent (mismatch (hexDigits (hwWidth (netType n)) bits))
-          <> ["end"]
-      Nothing -> mismatch "none"
-      where
-        name = unIdent (netName n)
-        mismatch expected =
-          [ "$display(\""
-              <> mismatchMarker
-              <> " cycle="
-              <> showT t
-              <> " port="
-              <> name
-              <> " expected="
-              <> expected
-              <> " got=%h\", "
-              <> name
-              <> ");"
-          , "gin_mismatches = gin_mismatches + 1;"
-          ]
-    cycles = length (vecCycles vs)
-    verdict =
-      [ "if (gin_mismatches == 0) begin"
-      , indent ("$display(\"" <> passMarker <> " cycles=" <> showT cycles <> "\");")
-      , "end else begin"
-      , indent ("$display(\"" <> failMarker <> " mismatches=%0d\", gin_mismatches);")
-      , "end"
-      ]
+  cycles = length (vecCycles vs)
+  verdict =
+    [ "if (gin_mismatches == 0) begin"
+    , indent ("$display(\"" <> passMarker <> " cycles=" <> showT cycles <> "\");")
+    , "end else begin"
+    , indent ("$display(\"" <> failMarker <> " mismatches=%0d\", gin_mismatches);")
+    , "end"
+    ]
 
 -- | The payload of each port's value in a row, by position; 'Nothing'
 -- for a missing or ill-typed value.

@@ -82,16 +82,16 @@ renderError :: GinError -> Text
 renderError (GinError stage msg ctx) =
   Text.intercalate "\n" $
     (stageName stage <> " error: " <> safeLine msg) : fmap (("  " <>) . safeLine) ctx
-  where
-    stageName = \case
-      StDecode -> "decode"
-      StCheck -> "type"
-      StCertificate -> "certificate"
-      StNormalize -> "normalize"
-      StNetlist -> "netlist"
-      StBackend -> "backend"
-      StSim -> "simulation"
-      StDriver -> "driver"
+ where
+  stageName = \case
+    StDecode -> "decode"
+    StCheck -> "type"
+    StCertificate -> "certificate"
+    StNormalize -> "normalize"
+    StNetlist -> "netlist"
+    StBackend -> "backend"
+    StSim -> "simulation"
+    StDriver -> "driver"
 
 -- | Longest rendered line, in characters, before it is cut.
 maxRenderedLine :: Int
@@ -110,17 +110,18 @@ safeLine t =
             <> " ... ("
             <> Text.pack (show (Text.length escaped - maxRenderedLine))
             <> " more characters)"
-  where
-    escape c
-      | invisible c = "\\u{" <> Text.pack (showHex (ord c) "") <> "}"
-      | otherwise = Text.singleton c
+ where
+  escape c
+    | invisible c = "\\u{" <> Text.pack (showHex (ord c) "") <> "}"
+    | otherwise = Text.singleton c
 
 -- | Characters in the Unicode categories Cc, Cf, Zl, Zp, Cs, Co and Cn: they
 -- break lines or hide, reorder or disguise text.
 invisible :: Char -> Bool
 invisible c =
   generalCategory c
-    `elem` [Control, Format, LineSeparator, ParagraphSeparator, Surrogate, PrivateUse, NotAssigned]
+    `elem` [Control, Format, LineSeparator, ParagraphSeparator, Surrogate, PrivateUse
+      , NotAssigned]
 
 ----------------------------------------------------------------------
 -- Optics

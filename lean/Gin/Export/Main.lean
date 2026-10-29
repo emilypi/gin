@@ -43,26 +43,37 @@ namespace Gin.Export
 /-- Command-line help of `gin-export`. -/
 def usage : String :=
   "usage: lake exe gin-export [--out DIR] [NAME ...]\n\n" ++
-  "Writes DIR/NAME/NAME.gin.json and DIR/NAME/NAME.vectors.json for each named circuit\n" ++
-  "(default: the shipped examples; DIR defaults to examples). Run it through `lake exe`\n" ++
-  "so that the Lean search path is set, and only after `lake exe gin-check-export` has\n" ++
-  "accepted the same circuits: the code of the designs linked into gin-export runs when it\n" ++
-  "starts, and the certificates it writes are trusted only when they equal the checker's\n" ++
-  "(scripts/export-examples.sh). Nothing is written unless every named circuit exports\n" ++
+  "Writes DIR/NAME/NAME.gin.json and DIR/NAME/NAME.vectors.json for each named \
+    circuit\n" ++
+  "(default: the shipped examples; DIR defaults to examples). Run it through `lake \
+    exe`\n" ++
+  "so that the Lean search path is set, and only after `lake exe gin-check-export` \
+    has\n" ++
+  "accepted the same circuits: the code of the designs linked into gin-export runs when \
+    it\n" ++
+  "starts, and the certificates it writes are trusted only when they equal the \
+    checker's\n" ++
+  "(scripts/export-examples.sh). Nothing is written unless every named circuit \
+    exports\n" ++
   "successfully."
 
 /-- Command-line help of `gin-check-export`. -/
 def checkUsage : String :=
-  "usage: lake exe gin-check-export [--exporter MODULE] [--list-modules] [--certificates DIR]\n" ++
+  "usage: lake exe gin-check-export [--exporter MODULE] [--list-modules] \
+    [--certificates DIR]\n" ++
   "                                 [NAME ...]\n\n" ++
   "Checks, without running any code of a design, what gin-export checks before it\n" ++
-  "translates the named circuits (default: the shipped examples): the modules they load\n" ++
-  "and the modules of the exporter MODULE (default GinExport, the root of gin-export)\n" ++
-  "register no IO initializer and do not shadow toolchain modules, no circuit that is\n" ++
+  "translates the named circuits (default: the shipped examples): the modules they \
+    load\n" ++
+  "and the modules of the exporter MODULE (default GinExport, the root of \
+    gin-export)\n" ++
+  "register no IO initializer and do not shadow toolchain modules, no circuit that \
+    is\n" ++
   "not a reject fixture loads one, and every certificate passes the axiom policy and\n" ++
   "the shape check. Exit code 0 when all pass.\n\n" ++
   "--list-modules prints, after those checks, the modules outside the Lean toolchain\n" ++
-  "that the circuits and the exporter load, one per line: the modules the kernel replay\n" ++
+  "that the circuits and the exporter load, one per line: the modules the kernel \
+    replay\n" ++
   "(scripts/export-examples.sh) must check.\n\n" ++
   "--certificates DIR writes DIR/NAME.certificate for each circuit: the bytes its\n" ++
   "NAME.gin.json must end in, the certificate rendered here, where no design runs.\n" ++
@@ -90,8 +101,10 @@ structure CliOptions where
 def parseArgs (check : Bool) : List String → CliOptions → Except String CliOptions
   | [], o => .ok { o with names := o.names.reverse }
   | "--out" :: dir :: rest, o =>
-    if check then .error "unknown option --out" else parseArgs check rest { o with out := dir }
-  | ["--out"], _ => .error (if check then "unknown option --out" else "--out needs a directory")
+    if check then .error "unknown option --out" else parseArgs check rest { o with out
+      := dir }
+  | ["--out"], _ => .error (if check then "unknown option --out" else
+    "--out needs a directory")
   | "--list-modules" :: rest, o =>
     if check then parseArgs check rest { o with listModules := true }
     else .error "unknown option --list-modules (see gin-check-export)"
@@ -103,7 +116,8 @@ def parseArgs (check : Bool) : List String → CliOptions → Except String CliO
     if check then parseArgs check rest { o with certificates := some dir }
     else .error "unknown option --certificates (see gin-check-export)"
   | ["--certificates"], _ =>
-    .error (if check then "--certificates needs a directory" else "unknown option --certificates")
+    .error (if check then "--certificates needs a directory" else
+      "unknown option --certificates")
   | "--help" :: rest, o | "-h" :: rest, o => parseArgs check rest { o with help := true }
   | a :: rest, o =>
     if a.startsWith "-" then .error s!"unknown option {a}"
@@ -113,7 +127,8 @@ def parseArgs (check : Bool) : List String → CliOptions → Except String CliO
 printed raw. -/
 def runMeta {α : Type} (env : Environment) (x : MetaM α) : IO α := do
   let opts := pp.raw.set {} true
-  let (a, _, _) ← x.toIO { fileName := "gin-export", fileMap := default, options := opts } { env }
+  let (a, _, _) ← x.toIO { fileName := "gin-export", fileMap := default, options :=
+    opts } { env }
   return a
 
 /-- Refuse an environment with a project module named like a toolchain
@@ -126,14 +141,19 @@ def checkModules (env : Environment) : IO Unit := do
   let files ← env.header.moduleNames.filter isToolchainModule |>.mapM fun m =>
     return (m, ← findOLean m)
   for m in shadowedCoreModules libDir files do
-    throw <| IO.userError s!"module {m} is named like a module of the Lean toolchain but was not \
-      loaded from {libDir}; refusing to export, because the certificate trusts such modules"
+    throw <| IO.userError
+      s!"module {m} is named like a module of the Lean toolchain but was not \
+      loaded from {libDir}; refusing to export, because the certificate trusts such \
+        modules"
   for (m, decls) in initializers env do
     let names := ", ".intercalate (decls.toList.map toString)
-    throw <| IO.userError s!"module {m} registers IO initializers ({names}), which run code \
-      whenever the module is loaded; refusing to export it (see lean/README.md, \"Trust\")"
+    throw <| IO.userError
+      s!"module {m} registers IO initializers ({names}), which run code \
+      whenever the module is loaded; refusing to export it (see lean/README.md, \
+        \"Trust\")"
   for (m, reasons) in linkedCodeOverrides env do
-    throw <| IO.userError s!"module {m} declares code that may run arbitrary IO when a program \
+    throw <| IO.userError
+      s!"module {m} declares code that may run arbitrary IO when a program \
       linking it starts: {"; ".intercalate reasons.toList}; refusing to export it (see \
       lean/README.md, \"Trust\")"
 
@@ -143,7 +163,8 @@ declarations the kernel never checked, and only the modules a circuit loads
 are replayed. -/
 def checkRejectImports (env : Environment) (e : Entry) : IO Unit := do
   if let some m := rejectImport? e.fixture (importClosure env e.module) then
-    throw <| IO.userError s!"{e.name}: module {e.module} imports the reject fixture module {m}; \
+    throw <| IO.userError
+      s!"{e.name}: module {e.module} imports the reject fixture module {m}; \
       refusing to export a circuit that is not a reject fixture and loads one"
 
 /-- Write a file by renaming a temporary sibling into place. -/
@@ -154,7 +175,8 @@ def writeAtomically (path : FilePath) (contents : String) : IO Unit := do
 
 /-- Parse the command line and look up the named circuits of `table` (or
 `defaults`), or the exit code after printing usage or an error. -/
-def parseCommand (tool : String) (check : Bool) (table : List Entry) (defaults : List String)
+def parseCommand (tool : String) (check : Bool) (table : List Entry) (defaults : List
+  String)
     (args : List String) : IO (Except UInt32 (CliOptions × Array Entry)) := do
   let help := if check then checkUsage else usage
   let opts ← match parseArgs check args {} with
@@ -171,13 +193,15 @@ def parseCommand (tool : String) (check : Bool) (table : List Entry) (defaults :
     match table.find? (·.name == n) with
     | some e => entries := entries.push e
     | none =>
-      IO.eprintln s!"{tool}: unknown circuit {n}; known: {" ".intercalate (table.map (·.name))}"
+      IO.eprintln s!"{tool}: unknown circuit {n}; known: {" ".intercalate (table.map
+        (·.name))}"
       return .error 2
   return .ok (opts, entries)
 
 /-- The modules `entries` load, followed by `linked`, as imports. -/
 def importsOf (entries : Array Entry) (linked : Array Name := #[]) : Array Import :=
-  ((entries.map (·.module)).toList ++ linked.toList).eraseDups.toArray.map ({ module := · })
+  ((entries.map (·.module)).toList ++ linked.toList).eraseDups.toArray.map ({ module :=
+    · })
 
 /-- The checks that need no code of a design: import the modules of
 `entries` and `linked` as data (no initializer runs, no extension is
@@ -210,7 +234,8 @@ any design. Exit code 0 when every check passes, 1 if any circuit is
 refused, 2 on a usage error. -/
 def checkMain (table : List Entry) (defaults : List String) (args : List String) :
     IO UInt32 := do
-  let (opts, entries) ← match ← parseCommand "gin-check-export" true table defaults args with
+  let (opts, entries) ← match ← parseCommand "gin-check-export" true table defaults
+    args with
     | .ok r => pure r
     | .error code => return code
   try
@@ -251,7 +276,8 @@ unsafe def main (table : List Entry) (defaults : List String) (args : List Strin
         let (top, defs) ← runMeta env (translateTop e)
         let prog : Program := { producer, top, defs, certificate }
         let vecs ← IO.ofExcept (exportVectors e prog.top)
-        let docs := [(s!"{e.name}.gin.json", prog.toDoc), (s!"{e.name}.vectors.json", vecs.toDoc)]
+        let docs := [(s!"{e.name}.gin.json", prog.toDoc), (s!"{e.name}.vectors.json",
+          vecs.toDoc)]
         let files ← docs.mapM fun (file, doc) =>
           match renderFile doc with
           | .ok text => pure (file, text)

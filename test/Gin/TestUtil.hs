@@ -50,7 +50,8 @@ goldenText rel actual = do
       Text.writeFile file actual
     else do
       unless exists $
-        expectationFailure ("missing golden file " <> file <> " (rerun with GIN_ACCEPT=1)")
+        expectationFailure ("missing golden file " <> file
+          <> " (rerun with GIN_ACCEPT=1)")
       expected <- Text.readFile file
       actual `shouldBe` expected
 
@@ -69,15 +70,17 @@ itWithTools tools name body = it name $ do
       let msg = "missing tools: " <> unwords ms
       when required (expectationFailure msg)
       pendingWith msg
-  where
-    filterMissing = fmap concat . traverse (\t -> (\ok -> [t | not ok]) <$> toolAvailable t)
+ where
+  filterMissing = fmap concat . traverse (\t -> (\ok -> [t | not ok]) <$> toolAvailable t)
 
 -- | Run a tool (no shell) in a working directory with a 300 s limit;
 -- returns exit code, stdout and stderr. A timeout yields @ExitFailure
 -- 124@ and a message on stderr.
 runTool :: FilePath -> String -> [String] -> IO (ExitCode, Text, Text)
 runTool cwd' exe args =
-  timeout (300 * 1000000) (readCreateProcessWithExitCode (proc exe args) {cwd = Just cwd'} "")
+  timeout
+    (300 * 1000000)
+    (readCreateProcessWithExitCode (proc exe args) {cwd = Just cwd'} "")
     >>= \case
       Just (code, out, err) -> pure (code, Text.pack out, Text.pack err)
       Nothing -> pure (ExitFailure 124, "", Text.pack ("timeout: " <> exe))
@@ -85,7 +88,7 @@ runTool cwd' exe args =
 withTempDir :: (FilePath -> IO a) -> IO a
 withTempDir = withSystemTempDirectory "gin-test"
 
-tshow :: (Show a) => a -> Text
+tshow :: Show a => a -> Text
 tshow = Text.pack . show
 
 -- | The two-way @if c then t else e@.

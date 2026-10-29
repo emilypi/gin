@@ -74,7 +74,8 @@ def mealy (f : σ → ι → σ × ο) (v : σ) (i : Signal dom ι) : Signal dom
 @[simp] theorem lift_apply (f : α → β) (s : Signal dom α) (t : Nat) :
     lift f s t = f (s t) := rfl
 
-@[simp] theorem lift2_apply (f : α → β → γ) (a : Signal dom α) (b : Signal dom β) (t : Nat) :
+@[simp] theorem lift2_apply (f : α → β → γ) (a : Signal dom α) (b : Signal dom β) (t :
+  Nat) :
     lift2 f a b t = f (a t) (b t) := rfl
 
 @[simp] theorem lift3_apply (f : α → β → γ → δ) (a : Signal dom α) (b : Signal dom β)

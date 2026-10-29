@@ -11,7 +11,7 @@ Use sibling checkouts of `gin` and `yolk`; the default `cabal.project` builds
 both. Existing compilation remains unchanged unless optimization is requested.
 
 This implementation is tested with Yolk revision
-`f362de493ad8f247a253cdb4f4fd90993afa7369` (the companion Pareto extraction
+`6aa9b0228ba678dcecd3cf98d289126cce9d07ff` (the companion Pareto extraction
 change). Use that revision in the sibling checkout when reproducing the PR.
 
 ```sh

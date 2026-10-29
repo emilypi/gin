@@ -45,8 +45,8 @@ import Data.Set (Set)
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Gin.Core.Bounded
-import Gin.Core.Optics (makeFieldLenses)
 import Gin.Core.Normal
+import Gin.Core.Optics (makeFieldLenses)
 import Gin.Core.Syntax (Name (..), Ty (..), Value (..), valueTy)
 import Gin.Error (GinError, Stage (..), ginError)
 import Gin.Limits (maxNormalBinds, maxVectorBits)
@@ -58,6 +58,7 @@ import Gin.Vectors (Cycle (..), Vectors (..), maxCycles)
 -- corresponds to input frame @t@. The first @latency@ cycles are warmup.
 -- The pipeline accepts a frame every cycle and cannot be backpressured.
 type PipelineDepth = BoundedInt 1 4096
+
 type PipelineCycles = BoundedInt 0 4096
 
 mkPipelineDepth :: Int -> Either GinError PipelineDepth
@@ -70,7 +71,8 @@ data Scheduled = Scheduled
   { scheduledModule :: !NModule
   , scheduledLatency :: !PipelineCycles
   , scheduledStageDepth :: !PipelineCycles
-  } deriving stock (Eq, Show)
+  }
+  deriving stock (Eq, Show)
 
 scheduledContract :: Scheduled -> TimingContract
 scheduledContract s
@@ -89,7 +91,7 @@ data Builder = Builder
   , bindCount :: !Int
   , reserved :: !(Set Name)
   , nextName :: !Int
-  , delayed :: !(Map (Name,Int) Timed)
+  , delayed :: !(Map (Name, Int) Timed)
   , maxDepth :: !Int
   }
 
@@ -99,30 +101,39 @@ pipelineCircuit :: PipelineDepth -> NModule -> Either GinError Scheduled
 pipelineCircuit depthLimit source = do
   let limit = view boundedIntValue depthLimit
   checkNormal source
-  when (any isState (nmBinds source)) (Left (problem "fixed-latency pipelining requires a combinational kernel"))
+  when
+    (any isState (nmBinds source))
+    (Left (problem "fixed-latency pipelining requires a combinational kernel"))
   let names = S.fromList (map fst (nmInputs source) <> map nbName (nmBinds source))
       initial = Builder [] 0 names 0 M.empty 0
-      inputs = M.fromList [(n, Timed (AVar n) ty 0 0) | (n,ty) <- nmInputs source]
-  ((outputs, latency), state) <- runStateT (do
-    env <- foldM (scheduleBind limit) inputs (nmBinds source)
-    timed <- traverse (atomTime env . noAtom) (nmOutputs source)
-    let latency = maximum (0 : map timedStage timed)
-    when (latency > 4096) (lift (Left (problem "pipeline latency exceeds 4096 cycles")))
-    aligned <- traverse (align latency) timed
-    pure (zipWith (\out (Timed a _ _ _) -> out {noAtom = a}) (nmOutputs source) aligned, latency)) initial
+      inputs = M.fromList [(n, Timed (AVar n) ty 0 0) | (n, ty) <- nmInputs source]
+  ((outputs, latency), state) <-
+    runStateT
+      ( do
+          env <- foldM (scheduleBind limit) inputs (nmBinds source)
+          timed <- traverse (atomTime env . noAtom) (nmOutputs source)
+          let latency = maximum (0 : map timedStage timed)
+          when (latency > 4096) (lift (Left (problem
+            "pipeline latency exceeds 4096 cycles")))
+          aligned <- traverse (align latency) timed
+          pure
+            (zipWith (\out (Timed a _ _ _) -> out {noAtom =
+              a}) (nmOutputs source) aligned, latency)
+      )
+      initial
   let result = source {nmBinds = reverse (built state), nmOutputs = outputs}
   checkNormal result
   Scheduled result
     <$> either (Left . problem . T.pack) Right (mkBoundedInt latency)
     <*> either (Left . problem . T.pack) Right (mkBoundedInt (maxDepth state))
-  where
-    isState b = case nbRhs b of NReg {} -> True; _ -> False
+ where
+  isState b = case nbRhs b of NReg {} -> True; _ -> False
 
 scheduleBind :: Int -> Map Name Timed -> NBind -> Build (Map Name Timed)
 scheduleBind limit env bind = do
   let atoms = case nbRhs bind of
         NPrim _ as -> as
-        NMux c x y -> [c,x,y]
+        NMux c x y -> [c, x, y]
         NAtom a -> [a]
         NReg {} -> []
   ts <- traverse (atomTime env) atoms
@@ -133,10 +144,10 @@ scheduleBind limit env bind = do
   aligned <- traverse (align stage) sameStage
   let args = map timedAtom aligned
       depth = 1 + maximum (0 : map timedDepth aligned)
-  rhs <- case (nbRhs bind,args) of
-    (NPrim op _,as) -> pure (NPrim op as)
-    (NMux {},[c,x,y]) -> pure (NMux c x y)
-    (NAtom _,[a]) -> pure (NAtom a)
+  rhs <- case (nbRhs bind, args) of
+    (NPrim op _, as) -> pure (NPrim op as)
+    (NMux {}, [c, x, y]) -> pure (NMux c x y)
+    (NAtom _, [a]) -> pure (NAtom a)
     _ -> lift (Left (problem "invalid pipeline binding"))
   emit bind {nbRhs = rhs}
   modify' (\s -> s {maxDepth = max depth (maxDepth s)})
@@ -144,7 +155,8 @@ scheduleBind limit env bind = do
 
 atomTime :: Map Name Timed -> Atom -> Build Timed
 atomTime _ a@(ALit v) = pure (Timed a (valueTy v) 0 0)
-atomTime env (AVar name) = maybe (lift (Left (problem "missing pipeline dependency"))) pure (M.lookup name env)
+atomTime env (AVar name) =
+  maybe (lift (Left (problem "missing pipeline dependency"))) pure (M.lookup name env)
 
 align :: Int -> Timed -> Build Timed
 align target t
@@ -152,7 +164,7 @@ align target t
   | stage > target = lift (Left (problem "pipeline would move a value backwards in time"))
   | ALit _ <- atom = pure (Timed atom ty target 0)
   | AVar name <- atom = do
-      cached <- gets (M.lookup (name,target) . delayed)
+      cached <- gets (M.lookup (name, target) . delayed)
       case cached of
         Just value -> pure value
         Nothing -> do
@@ -164,27 +176,30 @@ align target t
             _ -> lift (Left (problem "pipeline encountered a nonscalar type"))
           emit (NBind fresh ty (NReg zero a))
           let result = Timed (AVar fresh) ty target 0
-          modify' (\s -> s {delayed = M.insert (name,target) result (delayed s)})
+          modify' (\s -> s {delayed = M.insert (name, target) result (delayed s)})
           pure result
-
-  where
-    atom = timedAtom t
-    ty = timedType t
-    stage = timedStage t
+ where
+  atom = timedAtom t
+  ty = timedType t
+  stage = timedStage t
 
 freshName :: Build Name
 freshName = do
   state <- get
   let name = Name ("gin_pipeline_" <> T.pack (show (nextName state)))
   modify' (\s -> s {nextName = nextName s + 1})
-  if name `S.member` reserved state then freshName else do
-    modify' (\s -> s {reserved = S.insert name (reserved s)})
-    pure name
+  if name `S.member` reserved state
+    then freshName
+    else do
+      modify' (\s -> s {reserved = S.insert name (reserved s)})
+      pure name
 
 emit :: NBind -> Build ()
 emit bind = do
   n <- gets bindCount
-  when (n >= maxNormalBinds) (lift (Left (problem "pipeline exceeds normal-form binding limit")))
+  when
+    (n >= maxNormalBinds)
+    (lift (Left (problem "pipeline exceeds normal-form binding limit")))
   modify' (\s -> s {built = bind : built s, bindCount = n + 1})
 
 problem :: T.Text -> GinError
@@ -207,11 +222,14 @@ pipelineVectors scheduled vectors = do
       width TBool = 1
       width (TBitVec w) = toInteger w
       width _ = 0
-      bits = sum (map (width . snd) (nmInputs nm)) + sum (map (width . noTy) (nmOutputs nm))
+      bits =
+        sum (map (width . snd) (nmInputs nm)) + sum (map (width . noTy) (nmOutputs nm))
   when (length rows > maxCycles || toInteger (length rows) * bits > maxVectorBits) $
     Left (problem "pipeline vector warmup/drain exceeds vector resource limits")
   prefix <- simulateNormal nm (take latency rows)
-  pure vectors {vecCycles = zipWith Cycle rows (prefix <> map cycOutputs (vecCycles vectors))}
+  pure
+    vectors {vecCycles =
+      zipWith Cycle rows (prefix <> map cycOutputs (vecCycles vectors))}
 
 -- Optics use the same field-name + L convention as Gin.Core.
 makeFieldLenses ''Scheduled

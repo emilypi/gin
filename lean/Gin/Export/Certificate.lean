@@ -117,9 +117,12 @@ listed after. They differ for an inductive type, which brings its
 constructors along but is listed before them. -/
 def closureEdges (env : Environment) (c : Name) : Array Name × Array Name :=
   match env.find? c with
-  | some (.defnInfo v) => let d := v.type.getUsedConstants ++ v.value.getUsedConstants; (d, d)
-  | some (.opaqueInfo v) => let d := v.type.getUsedConstants ++ v.value.getUsedConstants; (d, d)
-  | some (.inductInfo v) => (v.type.getUsedConstants ++ v.ctors.toArray, v.type.getUsedConstants)
+  | some (.defnInfo v) => let d := v.type.getUsedConstants ++ v.value.getUsedConstants;
+    (d, d)
+  | some (.opaqueInfo v) => let d := v.type.getUsedConstants ++
+    v.value.getUsedConstants; (d, d)
+  | some (.inductInfo v) => (v.type.getUsedConstants ++ v.ctors.toArray,
+    v.type.getUsedConstants)
   | some ci => (ci.type.getUsedConstants, ci.type.getUsedConstants)
   | none => (#[], #[])
 
@@ -157,7 +160,8 @@ def dependencyOrder (env : Environment) (nodes : Array Name) : Array Name := Id.
   let mut done : NameSet := {}
   let mut out := #[]
   while !remaining.isEmpty do
-    let next := (remaining.find? fun c => (deps c).toList.all done.contains).getD remaining[0]!
+    let next := (remaining.find? fun c => (deps c).toList.all done.contains).getD
+      remaining[0]!
     out := out.push next
     done := done.insert next
     remaining := remaining.filter (· != next)
@@ -218,12 +222,14 @@ the top definition `top` (see the module documentation); return `S`. -/
 def checkShape (thm top : Name) (thmType : Lean.Expr) : MetaM Name := do
   let env ← getEnv
   forallTelescope thmType fun xs body => do
-    let some t := xs.back? | shapeError thm top m!"it does not quantify over a cycle t : Nat"
+    let some t := xs.back?
+      | shapeError thm top m!"it does not quantify over a cycle t : Nat"
     let tTy := (← instantiateMVars (← inferType t)).consumeMData
     unless tTy.isConstOf ``Nat do
       shapeError thm top m!"its last quantified variable is not a cycle t : Nat"
     let body := (← instantiateMVars body).consumeMData
-    let some (_, lhs, rhs) := body.eq? | shapeError thm top m!"its conclusion is not an equation"
+    let some (_, lhs, rhs) := body.eq?
+      | shapeError thm top m!"its conclusion is not an equation"
     let lhs := lhs.consumeMData
     let rhs := rhs.consumeMData
     let passes (e : Lean.Expr) : Bool :=
@@ -231,18 +237,21 @@ def checkShape (thm top : Name) (thmType : Lean.Expr) : MetaM Name := do
         (e.getAppArgs.zip xs).all fun (a, x) => a.consumeMData == x
     unless lhs.getAppFn.consumeMData.isConstOf top && passes lhs do
       shapeError thm top
-        m!"the left-hand side is not {top} applied to the quantified inputs and t, in order"
+        m!"the left-hand side is not {top} applied to the quantified inputs and t, in \
+          order"
     let .const spec _ := rhs.getAppFn.consumeMData
       | shapeError thm top
           m!"the right-hand side is not a constant applied to the quantified inputs and t"
     unless passes rhs do
       shapeError thm top
-        m!"the right-hand side is not {spec} applied to the quantified inputs and t, in order"
+        m!"the right-hand side is not {spec} applied to the quantified inputs and t, in \
+          order"
     if spec == top then
       shapeError thm top m!"both sides are {top}, so the statement says nothing"
     if refersTo env spec top then
       shapeError thm top
-        m!"the specification {spec} refers to {top}, the implementation it is compared with"
+        m!"the specification {spec} refers to {top}, the implementation it is compared \
+          with"
     return spec
 
 /-- The trace for refinement theorem `thm` about the top definition

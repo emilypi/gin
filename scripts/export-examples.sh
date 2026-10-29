@@ -79,7 +79,8 @@ replay() {
     for path in "${paths[@]}"; do
       [ -n "$path" ] && [ -f "$path/$rel.olean" ] || continue
       mkdir -p "$dir/$(dirname "$rel")"
-      for src in "$path/$rel".olean "$path/$rel".olean.server "$path/$rel".olean.private; do
+      for src in "$path/$rel".olean "$path/$rel".olean.server \
+        "$path/$rel".olean.private; do
         if [ -f "$src" ]; then cp "$src" "$dir/$(dirname "$rel")/"; fi
       done
       found=1
@@ -152,7 +153,8 @@ export_with() {
   local exe=$1 root=$2 out=$3 certs
   shift 3
   certs=$(mktemp -d "$tmp/certificates.XXXXXX")
-  lake -d lean exe gin-check-export --exporter "$root" --certificates "$certs" "$@" >/dev/null ||
+  lake -d lean exe gin-check-export --exporter "$root" --certificates "$certs" "$@" \
+    >/dev/null ||
     return 1
   lake -d lean exe "$exe" --out "$out" "$@" || return 1
   check_certificates "$certs" "$out" "$@"
@@ -175,8 +177,10 @@ export_to() {
 # line, sorted: the string literals of its definition (up to the first blank
 # line), with Haskell string gaps removed.
 haskell_reserved_words() {
-  sed -n '/^reservedWords =/,/^$/p' src/Gin/Netlist/Types.hs | grep -v '^ *--' | tr '\n' ' ' |
-    sed 's/\\ *\\//g' | grep -o '"[^"]*"' | tr -d '"' | tr -s ' ' '\n' | sed '/^$/d' | sort -u
+  sed -n '/^reservedWords =/,/^$/p' src/Gin/Netlist/Types.hs | grep -v '^ *--' | tr \
+    '\n' ' ' |
+    sed 's/\\ *\\//g' | grep -o '"[^"]*"' | tr -d '"' | tr -s ' ' '\n' | sed '/^$/d' | \
+      sort -u
 }
 
 # [lean-reserved-words] the exporter refuses exactly the identifiers gin
@@ -190,7 +194,9 @@ check_reserved_words() {
   hs=$(haskell_reserved_words)
   lean=$(cd lean && lake env lean --run "$tmp/reserved.lean" | sort -u)
   [ -n "$hs" ] || die "no reserved words found in src/Gin/Netlist/Types.hs"
-  [ "$hs" = "$lean" ] || die "lean/Gin/Export/Reserved.lean and src/Gin/Netlist/Types.hs reserve different words:"$'\n'"$(diff <(echo "$hs") <(echo "$lean"))"
+  [ "$hs" = "$lean" ] || die \
+    "lean/Gin/Export/Reserved.lean and src/Gin/Netlist/Types.hs reserve "\
+"different words:"$'\n'"$(diff <(echo "$hs") <(echo "$lean"))"
 }
 
 # import_closure ROOT...: every module that importing one of the named root
@@ -198,7 +204,8 @@ check_reserved_words() {
 # imported on its own (two executable roots both declare main). Needs the
 # Lean package built.
 import_closure() {
-  printf '%s\n' 'import Lean' 'open Lean in' 'def main (roots : List String) : IO Unit := do' \
+  printf '%s\n' 'import Lean' 'open Lean in' \
+    'def main (roots : List String) : IO Unit := do' \
     '  initSearchPath (← findSysroot)' \
     '  for r in roots do' \
     '    let env ← importModules #[{ module := r.toName }] {} (loadExts := false)' \
@@ -213,8 +220,11 @@ check_checker_closure() {
   local mods bad
   mods=$(import_closure GinCheckExport) || die "cannot read the modules of GinCheckExport"
   grep -qx GinCheckExport <<<"$mods" || die "GinCheckExport is not among its own modules"
-  bad=$(grep -Ev '^(Init|Std|Lean|Lake)(\.|$)|^Gin\.Export\.|^Gin\.Signal$|^GinCheckExport$' <<<"$mods" || true)
-  [ -z "$bad" ] || die "gin-check-export links modules other than the exporter and the DSL:"$'\n'"$bad"
+  bad=$(grep -Ev \
+    '^(Init|Std|Lean|Lake)(\.|$)|^Gin\.Export\.|^Gin\.Signal$|^GinCheckExport$' \
+    <<<"$mods" || true)
+  [ -z "$bad" ] || die \
+    "gin-check-export links modules other than the exporter and the DSL:"$'\n'"$bad"
 }
 
 # The module roots of the Lean package, other than the reject fixtures: the
@@ -228,8 +238,10 @@ module_roots=(Gin GinTest GinExport GinCheckExport)
 replay_modules() {
   local listed roots
   listed=$(loaded_modules "$@") || die "gin-check-export --list-modules $* failed"
-  roots=$(import_closure "${module_roots[@]}") || die "cannot read the modules of ${module_roots[*]}"
-  printf '%s\n%s\n' "$listed" "$roots" | grep -Ev '^(Init|Std|Lean|Lake)(\.|$)|^$' | sort -u
+  roots=$(import_closure "${module_roots[@]}") || die \
+    "cannot read the modules of ${module_roots[*]}"
+  printf '%s\n%s\n' "$listed" "$roots" | grep -Ev '^(Init|Std|Lean|Lake)(\.|$)|^$' | \
+    sort -u
 }
 
 # check_replay_covers MODULE...: every Lean source under lean/ outside the
@@ -244,7 +256,8 @@ check_replay_covers() {
     printf '%s\n' "$@" | grep -qxF -- "$m" || missing+="$m"$'\n'
   done < <(find lean -path lean/.lake -prune -o -path lean/GinReject -prune -o \
     -name GinReject.lean -prune -o -name '*.lean' -print)
-  [ -z "$missing" ] || die "the kernel replay does not cover these modules:"$'\n'"$missing"
+  [ -z "$missing" ] || die \
+    "the kernel replay does not cover these modules:"$'\n'"$missing"
 }
 
 # [lean-link-inputs] check_lakefile DIR: the Lake configuration in DIR adds
@@ -258,7 +271,8 @@ check_replay_covers() {
 # input from being added to it unnoticed.
 check_lakefile() {
   local dir=$1
-  [ ! -e "$dir/lakefile.lean" ] || die "$dir/lakefile.lean exists; the package must be configured by lakefile.toml only"
+  [ ! -e "$dir/lakefile.lean" ] || die \
+    "$dir/lakefile.lean exists; the package must be configured by lakefile.toml only"
   python3 - "$dir/lakefile.toml" "$dir/lake-manifest.json" <<'PY' || return 1
 import json, os, sys, tomllib
 
@@ -276,7 +290,9 @@ target_keys = {
 }
 for key in conf:
     if key not in package_keys:
-        refuse(f"unexpected package setting {key!r} (a required package or a link input?)")
+        refuse(
+            f"unexpected package setting {key!r} (a required package or a link input?)"
+        )
 for kind, allowed in target_keys.items():
     targets = conf.get(kind, [])
     if not isinstance(targets, list):
@@ -284,7 +300,10 @@ for kind, allowed in target_keys.items():
     for t in targets:
         for key in t:
             if key not in allowed:
-                refuse(f"{kind} {t.get('name', '?')!r} sets {key!r}, which may add link inputs")
+                refuse(
+                    f"{kind} {t.get('name', '?')!r} sets {key!r}, "
+                    "which may add link inputs"
+                )
 if os.path.exists(manifest_path):
     with open(manifest_path) as f:
         if json.load(f).get("packages", []) != []:
@@ -299,10 +318,13 @@ check_lakefile_rejects() {
   local -a additions=(
     $'[[require]]\nname = "dep"\npath = "dep"'
     $'[[extern_lib]]\nname = "native"'
-    $'[[lean_exe]]\nname = "gin-export-linked"\nroot = "GinExport"\nmoreLinkArgs = ["-lnative"]'
-    $'[[lean_exe]]\nname = "gin-export-linked"\nroot = "GinExport"\nmoreLinkObjs = ["native"]'
+    $'[[lean_exe]]\nname = "gin-export-linked"\nroot = "GinExport"\n'\
+$'moreLinkArgs = ["-lnative"]'
+    $'[[lean_exe]]\nname = "gin-export-linked"\nroot = "GinExport"\n'\
+$'moreLinkObjs = ["native"]'
     $'[[lean_lib]]\nname = "Native"\nmoreLinkArgs = ["-lnative"]'
-    $'[[lean_exe]]\nname = "gin-export-linked"\nroot = "GinExport"\nextraDepTargets = ["native"]'
+    $'[[lean_exe]]\nname = "gin-export-linked"\nroot = "GinExport"\n'\
+$'extraDepTargets = ["native"]'
     $'plugins = ["native"]'
   )
   for i in "${!additions[@]}"; do
@@ -314,7 +336,8 @@ check_lakefile_rejects() {
     else
       printf '\n%s\n' "${additions[$i]}" >> "$dir/lakefile.toml"
     fi
-    expect_refusal "the lakefile check of" "${additions[$i]%%$'\n'*}" "refusing the export" \
+    expect_refusal "the lakefile check of" "${additions[$i]%%$'\n'*}" \
+      "refusing the export" \
       "a link input in lakefile.toml" check_lakefile "$dir"
   done
   rm -rf "$dir" && mkdir -p "$dir"
@@ -354,7 +377,8 @@ export_examples() {
   export_to "$tmp/second" "${examples[@]}" >/dev/null ||
     die "the second export of ${examples[*]} failed"
   for n in "${examples[@]}"; do
-    diff -r "$tmp/second/$n" "examples/$n" >/dev/null || die "the export of $n is not deterministic"
+    diff -r "$tmp/second/$n" "examples/$n" >/dev/null || die \
+      "the export of $n is not deterministic"
   done
   echo "export-examples: exported ${examples[*]} (kernel-checked ${mods[*]})"
 }
@@ -389,9 +413,11 @@ expect_refusal() {
 check_reject() {
   local module=$1 name=$2 text=$3 reason=$4
   build_fixture "$module"
-  expect_refusal gin-check-export "$name" "$text" "$reason" lake -d lean exe gin-check-export "$name"
+  expect_refusal gin-check-export "$name" "$text" "$reason" lake -d lean exe \
+    gin-check-export "$name"
   expect_refusal "the export of" "$name" "$text" "$reason" export_to "$tmp/reject" "$name"
-  expect_refusal gin-export "$name" "$text" "$reason" lake -d lean exe gin-export --out "$tmp/reject" "$name"
+  expect_refusal gin-export "$name" "$text" "$reason" lake -d lean exe gin-export --out \
+    "$tmp/reject" "$name"
   echo "export-examples: $name refused ($reason)"
 }
 
@@ -402,20 +428,29 @@ check_reject() {
 check_linked_initializer() {
   local marker=$tmp/hook-ran out
   # built before GIN_HOOK_MARKER is set: building runs the initializer too
-  out=$(lake -d lean build gin-export-hooked 2>&1) || die "gin-export-hooked does not build:"$'\n'"$out"
+  out=$(lake -d lean build gin-export-hooked 2>&1) || die \
+    "gin-export-hooked does not build:"$'\n'"$out"
   GIN_HOOK_MARKER=$marker lake -d lean exe gin-export-hooked --help >/dev/null
-  [ -f "$marker" ] || die "the initializer of GinReject.Hooked did not run when gin-export-hooked started"
+  [ -f "$marker" ] || die \
+    "the initializer of GinReject.Hooked did not run when gin-export-hooked started"
   rm -f "$marker"
-  expect_refusal "the export of" hooked "module GinReject.Hooked registers IO initializers" \
+  expect_refusal "the export of" hooked \
+    "module GinReject.Hooked registers IO initializers" \
     "a module initializer linked into the exporter" \
-    env_export_with "GIN_HOOK_MARKER=$marker" gin-export-hooked GinReject.HookedExport "$tmp/reject" hooked
-  [ ! -f "$marker" ] || die "gin-export-hooked started (its initializer ran) although gin-check-export refused hooked"
+    env_export_with "GIN_HOOK_MARKER=$marker" gin-export-hooked GinReject.HookedExport \
+      "$tmp/reject" hooked
+  [ ! -f "$marker" ] || die \
+    "gin-export-hooked started (its initializer ran) although "\
+"gin-check-export refused hooked"
   # the modules the exporter links are checked even when no requested
   # circuit loads them
-  expect_refusal gin-check-export GinReject.HookedExport "module GinReject.Hooked registers IO initializers" \
+  expect_refusal gin-check-export GinReject.HookedExport \
+    "module GinReject.Hooked registers IO initializers" \
     "a module initializer linked into the exporter" \
     lake -d lean exe gin-check-export --exporter GinReject.HookedExport counter
-  echo "export-examples: hooked refused before gin-export-hooked started (a linked module initializer)"
+  echo \
+    "export-examples: hooked refused before gin-export-hooked started "\
+"(a linked module initializer)"
 }
 
 # check_kernel_reject MODULE NAME BAD: MODULE builds, and the kernel replay
@@ -426,7 +461,8 @@ check_kernel_reject() {
   build_fixture "$module"
   mods=($(loaded_modules "$name")) || die "gin-check-export --list-modules $name failed"
   if out=$(replay "$tmp/replay-$name" "${mods[@]}" 2>&1); then
-    die "leanchecker accepted ${mods[*]}; it must fail on the unchecked declaration in $bad"
+    die \
+      "leanchecker accepted ${mods[*]}; it must fail on the unchecked declaration in $bad"
   fi
   grep -F -- "found a problem in $bad" <<<"$out" >/dev/null ||
     die "leanchecker failed on ${mods[*]} without naming $bad:"$'\n'"$out"
@@ -455,20 +491,26 @@ check_stale_olean() {
 # second, forged "certificate" member earlier is refused too.
 check_forged_certificate() {
   local out
-  out=$(lake -d lean build gin-export-forged 2>&1) || die "gin-export-forged does not build:"$'\n'"$out"
-  expect_refusal "the export of" counter "the certificate is not the one gin-check-export computed" \
+  out=$(lake -d lean build gin-export-forged 2>&1) || die \
+    "gin-export-forged does not build:"$'\n'"$out"
+  expect_refusal "the export of" counter \
+    "the certificate is not the one gin-check-export computed" \
     "a certificate other than the checker's" \
     export_with gin-export-forged GinExport "$tmp/forged" counter
   grep -F -- "List.range (t + 1)" "$tmp/forged/counter/counter.gin.json" >/dev/null ||
     die "gin-export-forged did not change the certificate it wrote"
   export_to "$tmp/duplicate" counter >/dev/null || die "the export of counter failed"
-  lake -d lean exe gin-check-export --certificates "$tmp/duplicate-certificates" counter >/dev/null ||
+  lake -d lean exe gin-check-export --certificates "$tmp/duplicate-certificates" \
+    counter >/dev/null ||
     die "gin-check-export counter failed"
   check_certificates "$tmp/duplicate-certificates" "$tmp/duplicate" counter ||
     die "the certificate of an honest export of counter does not match the checker's"
-  sed -i.bak '1s/^{$/{"certificate": {"theorem": "Counter.counter_correct", "statement": "True"},/' \
+  sed -i.bak \
+    '1s/^{$/{"certificate": {"theorem": "Counter.counter_correct", '\
+'"statement": "True"},/' \
     "$tmp/duplicate/counter/counter.gin.json"
-  expect_refusal "the certificate check of" counter "the key 'certificate' occurs twice in one object" \
+  expect_refusal "the certificate check of" counter \
+    "the key 'certificate' occurs twice in one object" \
     "a second certificate member" \
     check_certificates "$tmp/duplicate-certificates" "$tmp/duplicate" counter
   echo "export-examples: certificates other than the checker's refused"
@@ -479,18 +521,22 @@ check_rejects() {
   # nothing under examples/ changes
   snapshot "$tmp/before"
   check_reject GinReject.Bad bad sorryAx "a proof that depends on sorryAx"
-  check_reject GinReject.BadNative bad_native ._native. "a proof that depends on a ._native. axiom"
+  check_reject GinReject.BadNative bad_native ._native. \
+    "a proof that depends on a ._native. axiom"
   check_kernel_reject GinReject.BadKernel bad_kernel GinReject.BadKernel
   check_kernel_reject GinReject.BadImport bad_import GinReject.Unchecked
   check_stale_olean
-  check_reject GinReject.BadImport forged "imports the reject fixture module GinReject.Unchecked" \
+  check_reject GinReject.BadImport forged \
+    "imports the reject fixture module GinReject.Unchecked" \
     "a design that is not a reject fixture but imports one"
   local thm
   for thm in tautology at_zero calls_impl or_true; do
-    check_reject GinReject.BadShape "bad_$thm" "theorem BadShape.$thm does not have the refinement shape" \
+    check_reject GinReject.BadShape "bad_$thm" \
+      "theorem BadShape.$thm does not have the refinement shape" \
       "theorem BadShape.$thm without the refinement shape"
   done
-  check_reject GinReject.BadInit bad_init "module GinReject.BadInit registers IO initializers" \
+  check_reject GinReject.BadInit bad_init \
+    "module GinReject.BadInit registers IO initializers" \
     "a module initializer"
   check_linked_initializer
   check_reject GinReject.BadImplementedBy bad_implemented_by \
@@ -498,18 +544,21 @@ check_rejects() {
     "compiled code that is not the definition"
   check_reject GinReject.BadUnsafeIO bad_unsafe_io "BadUnsafeIO.cached is unsafe" \
     "an unsafe closed term, which would run when gin-export starts"
-  check_reject GinReject.BadExtern bad_extern "BadExtern.foreign calls foreign code (@[extern])" \
+  check_reject GinReject.BadExtern bad_extern \
+    "BadExtern.foreign calls foreign code (@[extern])" \
     "foreign code called by a closed term, which would run when gin-export starts"
   check_forged_certificate
   check_lakefile_rejects
   check_reject GinReject.BadReduceBool bad_reduce_bool \
-    "BadReduceBool.hooked refers to Lean.reduceBool" "a translation that would run compiled code"
+    "BadReduceBool.hooked refers to Lean.reduceBool" \
+      "a translation that would run compiled code"
   # [lean-printer] not refused: the trace names specR and lists its body
   build_fixture GinReject.BadUnexpander
   build_fixture GinReject.UnexpanderCheck
   echo "export-examples: GinReject.BadUnexpander certificate shows specR"
   snapshot "$tmp/after"
-  diff -r "$tmp/before" "$tmp/after" >/dev/null || die "a refused export changed examples/"
+  diff -r "$tmp/before" "$tmp/after" >/dev/null || die \
+    "a refused export changed examples/"
   echo "export-examples: rejects ok"
 }
 

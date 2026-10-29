@@ -20,7 +20,8 @@ def bad (en : Signal System Bool) : Signal System (BitVec 8) :=
 /-- A true statement about the first eight cycles, proved by evaluating
 compiled code. -/
 theorem bad_correct :
-    (List.range 8).map (bad (Signal.pure true)) = (List.range 8).map (BitVec.ofNat 8) := by
+    (List.range 8).map (bad (Signal.pure true)) = (List.range 8).map (BitVec.ofNat 8)
+      := by
   native_decide
 
 end BadNative

@@ -6,8 +6,10 @@ destination=${1:-out/optimization}
 policy=examples/optimization/structural-policy.json
 source=examples/muxadd/muxadd.gin.json
 vectors=examples/muxadd/muxadd.vectors.json
-cabal run -v0 gin -- optimize "$source" --policy "$policy" --vectors "$vectors" -o "$destination"
-cabal run -v0 gin -- validate "$source" --optimize "$policy" --vectors "$vectors" --min-cycles 1024
+cabal run -v0 gin -- optimize "$source" --policy "$policy" --vectors "$vectors" -o \
+  "$destination"
+cabal run -v0 gin -- validate "$source" --optimize "$policy" --vectors "$vectors" \
+  --min-cycles 1024
 cabal run -v0 gin -- prove "$source" --optimize "$policy" -o "$destination/proof"
 cabal run -v0 gin -- pipeline "$source" --optimize "$policy" --max-depth 1 \
   --vectors "$vectors" -o "$destination/pipeline"

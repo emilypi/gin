@@ -39,19 +39,23 @@ newtype BoundedInt (lower :: Nat) (upper :: Nat) = BoundedInt
 
 type role BoundedInt nominal nominal
 
-mkBoundedInt :: forall lower upper. (KnownNat lower, KnownNat upper)
-  => Int -> Either String (BoundedInt lower upper)
+mkBoundedInt ::
+  forall lower upper.
+  (KnownNat lower, KnownNat upper) =>
+  Int ->
+  Either String (BoundedInt lower upper)
 mkBoundedInt value
   | toInteger value >= lo && toInteger value <= hi = Right (BoundedInt value)
   | otherwise = Left ("expected an integer between " <> show lo <> " and " <> show hi)
-  where
-    lo = toInteger (natVal (Proxy @lower))
-    hi = toInteger (natVal (Proxy @upper))
+ where
+  lo = toInteger (natVal (Proxy @lower))
+  hi = toInteger (natVal (Proxy @upper))
 
 -- | A compile-time checked literal, representable even on a 32-bit host.
-boundedIntLiteral :: forall n lower upper.
-  (KnownNat n, lower <= n, n <= upper, n <= 2147483647)
-  => BoundedInt lower upper
+boundedIntLiteral ::
+  forall n lower upper.
+  (KnownNat n, lower <= n, n <= upper, n <= 2147483647) =>
+  BoundedInt lower upper
 boundedIntLiteral = BoundedInt (fromIntegral (natVal (Proxy @n)))
 
 -- | Read a checked value. Updates use the prism or smart constructor.

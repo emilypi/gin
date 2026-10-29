@@ -104,7 +104,8 @@ def translateTop (e : Entry) : MetaM (Top × List Def) := do
   let ports := e.inputs ++ e.outputs
   for p in ports do
     unless isLegalIdent p && p != "clk" && p != "rst" do
-      throwError "port name {repr p} is not a legal hardware identifier (clk and rst are reserved)"
+      throwError "port name {repr
+        p} is not a legal hardware identifier (clk and rst are reserved)"
   unless ports.eraseDups.length == ports.length do
     throwError "port names {ports} are not pairwise distinct"
   checkCompiledCode e.defs.toArray
@@ -116,19 +117,22 @@ def translateTop (e : Entry) : MetaM (Top × List Def) := do
   -- the top type: `Signal d i₁ → … → Signal d iₖ → Signal d o`
   let (args, res) := splitFuns topDef.type
   unless args.length == e.inputs.length do
-    throwError "{e.top} takes {args.length} signals but {e.inputs.length} input names are given"
+    throwError
+      "{e.top} takes {args.length} signals but {e.inputs.length} input names are given"
   let some topCi := (← getEnv).find? e.top | unreachable!
   let domains ← runTr e.top exported (signalDomains topCi.type)
   let some domain := domains.head? | throwError "{e.top} has no Signal in its type"
   unless domains.all (· == domain) do
-    throwError "{e.top} mixes clock domains {repr domains.eraseDups}; one domain is supported"
+    throwError "{e.top} mixes clock domains {repr
+      domains.eraseDups}; one domain is supported"
   let inputs ← (e.inputs.zip args).mapM fun (n, t) => do
     let .signal _ ty := t | throwError "input {n} of {e.top} is not a Signal"
     unless ty.isScalar do throwError "input {n} of {e.top} is not Bool or BitVec"
     return { name := n, type := ty : Port }
   let .signal _ resTy := res | throwError "the result of {e.top} is not a Signal"
   let some outTys := splitOutputs e.outputs.length resTy
-    | throwError "the result type of {e.top} does not have {e.outputs.length} output components"
+    | throwError
+      "the result type of {e.top} does not have {e.outputs.length} output components"
   let outputs ← (e.outputs.zip outTys).mapM fun (n, ty) => do
     unless ty.isScalar do throwError "output {n} of {e.top} is not Bool or BitVec"
     return { name := n, type := ty : Port }
@@ -151,7 +155,8 @@ def exportProgram (e : Entry) : MetaM Program := do
 /-- Compute an entry's vectors and check them against the program's ports. -/
 def exportVectors (e : Entry) (top : Top) : Except String Vectors := do
   let some src := e.vectors | throw s!"{e.name} has no vector source"
-  unless src.inputs == top.inputs.map (·.type) && src.outputs == top.outputs.map (·.type) do
+  unless src.inputs == top.inputs.map (·.type) && src.outputs == top.outputs.map
+    (·.type) do
     throw s!"the vector source of {e.name} does not match the port types of {e.top}"
   let cycles := src.rows e.seed e.cycles
   for c in cycles do
@@ -160,7 +165,8 @@ def exportVectors (e : Entry) (top : Top) : Except String Vectors := do
   let widthOf : Ty → Nat := fun | .bv w => w | _ => 1
   let payload := cycles.size * ((top.inputs ++ top.outputs).map (widthOf ·.type)).sum
   unless payload ≤ maxVectorPayloadBits do
-    throw s!"the vectors of {e.name} carry {payload} bits, more than {maxVectorPayloadBits}"
+    throw
+      s!"the vectors of {e.name} carry {payload} bits, more than {maxVectorPayloadBits}"
   return { top := top.name, inputs := top.inputs, outputs := top.outputs, cycles }
 
 end Gin.Export

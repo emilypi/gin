@@ -28,7 +28,8 @@ module memory_tb;
   always @(negedge clk) begin
     for (integer i=0; i<3; i=i+1) begin
       mem_req_ready[i] = !rst && ((ticks+i)%4 != 0);
-      mem_rsp_valid[i] = !rst && pending[i] && (delay_count[i] == 0) && ((ticks+i)%3 != 0);
+      mem_rsp_valid[i] = !rst && pending[i] && (delay_count[i] == 0)
+        && ((ticks+i)%3 != 0);
       mem_rsp_rdata[i*8 +: 8] = response_data[i];
     end
   end
@@ -39,10 +40,12 @@ module memory_tb;
       if (rst) begin pending[i]=0; blocked[i]=0; delay_count[i]=0; end
       else begin
         if (blocked[i] && (!mem_req_valid[i] ||
-            {mem_req_write[i],mem_req_addr[i*8 +: 8],mem_req_wdata[i*8 +: 8]} !== blocked_payload[i]))
+            {mem_req_write[i],mem_req_addr[i*8 +: 8],mem_req_wdata[i*8 +: 8]}
+              !== blocked_payload[i]))
           $fatal(1,"request changed under backpressure");
         blocked[i]=mem_req_valid[i] && !mem_req_ready[i];
-        blocked_payload[i]={mem_req_write[i],mem_req_addr[i*8 +: 8],mem_req_wdata[i*8 +: 8]};
+        blocked_payload[i]={
+          mem_req_write[i],mem_req_addr[i*8 +: 8],mem_req_wdata[i*8 +: 8]};
         if (pending[i] && delay_count[i]>0) delay_count[i]=delay_count[i]-1;
         if (mem_rsp_valid[i] && mem_rsp_ready[i]) begin
           if (!pending[i]) $fatal(1,"unsolicited response");
@@ -56,7 +59,8 @@ module memory_tb;
           if (mem_req_write[i]) begin
             if (address<128 || address>=139) $fatal(1,"bad write address");
             if (seen[address]!=0) $fatal(1,"duplicate write");
-            if (mem_req_wdata[i*8 +: 8] !== ((memory[address-128]+1)&255)) $fatal(1,"wrong transformed data");
+            if (mem_req_wdata[i*8 +: 8] !== ((memory[address-128]+1)&255))
+              $fatal(1,"wrong transformed data");
             seen[address]=seen[address]+1;
             memory[address]=mem_req_wdata[i*8 +: 8];
             writes=writes+1;
@@ -82,7 +86,8 @@ module memory_tb;
       wait(done_valid);
       repeat (5) begin
         @(negedge clk);
-        if (!done_valid || done_error!==expected_error || cmd_ready) $fatal(1,"unstable completion");
+        if (!done_valid || done_error!==expected_error || cmd_ready)
+          $fatal(1,"unstable completion");
       end
       done_ready=1;
       @(negedge clk); done_ready=0;
@@ -103,7 +108,8 @@ module memory_tb;
     wait(reads>11);
     @(negedge clk); rst=1;
     @(negedge clk);
-    if (done_valid || mem_req_valid!=0 || mem_rsp_ready!=0) $fatal(1,"reset did not cancel command");
+    if (done_valid || mem_req_valid!=0 || mem_rsp_ready!=0)
+      $fatal(1,"reset did not cancel command");
     reads=0; writes=0;
     for (integer i=128; i<139; i=i+1) seen[i]=0;
     rst=0;

@@ -39,7 +39,13 @@ module Gin.Core.Json
 
 import Control.Monad (unless, when, zipWithM)
 import Data.Aeson.Decoding.ByteString.Lazy (lbsToTokens)
-import Data.Aeson.Decoding.Tokens (Lit (..), Number (..), TkArray (..), TkRecord (..), Tokens (..))
+import Data.Aeson.Decoding.Tokens
+  ( Lit (..)
+  , Number (..)
+  , TkArray (..)
+  , TkRecord (..)
+  , Tokens (..)
+  )
 import Data.Aeson.Encoding (Encoding, Series)
 import Data.Aeson.Encoding qualified as E
 import Data.Aeson.Key (Key)
@@ -65,7 +71,13 @@ import Data.Word (Word8)
 import Gin.Core.Syntax
 import Gin.Core.Utils (failAt, showT)
 import Gin.Error (GinError, Stage (..), withContext)
-import Gin.Limits (maxDecimalDigits, maxInputBytes, maxJsonDepth, maxJsonNumber, maxVectorBits)
+import Gin.Limits
+  ( maxDecimalDigits
+  , maxInputBytes
+  , maxJsonDepth
+  , maxJsonNumber
+  , maxVectorBits
+  )
 import Gin.Vectors (Cycle (..), Vectors (..), maxCycles)
 import Numeric.Natural (Natural)
 
@@ -98,7 +110,8 @@ decodeWith parser bytes = do
   case A.iparseEither parser json of
     Right a -> Right a
     Left (path, msg) ->
-      withContext ("at " <> Text.pack (A.formatPath path)) (failAt StDecode (Text.pack msg))
+      withContext ("at "
+        <> Text.pack (A.formatPath path)) (failAt StDecode (Text.pack msg))
 
 numberBound :: Text
 numberBound = "numbers must be integers from 0 to " <> showT maxJsonNumber
@@ -155,18 +168,18 @@ data Scan = Scan
 -- tokenizer; this pass only needs to find strings, brackets and numbers.
 scanBytes :: LazyByteString -> Either GinError ()
 scanBytes = go (Scan 0 0 Outside 0 0) . LBS.toChunks
-  where
-    go _ [] = Right ()
-    go s (chunk : chunks) = scanChunk s chunk >>= \s' -> go s' chunks
+ where
+  go _ [] = Right ()
+  go s (chunk : chunks) = scanChunk s chunk >>= \s' -> go s' chunks
 
 scanChunk :: Scan -> BS.ByteString -> Either GinError Scan
 scanChunk s0 chunk = loop s0 0
-  where
-    loop !s !i = case BS.indexMaybe chunk i of
-      Nothing -> Right s
-      Just w -> case scanByte s w of
-        Left e -> Left e
-        Right s' -> loop s' (i + 1)
+ where
+  loop !s !i = case BS.indexMaybe chunk i of
+    Nothing -> Right s
+    Just w -> case scanByte s w of
+      Left e -> Left e
+      Right s' -> loop s' (i + 1)
 
 scanByte :: Scan -> Word8 -> Either GinError Scan
 scanByte s w = case scanMode s of
@@ -190,48 +203,53 @@ scanByte s w = case scanMode s of
          in if digits > maxExponentDigits
               then
                 failAtByte offset $
-                  "number with an exponent of more than " <> showT maxExponentDigits <> " digits"
+                  "number with an exponent of more than " <> showT maxExponentDigits
+                    <> " digits"
               else numberByte InExponent digits
     | w == plus || w == minus -> numberByte InExponent (scanExponentDigits s)
     | otherwise -> outside
   Outside -> outside
-  where
-    offset = scanOffset s
-    next mode = Right s{scanOffset = offset + 1, scanMode = mode}
-    failAtByte at msg =
-      failAt StDecode (msg <> " at byte " <> showT at <> " (" <> numberBound <> ")")
-    numberByte mode digits
-      | scanNumberLength s >= maxNumberLength =
-          failAtByte offset $
-            "number literal longer than " <> showT maxNumberLength <> " characters"
-      | otherwise =
-          Right
-            s
-              { scanOffset = offset + 1
-              , scanMode = mode
-              , scanNumberLength = scanNumberLength s + 1
-              , scanExponentDigits = digits
-              }
-    outside
-      | w == quote = next InString
-      | w == openBracket || w == openBrace =
-          if scanDepth s >= maxJsonDepth
-            then
-              failAt StDecode
-                ("JSON nesting depth exceeds " <> showT maxJsonDepth <> " at byte " <> showT offset)
-            else Right s{scanOffset = offset + 1, scanMode = Outside, scanDepth = scanDepth s + 1}
-      | w == closeBracket || w == closeBrace =
-          Right s{scanOffset = offset + 1, scanMode = Outside, scanDepth = max 0 (scanDepth s - 1)}
-      | w == minus = next AfterMinus
-      | isDigitByte w =
-          Right
-            s
-              { scanOffset = offset + 1
-              , scanMode = InNumber
-              , scanNumberLength = 1
-              , scanExponentDigits = 0
-              }
-      | otherwise = next Outside
+ where
+  offset = scanOffset s
+  next mode = Right s {scanOffset = offset + 1, scanMode = mode}
+  failAtByte at msg =
+    failAt StDecode (msg <> " at byte " <> showT at <> " (" <> numberBound <> ")")
+  numberByte mode digits
+    | scanNumberLength s >= maxNumberLength =
+        failAtByte offset $
+          "number literal longer than " <> showT maxNumberLength <> " characters"
+    | otherwise =
+        Right
+          s
+            { scanOffset = offset + 1
+            , scanMode = mode
+            , scanNumberLength = scanNumberLength s + 1
+            , scanExponentDigits = digits
+            }
+  outside
+    | w == quote = next InString
+    | w == openBracket || w == openBrace =
+        if scanDepth s >= maxJsonDepth
+          then
+            failAt
+              StDecode
+              ("JSON nesting depth exceeds " <> showT maxJsonDepth <> " at byte "
+                <> showT offset)
+          else Right s {scanOffset = offset + 1, scanMode = Outside, scanDepth =
+            scanDepth s + 1}
+    | w == closeBracket || w == closeBrace =
+        Right s {scanOffset = offset + 1, scanMode = Outside, scanDepth =
+          max 0 (scanDepth s - 1)}
+    | w == minus = next AfterMinus
+    | isDigitByte w =
+        Right
+          s
+            { scanOffset = offset + 1
+            , scanMode = InNumber
+            , scanNumberLength = 1
+            , scanExponentDigits = 0
+            }
+    | otherwise = next Outside
 {-# INLINE scanByte #-}
 
 isDigitByte :: Word8 -> Bool
@@ -271,11 +289,11 @@ tokenValue = \case
   TkArrayOpen items -> arrayValue 0 [] items
   TkRecordOpen fields -> objectValue KeyMap.empty fields
   TkErr e -> invalidJson e
-  where
-    literal = \case
-      LitNull -> A.Null
-      LitTrue -> A.Bool True
-      LitFalse -> A.Bool False
+ where
+  literal = \case
+    LitNull -> A.Null
+    LitTrue -> A.Bool True
+    LitFalse -> A.Bool False
 
 -- | Elements are accumulated in reverse and counted, so the vector is
 -- allocated once at its final size.
@@ -292,7 +310,8 @@ arrayValue !n acc = \case
 objectValue :: A.Object -> TkRecord k String -> Either GinError (A.Value, k)
 objectValue acc = \case
   TkPair key toks
-    | KeyMap.member key acc -> failAt StDecode ("duplicate key \"" <> Key.toText key <> "\"")
+    | KeyMap.member key acc ->
+      failAt StDecode ("duplicate key \"" <> Key.toText key <> "\"")
     | otherwise -> do
         (!x, rest) <- tokenValue toks
         objectValue (KeyMap.insert key x acc) rest
@@ -322,15 +341,17 @@ jsonNumber :: Number -> Either GinError A.Value
 jsonNumber n = case Sci.toBoundedInteger s :: Maybe Int64 of
   Just i
     | i >= 0 && toInteger i <= maxJsonNumber ->
-        Right $! fromMaybe (A.Number (fromIntegral i)) (smallNumbers Vector.!? fromIntegral i)
+        Right $! fromMaybe (A.Number (fromIntegral i)) (smallNumbers Vector.!?
+          fromIntegral i)
   _
-    | not (Sci.isInteger s) -> failAt StDecode ("non-integral number (" <> numberBound <> ")")
+    | not (Sci.isInteger s) ->
+      failAt StDecode ("non-integral number (" <> numberBound <> ")")
     | otherwise -> failAt StDecode ("number out of range (" <> numberBound <> ")")
-  where
-    s = case n of
-      NumInteger i -> fromInteger i
-      NumDecimal d -> d
-      NumScientific d -> d
+ where
+  s = case n of
+    NumInteger i -> fromInteger i
+    NumDecimal d -> d
+    NumScientific d -> d
 
 ----------------------------------------------------------------------
 -- Parsers
@@ -371,7 +392,8 @@ listOfAtLeast :: Int -> String -> (A.Value -> Parser a) -> A.Value -> Parser [a]
 listOfAtLeast n what p = A.withArray "Array" $ \xs -> do
   when (Vector.length xs < n) $
     fail
-      (what <> " needs at least " <> show n <> " elements, got " <> show (Vector.length xs))
+      (what <> " needs at least " <> show n <> " elements, got "
+        <> show (Vector.length xs))
   zipWithM (\i x -> p x <?> Index i) [0 ..] (Vector.toList xs)
 
 formatTag :: Text -> Object -> Parser ()
@@ -407,7 +429,8 @@ topEntity = A.withObject "TopEntity" $ \o ->
     <*> field o "def" name
 
 domain :: A.Value -> Parser Domain
-domain = A.withObject "Domain" $ \o -> Domain <$> field o "name" text <*> field o "periodPs" nat
+domain = A.withObject "Domain" $ \o ->
+  Domain <$> field o "name" text <*> field o "periodPs" nat
 
 port :: A.Value -> Parser (Port Ty)
 port = A.withObject "Port" $ \o -> Port <$> field o "name" text <*> field o "type" ty
@@ -461,11 +484,11 @@ decimal w = A.withText "DecimalString" $ \s -> do
   unless (n < 2 ^ w) $
     fail ("value out of range for width " <> show w)
   pure n
-  where
-    canonical s = case Text.uncons s of
-      Just ('0', rest) -> Text.null rest
-      Just _ -> Text.all isDigit s
-      Nothing -> False
+ where
+  canonical s = case Text.uncons s of
+    Just ('0', rest) -> Text.null rest
+    Just _ -> Text.all isDigit s
+    Nothing -> False
 
 expr :: A.Value -> Parser (Expr Ty Name)
 expr = A.withObject "Expr" $ \o ->
@@ -476,28 +499,34 @@ expr = A.withObject "Expr" $ \o ->
     "prim" -> do
       opName <- field o "op" text
       t <- field o "type" ty
-      params <- fromMaybe KeyMap.empty <$> optionalField o "params" (A.withObject "Params" pure)
+      params <-
+        fromMaybe KeyMap.empty <$> optionalField o "params" (A.withObject "Params" pure)
       op <- primOp opName params
       pure (EPrim op t)
-    "app" -> EApp <$> field o "fun" expr <*> field o "args" (listOfAtLeast 1 "an application" expr)
-    "lam" -> ELam <$> field o "binders" (listOfAtLeast 1 "a lambda" binder) <*> field o "body" expr
+    "app" ->
+      EApp <$> field o "fun" expr
+        <*> field o "args" (listOfAtLeast 1 "an application" expr)
+    "lam" ->
+      ELam <$> field o "binders" (listOfAtLeast 1 "a lambda" binder)
+        <*> field o "body" expr
     "let" -> do
       isRec <- field o "rec" bool
-      (if isRec then ELetRec else ELet) <$> field o "binds" (list bind) <*> field o "body" expr
+      (if isRec then ELetRec else ELet) <$> field o "binds" (list bind)
+        <*> field o "body" expr
     "tuple" -> mkTuple <$> field o "elems" (listOfAtLeast 2 "a tuple" expr)
     -- 'nat' is at most 'maxJsonNumber', so the index fits an Int.
     "proj" -> EProj . fromIntegral <$> field o "index" nat <*> field o "of" expr
     "if" -> elseIf <$> field o "cond" expr <*> field o "then" expr <*> field o "else" expr
     e -> unknownTag "expression tag" e <?> Key "e"
-  where
-    -- An if in the else branch joins this one, so a chain of else-ifs
-    -- decodes to a single multi-way 'EIf'.
-    elseIf c t = \case
-      EIf arms e -> EIf ((c, t) : arms) e
-      e -> EIf [(c, t)] e
-    binder = A.withObject "Binder" $ \b -> (,) <$> field b "name" name <*> field b "type" ty
-    bind = A.withObject "Bind" $ \b ->
-      Bind <$> field b "name" name <*> field b "type" ty <*> field b "value" expr
+ where
+  -- An if in the else branch joins this one, so a chain of else-ifs
+  -- decodes to a single multi-way 'EIf'.
+  elseIf c t = \case
+    EIf arms e -> EIf ((c, t) : arms) e
+    e -> EIf [(c, t)] e
+  binder = A.withObject "Binder" $ \b -> (,) <$> field b "name" name <*> field b "type" ty
+  bind = A.withObject "Bind" $ \b ->
+    Bind <$> field b "name" name <*> field b "type" ty <*> field b "value" expr
 
 -- | Resolve a primitive name and read its parameters. Parameters of
 -- primitives that take none are ignored, like any unknown key.
@@ -513,9 +542,9 @@ primOp opName params = case Map.lookup opName parameterless of
     "sig.register" -> SigRegister <$> param "init" value
     "sig.mealy" -> SigMealy <$> param "init" value
     _ -> unknownTag "primitive" opName <?> Key "op"
-  where
-    param :: Key -> (A.Value -> Parser a) -> Parser a
-    param k p = field params k p <?> Key "params"
+ where
+  param :: Key -> (A.Value -> Parser a) -> Parser a
+  param k p = field params k p <?> Key "params"
 
 parameterless :: Map Text PrimOp
 parameterless =
@@ -568,9 +597,9 @@ cycles ins outs = A.withArray "Array" $ \rows -> do
           <> " bits"
       )
   zipWithM (\i r -> cycleRow r <?> Index i) [0 ..] (Vector.toList rows)
-  where
-    cycleRow = A.withObject "Cycle" $ \r ->
-      Cycle <$> field r "in" (row ins) <*> field r "out" (row outs)
+ where
+  cycleRow = A.withObject "Cycle" $ \r ->
+    Cycle <$> field r "in" (row ins) <*> field r "out" (row outs)
 
 -- | Bits one value of the type occupies. No value has a function type, so
 -- a function-typed port fails on its first row whatever it counts for.
@@ -607,9 +636,9 @@ portValue p x = do
           <> renderTy (portTy p)
       )
   pure v
-  where
-    renderTy =
-      Text.unpack . Text.decodeUtf8Lenient . LBS.toStrict . E.encodingToLazyByteString . tyE
+ where
+  renderTy =
+    Text.unpack . Text.decodeUtf8Lenient . LBS.toStrict . E.encodingToLazyByteString . tyE
 
 ----------------------------------------------------------------------
 -- Encoders
@@ -645,7 +674,8 @@ topE t =
     ]
 
 domainE :: Domain -> Encoding
-domainE (Domain n period) = obj [E.pair "name" (E.text n), E.pair "periodPs" (natE period)]
+domainE (Domain n period) =
+  obj [E.pair "name" (E.text n), E.pair "periodPs" (natE period)]
 
 portE :: Port Ty -> Encoding
 portE (Port n t) = obj [E.pair "name" (E.text n), E.pair "type" (tyE t)]
@@ -666,7 +696,9 @@ certificateE c =
     , E.pair "axioms" (E.list E.text (certAxioms c))
     , E.pair "implAxioms" (E.list E.text (certImplAxioms c))
     ]
-      <> [E.pair "specDefinitions" (E.list specDefE (certSpecDefs c)) | not (null (certSpecDefs c))]
+      <> [ E.pair "specDefinitions" (E.list specDefE (certSpecDefs c)) | not (null
+        (certSpecDefs c))
+         ]
 
 specDefE :: SpecDef -> Encoding
 specDefE (SpecDef n b) = obj [E.pair "name" (E.text n), E.pair "body" (E.text b)]
@@ -678,8 +710,8 @@ tyE = \case
   TProd ts -> tagged "prod" [E.pair "elems" (E.list tyE ts)]
   TFun a r -> tagged "fun" [E.pair "arg" (tyE a), E.pair "res" (tyE r)]
   TSignal d t -> tagged "signal" [E.pair "domain" (E.text d), E.pair "elem" (tyE t)]
-  where
-    tagged t rest = obj (E.pair "t" (E.text t) : rest)
+ where
+  tagged t rest = obj (E.pair "t" (E.text t) : rest)
 
 valueE :: Value -> Encoding
 valueE = \case
@@ -695,7 +727,8 @@ exprE = \case
   EPrim op t ->
     tagged
       "prim"
-      [E.pair "op" (E.text (primName op)), E.pair "type" (tyE t), E.pair "params" (paramsE op)]
+      [E.pair "op" (E.text (primName op)), E.pair "type" (tyE t)
+        , E.pair "params" (paramsE op)]
   EApp f args -> tagged "app" [E.pair "fun" (exprE f), E.pair "args" (E.list exprE args)]
   ELam binders body ->
     tagged "lam" [E.pair "binders" (E.list binderE binders), E.pair "body" (exprE body)]
@@ -704,20 +737,21 @@ exprE = \case
   ETuple es -> tagged "tuple" [E.pair "elems" (E.list exprE (IntMap.elems es))]
   EProj i e -> tagged "proj" [E.pair "index" (E.int i), E.pair "of" (exprE e)]
   EIf arms e -> foldr ifE (exprE e) arms
-  where
-    tagged t rest = obj (E.pair "e" (E.text t) : rest)
-    letE isRec binds body =
-      tagged
-        "let"
-        [ E.pair "rec" (E.bool isRec)
-        , E.pair "binds" (E.list bindE binds)
-        , E.pair "body" (exprE body)
-        ]
-    -- A multi-way if is written as nested ifs, the inverse of 'expr'.
-    ifE (c, t) el = tagged "if" [E.pair "cond" (exprE c), E.pair "then" (exprE t), E.pair "else" el]
-    binderE (n, t) = obj [E.pair "name" (nameE n), E.pair "type" (tyE t)]
-    bindE (Bind n t e) =
-      obj [E.pair "name" (nameE n), E.pair "type" (tyE t), E.pair "value" (exprE e)]
+ where
+  tagged t rest = obj (E.pair "e" (E.text t) : rest)
+  letE isRec binds body =
+    tagged
+      "let"
+      [ E.pair "rec" (E.bool isRec)
+      , E.pair "binds" (E.list bindE binds)
+      , E.pair "body" (exprE body)
+      ]
+  -- A multi-way if is written as nested ifs, the inverse of 'expr'.
+  ifE (c, t) el =
+    tagged "if" [E.pair "cond" (exprE c), E.pair "then" (exprE t), E.pair "else" el]
+  binderE (n, t) = obj [E.pair "name" (nameE n), E.pair "type" (tyE t)]
+  bindE (Bind n t e) =
+    obj [E.pair "name" (nameE n), E.pair "type" (tyE t), E.pair "value" (exprE e)]
 
 paramsE :: PrimOp -> Encoding
 paramsE = \case
@@ -739,6 +773,8 @@ vectorsE vs =
     , E.pair "outputs" (E.list portE (vecOutputs vs))
     , E.pair "cycles" (E.list cycleE (vecCycles vs))
     ]
-  where
-    cycleE c =
-      obj [E.pair "in" (E.list valueE (cycInputs c)), E.pair "out" (E.list valueE (cycOutputs c))]
+ where
+  cycleE c =
+    obj
+      [E.pair "in" (E.list valueE (cycInputs c))
+        , E.pair "out" (E.list valueE (cycOutputs c))]

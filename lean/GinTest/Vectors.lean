@@ -20,8 +20,10 @@ namespace GinTest.Vectors
 #guard ((Rng.mk 5).bits 1).1 < 2
 
 -- Inputs are reproducible from the seed, and different seeds differ.
-#guard (VectorSource.of1 Counter.counter).rows 9 10 == (VectorSource.of1 Counter.counter).rows 9 10
-#guard (VectorSource.of1 Counter.counter).rows 9 10 != (VectorSource.of1 Counter.counter).rows 8 10
+#guard (VectorSource.of1 Counter.counter).rows 9 10 == (VectorSource.of1
+  Counter.counter).rows 9 10
+#guard (VectorSource.of1 Counter.counter).rows 9 10 != (VectorSource.of1
+  Counter.counter).rows 8 10
 #guard ((VectorSource.of1 Counter.counter).rows 9 10).size == 10
 
 /-- Two outputs: the input and its negation. -/
@@ -40,7 +42,8 @@ def twoOutputs (b : Signal System Bool) : Signal System (Bool × BitVec 3) :=
 #guard ((VectorSource.of2 Mac.mac).rows 2 1).map (·.outputs) == #[[.bv 16 0]]
 
 /-- A counter without inputs. -/
-def ticks : Signal System (BitVec 4) := mealy (fun (s : BitVec 4) (_ : Bool) => (s + 1, s)) 0 (Signal.pure true)
+def ticks : Signal System (BitVec 4) := mealy (fun (s : BitVec 4) (_ : Bool) => (s + 1,
+  s)) 0 (Signal.pure true)
 
 -- A circuit without inputs has no input values; its outputs follow the clock.
 #guard (VectorSource.of0 ticks).inputs == []
@@ -48,7 +51,8 @@ def ticks : Signal System (BitVec 4) := mealy (fun (s : BitVec 4) (_ : Bool) => 
   #[([], [.bv 4 0]), ([], [.bv 4 1]), ([], [.bv 4 2])]
 
 /-- Three inputs. -/
-def pick (a : Signal System Bool) (x y : Signal System (BitVec 3)) : Signal System (BitVec 3) :=
+def pick (a : Signal System Bool) (x y : Signal System (BitVec 3)) : Signal System
+  (BitVec 3) :=
   lift3 (fun a x y => if a then x else y) a x y
 
 -- Three inputs are drawn in order and the output follows them.
@@ -69,7 +73,8 @@ def pick (a : Signal System Bool) (x y : Signal System (BitVec 3)) : Signal Syst
   let cur := if b then cur + 1 else 0; (max best cur, cur)) (0, 0)).1 > 255
 
 -- Most operands have their top bit set.
-#guard ((largeOperands (w := 8) (v := 8) 1024 ⟨2⟩).1.filter fun (x, _) => x.toNat ≥ 128).size > 640
+#guard ((largeOperands (w := 8) (v := 8) 1024 ⟨2⟩).1.filter fun (x, _) => x.toNat ≥
+  128).size > 640
 
 -- A biased generator replaces the uniform one in a vector source.
 #guard ((VectorSource.of1 Counter.counter enableRuns).rows 1 1024).size == 1024

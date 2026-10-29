@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+
 module BoundedCoerce where
 
 import Data.Coerce (coerce)

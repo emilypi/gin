@@ -105,11 +105,16 @@ namespace Gin.Export.Print
 /-- Words that a plain identifier must not be, because the printed term or
 Lean source gives them another meaning. -/
 def keywords : Std.HashSet String := Std.HashSet.ofList
-  ["_", "Prop", "Sort", "Type", "abbrev", "at", "axiom", "by", "calc", "class", "def", "deriving",
-   "do", "else", "end", "example", "exists", "forall", "from", "fun", "have", "if", "import", "in",
-   "inductive", "instance", "let", "match", "mut", "namespace", "nat_lit", "noncomputable",
-   "opaque", "open", "partial", "private", "protected", "return", "section", "show", "sorry",
-   "structure", "suffices", "then", "theorem", "universe", "unsafe", "variable", "where", "with",
+  ["_", "Prop", "Sort", "Type", "abbrev", "at", "axiom", "by", "calc", "class", "def",
+    "deriving",
+   "do", "else", "end", "example", "exists", "forall", "from", "fun", "have", "if",
+     "import", "in",
+   "inductive", "instance", "let", "match", "mut", "namespace", "nat_lit",
+     "noncomputable",
+   "opaque", "open", "partial", "private", "protected", "return", "section", "show",
+     "sorry",
+   "structure", "suffices", "then", "theorem", "universe", "unsafe", "variable",
+     "where", "with",
    "_root_"]
 
 /-- May `c` appear in a printed component without escaping? -/
@@ -134,14 +139,16 @@ with every character that is not `plainChar` escaped. A component containing
 def component (s : String) : Except String String := do
   if s.contains '»' then throw s!"the name component {s.quote} contains »"
   if isPlainIdent s then return s
-  return "<<" ++ s.foldl (fun acc c => if plainChar c then acc.push c else acc ++ unicodeEscape c) ""
+  return "<<" ++ s.foldl (fun acc c => if plainChar c then acc.push c else acc ++
+    unicodeEscape c) ""
     ++ ">>"
 
 /-- A string literal in quotes, with every character outside printable
 ASCII (`0x20`–`0x7E`), and `"` and `\`, written `\u{XXXX}`. -/
 def stringLit (s : String) : String :=
   let plain (c : Char) := 0x20 ≤ c.toNat && c.toNat ≤ 0x7E && c != '"' && c != '\\'
-  "\"" ++ s.foldl (fun acc c => if plain c then acc.push c else acc ++ unicodeEscape c) "" ++ "\""
+  "\"" ++ s.foldl (fun acc c => if plain c then acc.push c else acc ++ unicodeEscape c)
+    "" ++ "\""
 
 /-- Is every character of `s` printable ASCII (`0x20`–`0x7E`)? -/
 def isPrintableAscii (s : String) : Bool :=
@@ -203,7 +210,8 @@ def firstDuplicate? (names : List String) : Option String := Id.run do
 
 /-- Refuse a printed term in which a bound variable prints like a constant
 of the term or a prefix of one. -/
-def checkBound (reserved : Std.HashSet String) (bound : Array String) : Except String Unit :=
+def checkBound (reserved : Std.HashSet String) (bound : Array String) : Except String
+  Unit :=
   match bound.find? reserved.contains with
   | some x => throw s!"the bound variable {x} prints like a constant of the term"
   | none => pure ()
@@ -308,7 +316,8 @@ def sort (u : Level) : Except String Doc :=
   | l => return ⟨"Sort " ++ (← levelArg l), .app⟩
 
 /-- A constant with its universe arguments (omitted when all are `0`). -/
-def constName (aliases : NameSet) (c : Name) (us : List Level) : Except String String := do
+def constName (aliases : NameSet) (c : Name) (us : List Level) : Except String String
+  := do
   let n ← globalName aliases c
   if us.all (· == .zero) then return n
   return n ++ ".{" ++ ", ".intercalate (← us.mapM level) ++ "}"
@@ -329,7 +338,8 @@ partial def needsAt (env : Environment) (ty : Expr) (args : Array Expr) (i : Nat
   | fuel + 1 =>
     match ty.consumeMData.headBeta with
     | .forallE _ _ b bi =>
-      !bi.isExplicit || needsAt env (if h : i < args.size then b.instantiate1 args[i] else b) args
+      !bi.isExplicit || needsAt env (if h : i < args.size then b.instantiate1 args[i]
+        else b) args
         (i + 1) fuel
     | .letE _ _ v b _ => needsAt env (b.instantiate1 v) args i fuel
     | .sort _ => i < args.size
@@ -340,7 +350,8 @@ partial def needsAt (env : Environment) (ty : Expr) (args : Array Expr) (i : Nat
         | some ci@(.defnInfo _) =>
           if ci.levelParams.length != us.length then true else
           needsAt env ((ci.instantiateValueLevelParams! us).beta t.getAppArgs) args i fuel
-        | some (.inductInfo _) | some (.axiomInfo _) | some (.opaqueInfo _) => i < args.size
+        | some (.inductInfo _) | some (.axiomInfo _) | some (.opaqueInfo _) => i <
+          args.size
         | _ => true
       | .bvar _ => i < args.size
       | _ => true
@@ -450,7 +461,8 @@ partial def app (ctx : Ctx) (e : Expr) : M Doc := do
   let fn := e.getAppFn.consumeMData
   let args := e.getAppArgs
   if fn.isConstOf ``Eq && args.size == 3 then
-    return ⟨(← doc ctx args[1]!).paren .app ++ " = " ++ (← doc ctx args[2]!).paren .app, .eq⟩
+    return ⟨(← doc ctx args[1]!).paren .app ++ " = " ++ (← doc ctx args[2]!).paren
+      .app, .eq⟩
   let head ← match fn with
     | .const c us => do
       let atSign := match ctx.env.find? c with
@@ -473,7 +485,8 @@ partial def lam (ctx : Ctx) (e : Expr) (binders : Array String) : M Doc := do
     let (o, c) := brackets bi
     lam (ctx.bind x t) b (binders.push s!"{o}{x} : {(← doc ctx t).text}{c}")
   | .mdata _ e => lam ctx e binders
-  | body => return ⟨"fun " ++ " ".intercalate binders.toList ++ " => " ++ (← doc ctx body).text, .binder⟩
+  | body => return ⟨"fun " ++ " ".intercalate binders.toList ++ " => " ++ (← doc ctx
+    body).text, .binder⟩
 
 /-- Print a `∀`: an arrow if it is non-dependent and explicit, otherwise a
 block of binders. -/
@@ -499,7 +512,8 @@ partial def piBlock (ctx : Ctx) (e : Expr) (binders : Array String) : M Doc := d
 
 /-- Close a block of `∀` binders. -/
 partial def finish (ctx : Ctx) (body : Expr) (binders : Array String) : M Doc := do
-  return ⟨"forall " ++ " ".intercalate binders.toList ++ ", " ++ (← doc ctx body).text, .binder⟩
+  return ⟨"forall " ++ " ".intercalate binders.toList ++ ", " ++ (← doc ctx body).text,
+    .binder⟩
 
 end
 

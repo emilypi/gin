@@ -37,28 +37,34 @@ run_meta do
     match IrEval.agrees p.top p.defs v with
     | .ok () => pure ()
     | .error msg => throwError "{n}: {msg}"
-    unless v.cycles.size == 1024 && vectorCycles == 1024 && p.top.name == n && v.top == n do
+    unless v.cycles.size == 1024 && vectorCycles == 1024 && p.top.name == n && v.top ==
+      n do
       throwError "{n}: wrong name or cycle count"
     unless p.top.domain == { name := "System", periodPs := 10000 } do
       throwError "{n}: wrong domain"
-    unless p.producer.tool == "gin-export" && p.producer.leanVersion == Lean.versionString do
+    unless p.producer.tool == "gin-export" && p.producer.leanVersion ==
+      Lean.versionString do
       throwError "{n}: wrong producer"
 
 -- Names and ports are exactly the ones the Haskell side and the HDL interface
 -- expect.
 run_meta do
-  let expect (n : String) (defs : List String) (thm : String) (ins outs : List (String × Ty)) :
+  let expect (n : String) (defs : List String) (thm : String) (ins outs : List (String
+    × Ty)) :
       MetaM Unit := do
     let p ← exportProgram (← GinTest.Examples.entry n)
     unless p.defs.map (·.name) == defs && p.top.def_ == defs.getLast! do
       throwError "{n}: definitions {p.defs.map (·.name)}"
-    unless p.certificate.theorem_ == thm do throwError "{n}: theorem {p.certificate.theorem_}"
+    unless p.certificate.theorem_ == thm do throwError
+      "{n}: theorem {p.certificate.theorem_}"
     unless p.top.inputs.map GinTest.Examples.portSig == ins do throwError "{n}: inputs"
     unless p.top.outputs.map GinTest.Examples.portSig == outs do throwError "{n}: outputs"
-  expect "counter" ["Counter.counter"] "Counter.counter_correct" [("en", .bool)] [("count", .bv 8)]
+  expect "counter" ["Counter.counter"] "Counter.counter_correct" [("en", .bool)]
+    [("count", .bv 8)]
   expect "detector" ["Detector.step", "Detector.detector"] "Detector.detector_correct"
     [("b", .bool)] [("hit", .bool)]
-  expect "mac" ["Mac.mac"] "Mac.mac_correct" [("x", .bv 8), ("y", .bv 8)] [("acc", .bv 16)]
+  expect "mac" ["Mac.mac"] "Mac.mac_correct" [("x", .bv 8), ("y", .bv 8)] [("acc", .bv
+    16)]
 
 -- The biased inputs exercise the interesting behaviour: the counter wraps
 -- past 255 and is also held, the detector sees both isolated and overlapping
@@ -86,11 +92,14 @@ run_meta do
 
 -- Hardware identifiers.
 #guard isLegalIdent "counter" && isLegalIdent "a1_b2" && isLegalIdent "x"
-#guard !isLegalIdent "" && !isLegalIdent "Counter" && !isLegalIdent "1a" && !isLegalIdent "a__b"
+#guard !isLegalIdent "" && !isLegalIdent "Counter" && !isLegalIdent "1a" &&
+  !isLegalIdent "a__b"
 #guard !isLegalIdent "a_" && !isLegalIdent "gin_x" && !isLegalIdent "a-b"
-#guard !isLegalIdent (String.ofList (List.replicate 65 'a')) && isLegalIdent (String.ofList (List.replicate 64 'a'))
+#guard !isLegalIdent (String.ofList (List.replicate 65 'a')) && isLegalIdent
+  (String.ofList (List.replicate 64 'a'))
 -- Words gin reserves, one from each section of its list, are refused.
-#guard ["module", "logic", "signal", "std_logic", "bool", "xor_eq", "reg"].all (!isLegalIdent ·)
+#guard ["module", "logic", "signal", "std_logic", "bool", "xor_eq", "reg"].all
+  (!isLegalIdent ·)
 #guard reservedWords.size == 445
 
 -- Output products are split along the right-nested spine.
@@ -106,12 +115,16 @@ run_meta do
   expectError (translateTop { base with name := "Counter" }) ["top name", "Counter"]
   expectError (translateTop { base with inputs := ["clk"] }) ["clk"]
   expectError (translateTop { base with name := "module" }) ["top name", "\"module\""]
-  expectError (translateTop { base with inputs := ["signal"] }) ["port name", "\"signal\""]
+  expectError (translateTop { base with inputs := ["signal"] }) ["port name",
+    "\"signal\""]
   expectError (translateTop { base with outputs := ["wire"] }) ["port name", "\"wire\""]
   expectError (translateTop { base with outputs := ["en"] }) ["not pairwise distinct"]
-  expectError (translateTop { base with inputs := [] }) ["takes 1 signals but 0 input names"]
-  expectError (translateTop { base with outputs := ["a", "b"] }) ["does not have 2 output components"]
-  expectError (translateTop { base with defs := [``Mac.mac] }) ["do not include the top definition"]
+  expectError (translateTop { base with inputs := [] })
+    ["takes 1 signals but 0 input names"]
+  expectError (translateTop { base with outputs := ["a", "b"] })
+    ["does not have 2 output components"]
+  expectError (translateTop { base with defs := [``Mac.mac] })
+    ["do not include the top definition"]
   let p ← exportProgram base
   -- a vector source for another interface is refused
   match exportVectors { base with vectors := some (.of2 Mac.mac) } p.top with

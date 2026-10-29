@@ -24,8 +24,10 @@ extra-doc-files:
   docs/optimization.md
   docs/memory-contract.md
 extra-source-files:
+  fourmolu.yaml
   test/hdl/memory_tb.sv
   test/check-types.sh
+  test/check-width.sh
   test/compile-fail/*.hs
   test/compile-pass/*.hs
   examples/optimization/*.json

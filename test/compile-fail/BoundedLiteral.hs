@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+
 module BoundedLiteral where
 
 import Gin.Core.Bounded

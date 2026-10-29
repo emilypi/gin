@@ -51,8 +51,8 @@ evalPrim op args
   | Just bad <- find (not . validValue) args =
       failure ("argument " <> showT bad <> " is not a valid value")
   | otherwise = either failure Right (apply op args)
-  where
-    failure msg = failAt StSim (primName op <> " " <> msg)
+ where
+  failure msg = failAt StSim (primName op <> " " <> msg)
 
 -- | The primitive table. 'Left' carries the reason an application is
 -- ill-typed; arity, validity and signal prims are handled by 'evalPrim'.
@@ -83,7 +83,8 @@ apply op args = case (op, args) of
   (BvConcat, [VBV n a, VBV m b])
     | n + m <= maxWidth -> bv (n + m) (a * 2 ^ m + b)
     | otherwise ->
-        Left ("result width " <> showT (n + m) <> " exceeds the maximum width " <> showT maxWidth)
+        Left ("result width " <> showT (n + m) <> " exceeds the maximum width "
+          <> showT maxWidth)
   (BvExtract hi lo, [VBV n a])
     | lo <= hi && hi < n -> let w = hi - lo + 1 in bv w ((a `div` 2 ^ lo) `mod` 2 ^ w)
     | otherwise ->
@@ -95,12 +96,13 @@ apply op args = case (op, args) of
               <> showT n
           )
   (BvZext m, [VBV n a])
-    | m < n -> Left (showT m <> ": target width is narrower than the operand width " <> showT n)
+    | m < n ->
+        Left (showT m <> ": target width is narrower than the operand width " <> showT n)
     | m > maxWidth ->
         Left (showT m <> ": target width exceeds the maximum width " <> showT maxWidth)
     | otherwise -> Right (VBV m a)
   (BvOfBool, [VBool b]) -> Right (VBV 1 (if b then 1 else 0))
   _ -> Left ("is not defined on arguments of types " <> showT (fmap valueTy args))
-  where
-    bool = Right . VBool
-    bv n = Right . mkBV n
+ where
+  bool = Right . VBool
+  bv n = Right . mkBV n

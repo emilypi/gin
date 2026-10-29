@@ -110,29 +110,34 @@ checkPorts top = withContext "in top entity" $ do
   for_ (topInputs top <> topOutputs top) $ \port -> do
     checkPortName (topName top) (portName port)
     unless (isScalar (portTy port)) $
-      failAt StCheck
+      failAt
+        StCheck
         ("port " <> portName port <> " has non-scalar type " <> renderTy (portTy port))
   foldM_ unique Set.empty (fmap portName (topInputs top <> topOutputs top))
-  where
-    unique seen n
-      | Set.member n seen = failAt StCheck ("duplicate port name " <> n)
-      | otherwise = Right (Set.insert n seen)
+ where
+  unique seen n
+    | Set.member n seen = failAt StCheck ("duplicate port name " <> n)
+    | otherwise = Right (Set.insert n seen)
 
 -- | A port name is a legal identifier other than the clock, the reset and
 -- the top name. Legal identifiers are lowercase, so comparing them exactly
 -- is comparing them case-insensitively.
 checkPortName :: Text -> Text -> Either GinError ()
 checkPortName top n
-  | not (isLegalIdent n) = failAt StCheck ("illegal port name " <> showT n <> ": " <> identRule)
-  | n == "clk" = failAt StCheck "port name clk is reserved for the clock every module gets"
-  | n == "rst" = failAt StCheck "port name rst is reserved for the reset every module gets"
+  | not (isLegalIdent n) =
+      failAt StCheck ("illegal port name " <> showT n <> ": " <> identRule)
+  | n == "clk" = failAt StCheck "port name clk is reserved for the clock every module \
+    \gets"
+  | n == "rst" = failAt StCheck "port name rst is reserved for the reset every module \
+    \gets"
   | n == top = failAt StCheck ("port name " <> n <> " equals the top name")
   | otherwise = Right ()
 
 identRule :: Text
 identRule =
-  "it must be a legal HDL identifier (lowercase ASCII letter first, then lowercase letters, \
-  \digits and single underscores; at most 64 characters; no gin_ prefix; not a reserved word)"
+  "it must be a legal HDL identifier (lowercase ASCII letter first, then lowercase \
+    \letters, digits and single underscores; at most 64 characters; no gin_ prefix; not \
+    \a reserved word)"
 
 -- | The top definition's type must be
 -- @Signal d i1 -> .. -> Signal d ik -> Signal d o@ with @o@ the single
@@ -140,13 +145,16 @@ identRule =
 checkTopDef :: Map Name Ty -> TopEntity Ty Name -> Either GinError ()
 checkTopDef globals top = withContext "in top entity" $
   case (Map.lookup (topDef top) globals, fmap portTy (topOutputs top)) of
-    (Nothing, _) -> failAt StCheck ("top definition " <> unName (topDef top) <> " is not defined")
+    (Nothing, _) ->
+      failAt StCheck ("top definition " <> unName (topDef top) <> " is not defined")
     (_, []) -> failAt StCheck "the top entity has no outputs"
     (Just actual, o : os) -> do
       let d = domainName (topDomain top)
-          expected = tFuns (fmap (TSignal d . portTy) (topInputs top)) (TSignal d (nest o os))
+          expected =
+            tFuns (fmap (TSignal d . portTy) (topInputs top)) (TSignal d (nest o os))
       unless (actual == expected) $
-        failAt StCheck
+        failAt
+          StCheck
           ( "top definition "
               <> unName (topDef top)
               <> " has type "
@@ -154,20 +162,21 @@ checkTopDef globals top = withContext "in top entity" $
               <> ", but the ports require "
               <> renderTy expected
           )
-  where
-    nest o = \case
-      [] -> o
-      o' : os -> TProd [o, nest o' os]
+ where
+  nest o = \case
+    [] -> o
+    o' : os -> TProd [o, nest o' os]
 
 ----------------------------------------------------------------------
 -- Definitions
 
 defTypes :: [Def Ty Name] -> Either GinError (Map Name Ty)
 defTypes = foldM insert Map.empty
-  where
-    insert m d
-      | Map.member (defName d) m = failAt StCheck ("duplicate definition " <> unName (defName d))
-      | otherwise = Right (Map.insert (defName d) (defTy d) m)
+ where
+  insert m d
+    | Map.member (defName d) m =
+        failAt StCheck ("duplicate definition " <> unName (defName d))
+    | otherwise = Right (Map.insert (defName d) (defTy d) m)
 
 -- | Depth-first search of the reference graph; a reference back to a
 -- definition still being visited closes a cycle, which is reported in
@@ -176,17 +185,21 @@ checkAcyclic :: [Def Ty Name] -> Either GinError ()
 checkAcyclic defs = case foldM (visit [] Set.empty) Set.empty (fmap defName defs) of
   Right _ -> Right ()
   Left cycle' ->
-    failAt StCheck
-      ("recursive definitions are not allowed: " <> Text.intercalate " -> " (fmap unName cycle'))
-  where
-    graph = Map.fromList [(defName d, Set.toList (globalRefs (defBody d))) | d <- defs]
-    visit :: [Name] -> Set Name -> Set Name -> Name -> Either [Name] (Set Name)
-    visit path onPath done n
-      | Set.member n onPath = Left (n : reverse (takeWhile (/= n) path) <> [n])
-      | Set.member n done = Right done
-      | otherwise =
-          Set.insert n
-            <$> foldM (visit (n : path) (Set.insert n onPath)) done (Map.findWithDefault [] n graph)
+    failAt
+      StCheck
+      ( "recursive definitions are not allowed: "
+        <> Text.intercalate " -> " (fmap unName cycle')
+      )
+ where
+  graph = Map.fromList [(defName d, Set.toList (globalRefs (defBody d))) | d <- defs]
+  visit :: [Name] -> Set Name -> Set Name -> Name -> Either [Name] (Set Name)
+  visit path onPath done n
+    | Set.member n onPath = Left (n : reverse (takeWhile (/= n) path) <> [n])
+    | Set.member n done = Right done
+    | otherwise =
+        Set.insert n
+          <$> foldM (visit (n : path) (Set.insert n onPath)) done (Map.findWithDefault
+            [] n graph)
 
 data Env = Env
   { envDomain :: !Text
@@ -195,7 +208,7 @@ data Env = Env
   }
 
 bindLocals :: [(Name, TyRef)] -> Env -> Env
-bindLocals xs env = env{envLocals = Map.union (Map.fromList xs) (envLocals env)}
+bindLocals xs env = env {envLocals = Map.union (Map.fromList xs) (envLocals env)}
 
 -- | Check a definition against its declared type, already interned.
 checkDef :: Env -> Def Ty Name -> TyRef -> Check ()
@@ -203,7 +216,8 @@ checkDef env d declared = withContextM ("in def " <> unName (defName d)) $ do
   lift (checkTy env (defTy d))
   actual <- infer env (defBody d)
   unless (sameTy actual declared) $
-    failAt StCheck
+    failAt
+      StCheck
       ( "the body has type "
           <> renderRef actual
           <> ", but the definition is declared "
@@ -226,28 +240,32 @@ isData = \case
 -- | Well-formedness of a type annotation.
 checkTy :: Env -> Ty -> Either GinError ()
 checkTy env = go
-  where
-    go t = case t of
-      TBool -> Right ()
-      TBitVec w ->
-        unless (w >= 1 && w <= maxWidth) $
-          failAt StCheck ("bit-vector width " <> showT w <> " outside 1.." <> showT maxWidth)
-      TProd ts -> case ts of
-        _ : _ : _ -> traverse_ go ts
-        _ -> failAt StCheck ("product type " <> renderTy t <> " has fewer than two components")
-      TFun a r -> go a >> go r
-      TSignal d e -> do
-        unless (d == envDomain env) $
-          failAt StCheck
-            ( "signal in domain "
-                <> d
-                <> ", but every signal must be in the top entity's domain "
-                <> envDomain env
-            )
-        unless (isData e) $
-          failAt StCheck
-            ("a signal must carry data (no signals or functions), got " <> renderTy t)
-        go e
+ where
+  go t = case t of
+    TBool -> Right ()
+    TBitVec w ->
+      unless (w >= 1 && w <= maxWidth) $
+        failAt StCheck ("bit-vector width " <> showT w <> " outside 1.."
+          <> showT maxWidth)
+    TProd ts -> case ts of
+      _ : _ : _ -> traverse_ go ts
+      _ ->
+        failAt StCheck ("product type " <> renderTy t <> " has fewer than two components")
+    TFun a r -> go a >> go r
+    TSignal d e -> do
+      unless (d == envDomain env) $
+        failAt
+          StCheck
+          ( "signal in domain "
+              <> d
+              <> ", but every signal must be in the top entity's domain "
+              <> envDomain env
+          )
+      unless (isData e) $
+        failAt
+          StCheck
+          ("a signal must carry data (no signals or functions), got " <> renderTy t)
+      go e
 
 ----------------------------------------------------------------------
 -- Hash-consed types
@@ -303,16 +321,16 @@ mkTy layer = do
   case Map.lookup key nodes of
     Just ref -> pure ref
     Nothing -> do
-      let ref = TyRef{refId = Map.size nodes, refIsData = dataLayer, refLayer = layer}
+      let ref = TyRef {refId = Map.size nodes, refIsData = dataLayer, refLayer = layer}
       put $! Table (Map.insert key ref nodes)
       pure ref
-  where
-    dataLayer = case layer of
-      FBool -> True
-      FBitVec _ -> True
-      FProd cs -> all refIsData cs
-      FFun _ _ -> False
-      FSignal _ _ -> False
+ where
+  dataLayer = case layer of
+    FBool -> True
+    FBitVec _ -> True
+    FProd cs -> all refIsData cs
+    FFun _ _ -> False
+    FSignal _ _ -> False
 
 -- | The node for a type annotation. Walks the annotation once, so the cost
 -- is linear in its size as written.
@@ -368,7 +386,8 @@ infer env = \case
       FProd cs -> case Seq.lookup i cs of
         Just c -> pure c
         Nothing ->
-          failAt StCheck ("projection index " <> showT i <> " out of range for " <> renderRef t)
+          failAt StCheck ("projection index " <> showT i <> " out of range for "
+            <> renderRef t)
       _ -> failAt StCheck ("projection from non-product type " <> renderRef t)
   EIf arms e -> case arms of
     [] -> failAt StCheck "if with no conditions"
@@ -377,52 +396,60 @@ infer env = \case
       let sameAs b = do
             bt <- infer env b
             unless (sameTy tt bt) $
-              failAt StCheck
-                ("if branches have different types: " <> renderRef tt <> " and " <> renderRef bt)
+              failAt
+                StCheck
+                ("if branches have different types: " <> renderRef tt <> " and "
+                  <> renderRef bt)
       for_ rest $ \(c', t') -> condition c' >> sameAs t'
       sameAs e
       unless (refIsData tt) $
-        failAt StCheck ("if branches must be data (no signals or functions), got " <> renderRef tt)
+        failAt
+          StCheck
+          ("if branches must be data (no signals or functions), got " <> renderRef tt)
       pure tt
-  where
-    letLocals binds = do
-      lift (distinct (fmap bindName binds))
-      lift (traverse_ (checkTy env . bindTy) binds)
-      refs <- traverse (intern . bindTy) binds
-      pure (zip (fmap bindName binds) refs)
-    -- n distinct keys from 0 to n-1 are exactly 0 .. n-1.
-    keyedByPosition es =
-      fmap fst (IntMap.lookupMin es) == Just 0
-        && fmap fst (IntMap.lookupMax es) == Just (IntMap.size es - 1)
-    condition c = do
-      ct <- infer env c
-      case refLayer ct of
-        FBool -> pure ()
-        _ -> failAt StCheck ("if condition must be Bool, got " <> renderRef ct)
-    lookupIn what n scope = maybe (failAt StCheck (what <> unName n)) pure (Map.lookup n scope)
-    apply ft (i, arg) = case refLayer ft of
-      FFun expected res -> do
-        actual <- infer env arg
-        unless (sameTy actual expected) $
-          failAt StCheck
-            ( "argument "
-                <> showT i
-                <> ": expected "
-                <> renderRef expected
-                <> ", got "
-                <> renderRef actual
-            )
-        pure res
-      _ ->
-        failAt StCheck
-          ("cannot apply a term of type " <> renderRef ft <> " to argument " <> showT i)
+ where
+  letLocals binds = do
+    lift (distinct (fmap bindName binds))
+    lift (traverse_ (checkTy env . bindTy) binds)
+    refs <- traverse (intern . bindTy) binds
+    pure (zip (fmap bindName binds) refs)
+  -- n distinct keys from 0 to n-1 are exactly 0 .. n-1.
+  keyedByPosition es =
+    fmap fst (IntMap.lookupMin es) == Just 0
+      && fmap fst (IntMap.lookupMax es) == Just (IntMap.size es - 1)
+  condition c = do
+    ct <- infer env c
+    case refLayer ct of
+      FBool -> pure ()
+      _ -> failAt StCheck ("if condition must be Bool, got " <> renderRef ct)
+  lookupIn what n scope =
+    maybe (failAt StCheck (what <> unName n)) pure (Map.lookup n scope)
+  apply ft (i, arg) = case refLayer ft of
+    FFun expected res -> do
+      actual <- infer env arg
+      unless (sameTy actual expected) $
+        failAt
+          StCheck
+          ( "argument "
+              <> showT i
+              <> ": expected "
+              <> renderRef expected
+              <> ", got "
+              <> renderRef actual
+          )
+      pure res
+    _ ->
+      failAt
+        StCheck
+        ("cannot apply a term of type " <> renderRef ft <> " to argument " <> showT i)
 
 -- | Check a bind's value against its declared type, already interned.
 checkBind :: Env -> Bind Ty Name -> TyRef -> Check ()
 checkBind env b declared = withContextM ("in bind " <> unName (bindName b)) $ do
   actual <- infer env (bindExpr b)
   unless (sameTy actual declared) $
-    failAt StCheck
+    failAt
+      StCheck
       ( "the value has type "
           <> renderRef actual
           <> ", but the bind is declared "
@@ -431,11 +458,11 @@ checkBind env b declared = withContextM ("in bind " <> unName (bindName b)) $ do
 
 distinct :: [Name] -> Either GinError ()
 distinct = go Set.empty
-  where
-    go _ [] = Right ()
-    go seen (n : ns)
-      | Set.member n seen = failAt StCheck ("duplicate binder " <> unName n)
-      | otherwise = go (Set.insert n seen) ns
+ where
+  go _ [] = Right ()
+  go seen (n : ns)
+    | Set.member n seen = failAt StCheck ("duplicate binder " <> unName n)
+    | otherwise = go (Set.insert n seen) ns
 
 ----------------------------------------------------------------------
 -- Primitives
@@ -473,12 +500,14 @@ checkPrim op t = case op of
     exactly (tFuns [TBitVec n] (TBitVec (hi - lo + 1)))
   BvZext m -> withWidth "BitVec n -> BitVec m" $ \n -> do
     unless (m >= n) $
-      bad ("cannot zero-extend BitVec " <> showT n <> " to the narrower BitVec " <> showT m)
+      bad ("cannot zero-extend BitVec " <> showT n <> " to the narrower BitVec "
+        <> showT m)
     exactly (tFuns [TBitVec n] (TBitVec m))
   BvOfBool -> exactly (tFuns [TBool] (TBitVec 1))
   SigPure -> case t of
     TFun a (TSignal d _) -> do
-      unless (isData a) $ bad ("cannot make a signal of " <> renderTy a <> ", which is not data")
+      unless (isData a) $
+        bad ("cannot make a signal of " <> renderTy a <> ", which is not data")
       exactly (TFun a (TSignal d a))
     _ -> shape "t -> Signal d t"
   SigLift k -> do
@@ -502,33 +531,34 @@ checkPrim op t = case op of
         stateType v s
         exactly (tFuns [tFuns [s, i] (TProd [s, o]), TSignal d i] (TSignal d o))
       _ -> shape "(s -> i -> (s, o)) -> Signal d i -> Signal d o"
-  where
-    bad msg = failAt StCheck ("prim " <> primName op <> ": " <> msg)
-    exactly expected =
-      unless (t == expected) $
-        bad ("expected type " <> renderTy expected <> ", got " <> renderTy t)
-    shape s = bad ("expected a type of the form " <> s <> ", got " <> renderTy t)
-    withWidth s k = case t of
-      TFun (TBitVec n) _ -> k n
-      _ -> shape s
-    boolBinary = exactly (tFuns [TBool, TBool] TBool)
-    bvUnary = withWidth "BitVec n -> BitVec n" $ \n -> exactly (tFuns [TBitVec n] (TBitVec n))
-    bvBinary =
-      withWidth "BitVec n -> BitVec n -> BitVec n" $ \n ->
-        exactly (tFuns [TBitVec n, TBitVec n] (TBitVec n))
-    bvCompare =
-      withWidth "BitVec n -> BitVec n -> Bool" $ \n ->
-        exactly (tFuns [TBitVec n, TBitVec n] TBool)
-    liftShape = "(t1 -> .. -> tk -> r) -> Signal d t1 -> .. -> Signal d tk -> Signal d r"
-    initial v = unless (validValue v) $ bad ("invalid initial value " <> renderValue v)
-    stateType v s =
-      unless (valueTy v == s) $
-        bad
-          ( "the initial value has type "
-              <> renderTy (valueTy v)
-              <> ", but the state has type "
-              <> renderTy s
-          )
+ where
+  bad msg = failAt StCheck ("prim " <> primName op <> ": " <> msg)
+  exactly expected =
+    unless (t == expected) $
+      bad ("expected type " <> renderTy expected <> ", got " <> renderTy t)
+  shape s = bad ("expected a type of the form " <> s <> ", got " <> renderTy t)
+  withWidth s k = case t of
+    TFun (TBitVec n) _ -> k n
+    _ -> shape s
+  boolBinary = exactly (tFuns [TBool, TBool] TBool)
+  bvUnary = withWidth "BitVec n -> BitVec n" $ \n ->
+    exactly (tFuns [TBitVec n] (TBitVec n))
+  bvBinary =
+    withWidth "BitVec n -> BitVec n -> BitVec n" $ \n ->
+      exactly (tFuns [TBitVec n, TBitVec n] (TBitVec n))
+  bvCompare =
+    withWidth "BitVec n -> BitVec n -> Bool" $ \n ->
+      exactly (tFuns [TBitVec n, TBitVec n] TBool)
+  liftShape = "(t1 -> .. -> tk -> r) -> Signal d t1 -> .. -> Signal d tk -> Signal d r"
+  initial v = unless (validValue v) $ bad ("invalid initial value " <> renderValue v)
+  stateType v s =
+    unless (valueTy v == s) $
+      bad
+        ( "the initial value has type "
+            <> renderTy (valueTy v)
+            <> ", but the state has type "
+            <> renderTy s
+        )
 
 -- | Split off exactly @n@ argument types.
 peel :: Natural -> Ty -> Maybe ([Ty], Ty)
@@ -556,32 +586,32 @@ shownComponents = 8
 componentChunks :: Int -> [[Text]] -> [Text]
 componentChunks total shown =
   "(" : intercalate [", "] (take shownComponents shown <> more) <> [")"]
-  where
-    more = [["... ", showT (total - shownComponents), " more"] | total > shownComponents]
+ where
+  more = [["... ", showT (total - shownComponents), " more"] | total > shownComponents]
 
 -- | Join lazily produced chunks, keeping at most 'renderBudget'
 -- characters, so that only the part that is shown is ever built.
 clip :: [Text] -> Text
 clip = go [] renderBudget
-  where
-    finish = Text.concat . reverse
-    go acc room = \case
-      [] -> finish acc
-      c : cs
-        | Text.compareLength c room /= GT -> go (c : acc) (room - Text.length c) cs
-        | otherwise -> finish ("..." : Text.take room c : acc)
+ where
+  finish = Text.concat . reverse
+  go acc room = \case
+    [] -> finish acc
+    c : cs
+      | Text.compareLength c room /= GT -> go (c : acc) (room - Text.length c) cs
+      | otherwise -> finish ("..." : Text.take room c : acc)
 
 -- | The chunks of a type, given a view of its outermost layer.
 tyChunks :: (a -> TyF a) -> a -> [Text]
 tyChunks view = go (0 :: Int)
-  where
-    go prec t = case view t of
-      FBool -> ["Bool"]
-      FBitVec w -> parensIf (prec >= 2) ["BitVec ", showT w]
-      FProd ts -> componentChunks (Seq.length ts) (fmap (go 0) (toList ts))
-      FFun a r -> parensIf (prec >= 1) (go 1 a <> [" -> "] <> go 0 r)
-      FSignal d e -> parensIf (prec >= 2) (["Signal ", d, " "] <> go 2 e)
-    parensIf b cs = if b then "(" : cs <> [")"] else cs
+ where
+  go prec t = case view t of
+    FBool -> ["Bool"]
+    FBitVec w -> parensIf (prec >= 2) ["BitVec ", showT w]
+    FProd ts -> componentChunks (Seq.length ts) (fmap (go 0) (toList ts))
+    FFun a r -> parensIf (prec >= 1) (go 1 a <> [" -> "] <> go 0 r)
+    FSignal d e -> parensIf (prec >= 2) (["Signal ", d, " "] <> go 2 e)
+  parensIf b cs = if b then "(" : cs <> [")"] else cs
 
 renderTy :: Ty -> Text
 renderTy = clip . tyChunks layerOf
@@ -591,8 +621,8 @@ renderRef = clip . tyChunks refLayer
 
 renderValue :: Value -> Text
 renderValue = clip . go
-  where
-    go = \case
-      VBool b -> [if b then "true" else "false"]
-      VBV w n -> [showT n, " : BitVec ", showT w]
-      VTuple vs -> componentChunks (length vs) (fmap go vs)
+ where
+  go = \case
+    VBool b -> [if b then "true" else "false"]
+    VBV w n -> [showT n, " : BitVec ", showT w]
+    VTuple vs -> componentChunks (length vs) (fmap go vs)

@@ -10,5 +10,6 @@ open Gin.Export
 
 /-- Entry point of `lake exe gin-export-hooked`. -/
 unsafe def main (args : List String) : IO UInt32 :=
-  Gin.Export.main (withVectors entries (vectorSources ++ [("hooked", .of1 Hooked.bad enableRuns)]))
+  Gin.Export.main (withVectors entries (vectorSources ++ [("hooked", .of1 Hooked.bad
+    enableRuns)]))
     defaultExports args

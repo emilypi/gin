@@ -3,19 +3,94 @@
 module Gin.Optimize.PolicySpec (spec) where
 
 import Control.Lens (set, view)
+import Control.Exception (evaluate)
 import Data.ByteString.Lazy.Char8 qualified as B
 import Data.Either (isLeft)
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as M
+import Data.Text qualified as T
+import Data.Validation (Validation (..))
 import Gin.Core.Bounded
 import Gin.Core.Prim (PrimOp (..))
 import Gin.Core.Type (Ty (..))
+import Gin.Error (GinError (..), renderError)
 import Gin.Optimize.Circuit (CircuitCosts (..), CircuitOptions (..))
 import Gin.Optimize.Policy
 import Test.Hspec
+import System.Timeout (timeout)
 import Yolk qualified as Y
 
 spec :: Spec
 spec = describe "optimization policies" $ do
+  it "reports independent numeric and relationship errors together" $ do
+    let bytes =
+          "{\"format\":\"gin-policy/1\",\"objectives\":[{\"name\":\"area\"}],\
+          \\"prefer\":[\"unknown\"],\"timeoutSeconds\":0,\"upperBounds\":[1,2],\
+          \\"search\":{\"iterations\":1001,\"nodes\":0}}"
+    case decodePolicy bytes of
+      Left err -> map (T.takeWhile (/= ':')) (errContext err) `shouldBe`
+        ["timeoutSeconds", "search.iterations", "search.nodes", "prefer", "upperBounds"]
+      Right _ -> expectationFailure "invalid fields were accepted"
+  it "accumulates independent objective fields and separate objectives" $ do
+    let bytes =
+          "{\"format\":\"gin-policy/1\",\"objectives\":[\
+          \{\"name\":\"bad name\",\"default\":\"bad\",\"operators\":{\"typo\":1}},\
+          \{\"name\":\"\"}]}"
+    case decodePolicy bytes of
+      Left err -> map (T.takeWhile (/= ':')) (errContext err) `shouldBe`
+        [ "objectives[0].name", "objectives[0].default"
+        , "objectives[0].operators", "objectives[1].name"
+        ]
+      Right _ -> expectationFailure "invalid objective fields were accepted"
+  it "reports structural prerequisites once without dependent cascades" $ do
+    let bytes =
+          "{\"format\":\"gin-policy/1\",\"objectives\":false,\
+          \\"timeoutSeconds\":0,\"search\":{\"nodes\":0},\"upperBounds\":[1,2]}"
+    case decodePolicy bytes of
+      Left err -> map (T.takeWhile (/= ':')) (errContext err) `shouldBe`
+        ["objectives", "timeoutSeconds", "search.nodes"]
+      Right _ -> expectationFailure "invalid policy shape was accepted"
+  it "accumulates record-edit failures with structured paths and an error optic" $
+    case decodePolicy (searchPolicy "iterations" 8) of
+      Left err -> expectationFailure (show err)
+      Right original | [objective] <- policyObjectives original -> do
+        let badObjective = set objectiveNameL "bad name"
+              (set objectiveOperatorsL
+                (M.singleton "typo" (boundedIntLiteral @1)) objective)
+            updated = set policyPreferencesL ["x", "x"]
+              (set policyObjectivesL [badObjective] original)
+        case validatePolicyAll updated of
+          Failure errors -> do
+            map policyIssuePath (NE.toList (getPolicyErrors errors)) `shouldBe`
+              ["objectives[0].name", "objectives[0].operators", "prefer"]
+            view _PolicyErrors errors `shouldBe` getPolicyErrors errors
+            validatePolicy updated `shouldSatisfy` isLeft
+          Success () -> expectationFailure "invalid edits were accepted"
+      Right _ -> expectationFailure "expected one objective in the fixture"
+  it "bounds list traversal before accumulating checks on edited records" $
+    case decodePolicy (searchPolicy "iterations" 8) of
+      Left err -> expectationFailure (show err)
+      Right original | [objective] <- policyObjectives original -> do
+        let updated = set policyObjectivesL (repeat objective)
+              (set policyPreferencesL (repeat "x")
+                (set policyUpperBoundsL (Just (repeat (boundedIntLiteral @1))) original))
+            paths = case validatePolicyAll updated of
+              Failure errors -> map policyIssuePath (NE.toList (getPolicyErrors errors))
+              Success () -> []
+        result <- timeout 1000000
+          (evaluate (paths == ["objectives", "prefer", "upperBounds"]))
+        result `shouldBe` Just True
+      Right _ -> expectationFailure "expected one objective in the fixture"
+  it "retains terminal-safe rendering for accumulated parse errors" $ do
+    let bytes =
+          "{\"format\":\"gin-policy/1\",\"objectives\":[{\"name\":\"area\"}],\
+          \\"timeoutSeconds\":\"bad\\nvalue\",\"search\":{\"nodes\":false}}"
+    case decodePolicy bytes of
+      Left err -> do
+        length (T.lines (renderError err)) `shouldBe` 3
+        map (T.takeWhile (/= ':')) (errContext err) `shouldBe`
+          ["timeoutSeconds", "search.nodes"]
+      Right _ -> expectationFailure "invalid field types were accepted"
   it "decodes named objectives and applies width-weighted operator costs" $ do
     let bytes =
           "{\"format\":\"gin-policy/1\",\"objectives\":[{\"name\":\"area\",\"default\":1,\

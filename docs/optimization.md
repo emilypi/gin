@@ -75,6 +75,18 @@ relationships after record updates, without serializing and reparsing a
 policy. `PolicySearch` holds the bounded settings; Yolk options are computed
 from it and the current objectives, avoiding stale stored dimensions.
 
+`validatePolicyAll` uses `validation` to return `Validation PolicyErrors ()`.
+Each `PolicyIssue` names a field path and message. `decodePolicy` accumulates
+independent field errors, including bounded search settings and objective
+fields, and reports them through the existing `GinError` CLI interface.
+`validatePolicy` likewise reports all independent errors after record edits.
+These error records and their optics are exported with the policy API.
+
+Checks that need another value wait for that value to validate. Lists are
+capped before traversal, and the bounded JSON scanner still stops at malformed
+syntax, duplicate keys, negative numbers, and resource-limit violations.
+Accumulation starts after that decoding boundary and a valid format version.
+
 `pipelineCircuit` takes a `PipelineDepth`, created with `mkPipelineDepth`
 or a checked literal. Reported latency and stage depth are checked values
 too. For example, `view (scheduledLatencyL . boundedIntValue) scheduled`

@@ -79,10 +79,12 @@ def reachableConstants (env : Environment) (roots : Array Name) : NameSet := Id.
 
 /-- Does `attr` hold for `c`, in any entry the module of `c` exported (to
 its `.olean` or to its `.ir`)? -/
-def hasParamAttr {α : Type} [Inhabited α] (attr : ParametricAttribute α) (env : Environment)
+def hasParamAttr {α : Type} [Inhabited α] (attr : ParametricAttribute α) (env :
+  Environment)
     (c : Name) : Bool :=
   match env.getModuleIdxFor? c with
-  | some i => (attr.ext.getModuleEntries env i ++ attr.ext.getModuleIREntries env i).any (·.1 == c)
+  | some i => (attr.ext.getModuleEntries env i ++ attr.ext.getModuleIREntries env
+    i).any (·.1 == c)
   | none => (attr.getParam? env c).isSome
 
 /-- The `csimp` theorems of project modules (and of the current module), as
@@ -95,7 +97,8 @@ def projectCsimps (env : Environment) : Array (Name × Name) := Id.run do
   for h : i in [0:env.header.moduleNames.size] do
     if isToolchainModule env.header.moduleNames[i] then continue
     let idx : ModuleIdx := i
-    out := out ++ (ext.getModuleEntries env idx ++ ext.getModuleIREntries env idx).map entry
+    out := out ++ (ext.getModuleEntries env idx ++ ext.getModuleIREntries env idx).map
+      entry
   out := out ++ (ext.getState env).newEntries.toArray.map entry
   return out.toList.eraseDups.toArray
 
@@ -154,7 +157,8 @@ def linkedCodeOverrides (env : Environment) : Array (Name × Array String) := Id
     let implBy := Compiler.implementedByAttr.ext
     for (c, f) in implBy.getModuleEntries env idx ++ implBy.getModuleIREntries env idx do
       reasons := reasons.push s!"{c} is implemented by {f}"
-    for (c, _) in externAttr.ext.getModuleEntries env idx ++ externAttr.ext.getModuleIREntries env idx do
+    for (c, _) in externAttr.ext.getModuleEntries env idx ++
+      externAttr.ext.getModuleIREntries env idx do
       reasons := reasons.push s!"{c} calls foreign code (@[extern])"
     unless reasons.isEmpty do
       out := out.push (m, reasons.toList.eraseDups.toArray)
@@ -168,7 +172,8 @@ def nativeReductionConsts : List Name := [``Lean.reduceBool, ``Lean.reduceNat]
 `reachableConstants`) that refer to `Lean.reduceBool` or `Lean.reduceNat`,
 with the one they refer to. Reducing a term built from them may run
 compiled code. -/
-def nativeReductions (env : Environment) (roots : Array Name) : Array (Name × Name) := Id.run do
+def nativeReductions (env : Environment) (roots : Array Name) :
+    Array (Name × Name) := Id.run do
   let mut out := #[]
   for c in (reachableConstants env roots).toArray.qsort Name.lt do
     if let some (.thmInfo _) := env.find? c then continue
@@ -184,7 +189,8 @@ def checkNoNativeReduction (roots : Array Name) : MetaM Unit := do
   let found := nativeReductions (← getEnv) roots
   unless found.isEmpty do
     let uses := found.toList.map fun (c, r) => s!"{c} refers to {r}"
-    throwError "reducing {roots} may run compiled code: {"; ".intercalate uses}; refusing to \
+    throwError "reducing {roots} may run compiled code: {"; ".intercalate
+      uses}; refusing to \
       translate it"
 
 /-- Refuse the definitions `roots` if their compiled code, which computes
@@ -193,6 +199,7 @@ def checkCompiledCode (roots : Array Name) : MetaM Unit := do
   let reasons := compiledOverrides (← getEnv) roots
   unless reasons.isEmpty do
     throwError "the compiled code of {roots} may differ from its definitions, which the \
-      certificate and the IR describe: {"; ".intercalate reasons.toList}; refusing to export"
+      certificate and the IR describe: {"; ".intercalate
+        reasons.toList}; refusing to export"
 
 end Gin.Export

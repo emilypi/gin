@@ -39,6 +39,16 @@ def entries : List Entry := [
     theorem_ := `Mac.mac_correct
     inputs := ["x", "y"], outputs := ["acc"]
     vectors := none, seed := 2 },
+  { name := "muxadd", module := `Gin
+    top := `MuxAdd.muxadd, defs := [`MuxAdd.muxadd]
+    theorem_ := `MuxAdd.muxadd_correct
+    inputs := ["flag", "lanes"], outputs := ["value_out"]
+    vectors := none, seed := 4 },
+  { name := "memorymap", module := `Gin
+    top := `MemoryMap.memorymap, defs := [`MemoryMap.memorymap]
+    theorem_ := `MemoryMap.memorymap_correct
+    inputs := ["words"], outputs := ["value_out"]
+    vectors := none, seed := 5 },
   { name := "bad", module := `GinReject.Bad
     top := `Bad.bad, defs := [`Bad.bad]
     theorem_ := `Bad.bad_correct
@@ -119,6 +129,6 @@ def entries : List Entry := [
     vectors := none, fixture := true }]
 
 /-- The circuits exported when no names are given. -/
-def defaultExports : List String := ["counter", "detector", "mac"]
+def defaultExports : List String := ["counter", "detector", "mac", "muxadd", "memorymap"]
 
 end Gin.Export

@@ -1,0 +1,169 @@
+{
+  "format": "gin-ir/1",
+  "producer": {"tool": "gin-export", "leanVersion": "4.34.1"},
+  "top": {
+    "name": "muxadd",
+    "domain": {"name": "System", "periodPs": 10000},
+    "inputs": [
+      {"name": "flag", "type": {"t": "bool"}},
+      {"name": "lanes", "type": {"t": "bv", "width": 8}}
+    ],
+    "outputs": [{"name": "value_out", "type": {"t": "bv", "width": 2}}],
+    "def": "MuxAdd.muxadd"
+  },
+  "defs": [
+    {
+      "name": "MuxAdd.muxadd",
+      "type": {
+        "t": "fun",
+        "arg": {"t": "signal", "domain": "System", "elem": {"t": "bool"}},
+        "res": {
+          "t": "fun",
+          "arg": {"t": "signal", "domain": "System", "elem": {"t": "bv", "width": 8}},
+          "res": {"t": "signal", "domain": "System", "elem": {"t": "bv", "width": 2}}
+        }
+      },
+      "body": {
+        "e": "lam",
+        "binders": [
+          {"name": "flag", "type": {"t": "signal", "domain": "System", "elem": {"t": "bool"}}},
+          {
+            "name": "lanes",
+            "type": {"t": "signal", "domain": "System", "elem": {"t": "bv", "width": 8}}
+          }
+        ],
+        "body": {
+          "e": "app",
+          "fun": {
+            "e": "prim",
+            "op": "sig.lift",
+            "type": {
+              "t": "fun",
+              "arg": {
+                "t": "fun",
+                "arg": {"t": "bool"},
+                "res": {"t": "fun", "arg": {"t": "bv", "width": 8}, "res": {"t": "bv", "width": 2}}
+              },
+              "res": {
+                "t": "fun",
+                "arg": {"t": "signal", "domain": "System", "elem": {"t": "bool"}},
+                "res": {
+                  "t": "fun",
+                  "arg": {"t": "signal", "domain": "System", "elem": {"t": "bv", "width": 8}},
+                  "res": {"t": "signal", "domain": "System", "elem": {"t": "bv", "width": 2}}
+                }
+              }
+            },
+            "params": {"arity": 2}
+          },
+          "args": [
+            {
+              "e": "lam",
+              "binders": [
+                {"name": "s", "type": {"t": "bool"}},
+                {"name": "p", "type": {"t": "bv", "width": 8}}
+              ],
+              "body": {
+                "e": "app",
+                "fun": {
+                  "e": "prim",
+                  "op": "bv.add",
+                  "type": {
+                    "t": "fun",
+                    "arg": {"t": "bv", "width": 2},
+                    "res": {
+                      "t": "fun",
+                      "arg": {"t": "bv", "width": 2},
+                      "res": {"t": "bv", "width": 2}
+                    }
+                  },
+                  "params": {}
+                },
+                "args": [
+                  {
+                    "e": "if",
+                    "cond": {"e": "var", "name": "s"},
+                    "then": {
+                      "e": "app",
+                      "fun": {
+                        "e": "prim",
+                        "op": "bv.extract",
+                        "type": {
+                          "t": "fun",
+                          "arg": {"t": "bv", "width": 8},
+                          "res": {"t": "bv", "width": 2}
+                        },
+                        "params": {"hi": 1, "lo": 0}
+                      },
+                      "args": [{"e": "var", "name": "p"}]
+                    },
+                    "else": {
+                      "e": "app",
+                      "fun": {
+                        "e": "prim",
+                        "op": "bv.extract",
+                        "type": {
+                          "t": "fun",
+                          "arg": {"t": "bv", "width": 8},
+                          "res": {"t": "bv", "width": 2}
+                        },
+                        "params": {"hi": 3, "lo": 2}
+                      },
+                      "args": [{"e": "var", "name": "p"}]
+                    }
+                  },
+                  {
+                    "e": "if",
+                    "cond": {"e": "var", "name": "s"},
+                    "then": {
+                      "e": "app",
+                      "fun": {
+                        "e": "prim",
+                        "op": "bv.extract",
+                        "type": {
+                          "t": "fun",
+                          "arg": {"t": "bv", "width": 8},
+                          "res": {"t": "bv", "width": 2}
+                        },
+                        "params": {"hi": 5, "lo": 4}
+                      },
+                      "args": [{"e": "var", "name": "p"}]
+                    },
+                    "else": {
+                      "e": "app",
+                      "fun": {
+                        "e": "prim",
+                        "op": "bv.extract",
+                        "type": {
+                          "t": "fun",
+                          "arg": {"t": "bv", "width": 8},
+                          "res": {"t": "bv", "width": 2}
+                        },
+                        "params": {"hi": 7, "lo": 6}
+                      },
+                      "args": [{"e": "var", "name": "p"}]
+                    }
+                  }
+                ]
+              }
+            },
+            {"e": "var", "name": "flag"},
+            {"e": "var", "name": "lanes"}
+          ]
+        }
+      }
+    }
+  ],
+  "certificate": {
+    "theorem": "MuxAdd.muxadd_correct",
+    "statement": "forall (flag : Gin.Signal Gin.System Bool) (lanes : Gin.Signal Gin.System (BitVec 8)) (t : Nat), MuxAdd.muxadd flag lanes t = MuxAdd.spec flag lanes t",
+    "axioms": ["propext"],
+    "implAxioms": [],
+    "specDefinitions": [
+      {
+        "name": "MuxAdd.spec",
+        "body": "MuxAdd.spec : Gin.Signal Gin.System Bool -> Gin.Signal Gin.System (BitVec 8) -> Nat -> BitVec 2 := fun (flag : Gin.Signal Gin.System Bool) (lanes : Gin.Signal Gin.System (BitVec 8)) (t : Nat) => @ite.{1} (BitVec 2) (flag t = Bool.true) (instDecidableEqBool (flag t) Bool.true) (@HAdd.hAdd (BitVec 2) (BitVec 2) (BitVec 2) (@instHAdd (BitVec 2) (@BitVec.instAdd 2)) (@BitVec.extractLsb' 8 0 2 (lanes t)) (@BitVec.extractLsb' 8 4 2 (lanes t))) (@HAdd.hAdd (BitVec 2) (BitVec 2) (BitVec 2) (@instHAdd (BitVec 2) (@BitVec.instAdd 2)) (@BitVec.extractLsb' 8 2 2 (lanes t)) (@BitVec.extractLsb' 8 6 2 (lanes t)))"
+      }
+    ]
+  }
+}

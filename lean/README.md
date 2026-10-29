@@ -7,7 +7,7 @@ core IR and test vectors that the Haskell side of gin compiles to HDL
 | Path                     | Contents                                                          |
 | ------------------------ | ----------------------------------------------------------------- |
 | `Gin/Signal.lean`        | The DSL: `Signal`, `register`, `mealy`, `lift`…                   |
-| `Gin/Examples/`          | `counter`, `detector`, `mac` with refinement theorems             |
+| `Gin/Examples/`          | `counter`, `detector`, `mac`, `muxadd`, `memorymap` with refinement theorems |
 | `Gin/Export/`            | Translator, `Certificate.lean` policy, vectors, export table, CLI |
 | `GinCheckExport.lean`    | Root of `gin-check-export`, the checks; links no design           |
 | `GinExport.lean`         | Root of `gin-export`, which links the designs                     |

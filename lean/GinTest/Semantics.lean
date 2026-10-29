@@ -46,7 +46,8 @@ def tens : Signal System Nat := fun t => 10 * t
 
 -- [lean-semantics] A Mealy machine whose output is its state before the step:
 -- running sums of the earlier inputs.
-#guard (List.range 6).map (mealy (fun s x => (s + x, s)) 0 tens) == [0, 0, 10, 30, 60, 100]
+#guard (List.range 6).map (mealy (fun s x => (s + x, s)) 0 tens) == [0, 0, 10, 30, 60,
+  100]
 
 -- [lean-semantics] A Mealy machine whose output is its state after the step.
 #guard (List.range 4).map (mealy (fun s x => (s + x, s + x)) 1 tens) == [1, 11, 31, 61]
@@ -54,6 +55,7 @@ def tens : Signal System Nat := fun t => 10 * t
 -- [lean-semantics] Combinational lifting is pointwise.
 #guard (List.range 3).map (lift2 (· + ·) tens (Signal.pure 1)) == [1, 11, 21]
 #guard (List.range 3).map (lift (· * 2) tens) == [0, 20, 40]
-#guard (List.range 3).map (lift3 (fun a b c => a + b + c) tens tens (Signal.pure 5)) == [5, 25, 45]
+#guard (List.range 3).map (lift3 (fun a b c => a + b + c) tens tens (Signal.pure 5)) ==
+  [5, 25, 45]
 
 end GinTest.Semantics

@@ -48,8 +48,10 @@ partial def Expr.toDoc : Expr → JsonDoc
   | .global n => obj [("e", str "global"), ("name", str n)]
   | .lit v => obj [("e", str "lit"), ("value", v.toDoc)]
   | .prim op ty =>
-    obj [("e", str "prim"), ("op", str op.name), ("type", ty.toDoc), ("params", obj op.params)]
-  | .app f args => obj [("e", str "app"), ("fun", f.toDoc), ("args", arr (args.map Expr.toDoc))]
+    obj [("e", str "prim"), ("op", str op.name), ("type", ty.toDoc), ("params", obj
+      op.params)]
+  | .app f args => obj [("e", str "app"), ("fun", f.toDoc), ("args", arr (args.map
+    Expr.toDoc))]
   | .lam bs body =>
     obj [("e", str "lam"),
       ("binders", arr (bs.map fun (n, t) => obj [("name", str n), ("type", t.toDoc)])),
@@ -61,7 +63,8 @@ partial def Expr.toDoc : Expr → JsonDoc
       ("body", body.toDoc)]
   | .tuple es => obj [("e", str "tuple"), ("elems", arr (es.map Expr.toDoc))]
   | .proj i e => obj [("e", str "proj"), ("index", nat i), ("of", e.toDoc)]
-  | .ite c t e => obj [("e", str "if"), ("cond", c.toDoc), ("then", t.toDoc), ("else", e.toDoc)]
+  | .ite c t e => obj [("e", str "if"), ("cond", c.toDoc), ("then", t.toDoc), ("else",
+    e.toDoc)]
 
 /-- Encode a port. -/
 def Port.toDoc (p : Port) : JsonDoc := obj [("name", str p.name), ("type", p.type.toDoc)]
@@ -82,10 +85,12 @@ ends in `certificateTail`. -/
 def Program.toDoc (p : Program) : JsonDoc :=
   obj [
     ("format", str irFormat),
-    ("producer", obj [("tool", str p.producer.tool), ("leanVersion", str p.producer.leanVersion)]),
+    ("producer", obj [("tool", str p.producer.tool), ("leanVersion", str
+      p.producer.leanVersion)]),
     ("top", obj [
       ("name", str p.top.name),
-      ("domain", obj [("name", str p.top.domain.name), ("periodPs", nat p.top.domain.periodPs)]),
+      ("domain", obj [("name", str p.top.domain.name), ("periodPs", nat
+        p.top.domain.periodPs)]),
       ("inputs", arr (p.top.inputs.map Port.toDoc)),
       ("outputs", arr (p.top.outputs.map Port.toDoc)),
       ("def", str p.top.def_)]),
@@ -101,7 +106,8 @@ def Vectors.toDoc (v : Vectors) : JsonDoc :=
     ("inputs", arr (v.inputs.map Port.toDoc)),
     ("outputs", arr (v.outputs.map Port.toDoc)),
     ("cycles", arr (v.cycles.toList.map fun c =>
-      obj [("in", arr (c.inputs.map Value.toDoc)), ("out", arr (c.outputs.map Value.toDoc))]))]
+      obj [("in", arr (c.inputs.map Value.toDoc)), ("out", arr (c.outputs.map
+        Value.toDoc))]))]
 
 /-- Check a file of `bytes` bytes holding `doc` against the limits gin
 enforces on every file it reads (`docs/file-formats.md`, "Resource limits"):
@@ -109,10 +115,14 @@ I'd rather the exporter refuse a design than write a file gin rejects.
 Widths, value ranges and the vector payload are checked where they arise. -/
 def checkLimits (doc : JsonDoc) (bytes : Nat) : Except String Unit := do
   if let some (path, n) := doc.numberAbove? maxJsonNumber then
-    throw s!"the number {n} at {path} is larger than {maxJsonNumber}, the largest number gin reads"
+    throw
+      s!"the number {n} at {path} is larger than {maxJsonNumber}, the largest number \
+        gin reads"
   let depth := doc.depth
   unless depth ≤ maxJsonDepth do
-    throw s!"arrays and objects are nested {depth} deep, more than the {maxJsonDepth} gin reads"
+    throw
+      s!"arrays and objects are nested {depth} deep, more than the {maxJsonDepth} gin \
+        reads"
   unless bytes ≤ maxFileBytes do
     throw s!"the file has {bytes} bytes, more than the {maxFileBytes} gin reads"
 

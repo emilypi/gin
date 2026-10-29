@@ -98,7 +98,8 @@ def combinational (op : PrimOp) (args : List RVal) : Except String RVal :=
   | .bvUlt, [.bv _ a, .bv _ b] => pure (.bool (a < b))
   | .bvUle, [.bv _ a, .bv _ b] => pure (.bool (a ≤ b))
   | .bvConcat, [.bv wa a, .bv wb b] => pure (.bv (wa + wb) (a * 2 ^ wb + b))
-  | .bvExtract hi lo, [.bv _ a] => pure (.bv (hi - lo + 1) ((a / 2 ^ lo) % 2 ^ (hi - lo + 1)))
+  | .bvExtract hi lo, [.bv _ a] => pure (.bv (hi - lo + 1) ((a / 2 ^ lo) % 2 ^ (hi - lo
+    + 1)))
   | .bvZext m, [.bv _ a] => pure (.bv m a)
   | .bvOfBool, [.bool b] => pure (.bv 1 (if b then 1 else 0))
   | op, _ => throw s!"ill-typed arguments to {op.name}"
@@ -162,7 +163,8 @@ partial def apply (f : RVal) (args : List RVal) : EvalM RVal := do
 /-- A saturated primitive application. Checks the arguments of
 combinational primitives, and the result, against the annotation. -/
 partial def saturated (op : PrimOp) (ty : Ty) (args : List RVal) : EvalM RVal := do
-  let some (argTys, resTy) := splitFun op.arity ty | throw s!"{op.name} has a non-function type"
+  let some (argTys, resTy) := splitFun op.arity ty
+    | throw s!"{op.name} has a non-function type"
   match op with
   | .sigPure =>
     let [v] := args | throw "sig.pure arity"
@@ -230,6 +232,7 @@ def agrees (top : Top) (defs : List Def) (v : Vectors) : Except String Unit := d
   let outs ← runTop top defs inputs v.cycles.size
   for t in [0:v.cycles.size] do
     unless outs[t]! == v.cycles[t]!.outputs do
-      throw s!"cycle {t}: IR gives {repr outs[t]!}, Lean gives {repr v.cycles[t]!.outputs}"
+      throw s!"cycle {t}: IR gives {repr outs[t]!}, Lean gives {repr
+        v.cycles[t]!.outputs}"
 
 end GinTest.IrEval

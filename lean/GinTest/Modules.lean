@@ -34,7 +34,8 @@ def privateName (m n : Name) : Name := mkPrivateNameCore m (m ++ n)
 run_meta do
   let found ← fixtureInitializers
   let expected : Array (Name × Array Name) := #[
-    (fixture, #[`viaInitialize, `viaBuiltinInitialize, `viaAttribute, `viaAtInit, `viaAtInitUnit,
+    (fixture, #[`viaInitialize, `viaBuiltinInitialize, `viaAttribute, `viaAtInit,
+      `viaAtInitUnit,
       `viaAtBuiltinInit].map (fixture ++ ·)),
     (fixtureModule, #[privateName fixtureModule `viaPrivate, fixtureModule ++ `viaPublic,
       privateName fixtureModule `viaPrivateBuiltin, fixtureModule ++ `viaPublicBuiltin])]

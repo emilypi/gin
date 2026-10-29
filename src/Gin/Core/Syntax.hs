@@ -217,11 +217,11 @@ data Program ty name = Program
 mkTuple :: [Expr ty name] -> Expr ty name
 mkTuple = ETuple . IntMap.fromList . zip [0 ..]
 
-lookupDef :: (Eq name) => name -> Program ty name -> Maybe (Def ty name)
+lookupDef :: Eq name => name -> Program ty name -> Maybe (Def ty name)
 lookupDef n = find ((== n) . defName) . progDefs
 
 -- | Globals an expression refers to.
-globalRefs :: (Ord name) => Expr ty name -> Set name
+globalRefs :: Ord name => Expr ty name -> Set name
 globalRefs = \case
   EVar _ -> Set.empty
   EGlobal n -> Set.singleton n
@@ -234,8 +234,8 @@ globalRefs = \case
   ETuple es -> foldMap globalRefs es
   EProj _ e -> globalRefs e
   EIf arms e -> foldMap (\(c, t) -> globalRefs c <> globalRefs t) arms <> globalRefs e
-  where
-    bindRefs = foldMap (globalRefs . bindExpr)
+ where
+  bindRefs = foldMap (globalRefs . bindExpr)
 
 ----------------------------------------------------------------------
 -- Optics
@@ -267,7 +267,7 @@ instance Plated (Expr ty name) where
 
 -- | Every type in the term, in order. 'Control.Lens.traversed' visits the
 -- names.
-types :: (Bitraversable p) => Traversal (p ty name) (p ty' name) ty ty'
+types :: Bitraversable p => Traversal (p ty name) (p ty' name) ty ty'
 types f = bitraverse f pure
 
 -- The 'Bitraversable' instances visit types and names in the order they
@@ -281,19 +281,19 @@ instance Bifoldable Expr where
 
 instance Bitraversable Expr where
   bitraverse f g = go
-    where
-      go = \case
-        EVar x -> EVar <$> g x
-        EGlobal x -> EGlobal <$> g x
-        ELit v -> pure (ELit v)
-        EPrim op t -> EPrim op <$> f t
-        EApp h args -> EApp <$> go h <*> traverse go args
-        ELam params body -> ELam <$> traverse (bitraverse g f) params <*> go body
-        ELet binds body -> ELet <$> traverse (bitraverse f g) binds <*> go body
-        ELetRec binds body -> ELetRec <$> traverse (bitraverse f g) binds <*> go body
-        ETuple es -> ETuple <$> traverse go es
-        EProj i e -> EProj i <$> go e
-        EIf arms e -> EIf <$> traverse (bitraverse go go) arms <*> go e
+   where
+    go = \case
+      EVar x -> EVar <$> g x
+      EGlobal x -> EGlobal <$> g x
+      ELit v -> pure (ELit v)
+      EPrim op t -> EPrim op <$> f t
+      EApp h args -> EApp <$> go h <*> traverse go args
+      ELam params body -> ELam <$> traverse (bitraverse g f) params <*> go body
+      ELet binds body -> ELet <$> traverse (bitraverse f g) binds <*> go body
+      ELetRec binds body -> ELetRec <$> traverse (bitraverse f g) binds <*> go body
+      ETuple es -> ETuple <$> traverse go es
+      EProj i e -> EProj i <$> go e
+      EIf arms e -> EIf <$> traverse (bitraverse go go) arms <*> go e
 
 instance Bifunctor Bind where
   bimap = bimapDefault

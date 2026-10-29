@@ -38,7 +38,8 @@ run_meta do
   -- 32 cycles of a 4096-bit input and a 4096-bit output carry exactly 2^18 bits
   unless 32 * (4096 + 4096) == maxVectorPayloadBits do throwError "payload arithmetic"
   checkAgrees { testEntry ``widest ["x"] ["y"] (.of1 widest) with cycles := 32 }
-  checkAgrees { testEntry ``concatAtMax ["x", "y"] ["o"] (.of2 concatAtMax) with cycles := 16 }
+  checkAgrees { testEntry ``concatAtMax ["x", "y"] ["o"] (.of2 concatAtMax) with cycles
+    := 16 }
   expectError (translateDef ``concatOverMax {}) ["concatOverMax", "width 4097", "4096"]
   -- one bit over the payload bound
   unless 481 * (544 + 1) == maxVectorPayloadBits + 1 do throwError "payload arithmetic"

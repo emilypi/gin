@@ -1,0 +1,11 @@
+{
+  "format": "gin-policy/1",
+  "objectives": [
+    { "name": "adders", "default": 0, "operators": { "bv.add": 1 } },
+    { "name": "muxes", "default": 0, "operators": { "mux": 1 } }
+  ],
+  "prefer": ["adders", "muxes"],
+  "search": { "iterations": 4, "nodes": 10000, "matches": 10000,
+              "expansions": 100000, "archive": 64, "witnesses": 4 },
+  "timeoutSeconds": 60
+}

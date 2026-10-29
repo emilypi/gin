@@ -92,7 +92,8 @@ open GinTest.Print
 -- `=` and `∀` printed in the built-in way.
 run_meta do
   expectText (← typeOf ``Counter.counter_correct)
-    "forall (en : Gin.Signal Gin.System Bool) (t : Nat), Counter.counter en t = Counter.spec en t"
+    "forall (en : Gin.Signal Gin.System Bool) (t : Nat), Counter.counter en t = \
+      Counter.spec en t"
 
 -- [lean-printer] An app_unexpander fools Lean's pretty printer, which shows
 -- `Counter.spec`; the fixed printer names `specR`, the constant the kernel
@@ -103,7 +104,8 @@ run_meta do
   unless GinTest.containsStr pp "Counter.spec" && !GinTest.containsStr pp "specR" do
     throwError "the unexpander did not take effect: {pp}"
   expectText (← typeOf ``disguised)
-    "forall (en : Gin.Signal Gin.System Bool) (t : Nat), Counter.counter en t = GinTest.Print.specR en t"
+    "forall (en : Gin.Signal Gin.System Bool) (t : Nat), Counter.counter en t = \
+      GinTest.Print.specR en t"
 
 -- [lean-printer] Notation is not used: the body shows the function it stands
 -- for, with every argument and instance. The notation's binders shadow the
@@ -112,26 +114,33 @@ run_meta do
   expectText (← declOf ``withNotation)
     ("GinTest.Print.withNotation : BitVec 8 -> BitVec 8 -> BitVec 8 := " ++
    "fun (a : BitVec 8) (b : BitVec 8) => (fun (a_1 : BitVec 8) (b_1 : BitVec 8) => " ++
-   "@HAdd.hAdd (BitVec 8) (BitVec 8) (BitVec 8) (@instHAdd (BitVec 8) (@BitVec.instAdd 8)) a_1 b_1) a b")
+   "@HAdd.hAdd (BitVec 8) (BitVec 8) (BitVec 8) (@instHAdd (BitVec 8) (@BitVec.instAdd \
+     8)) a_1 b_1) a b")
 
 -- [lean-printer] Implicit, instance and strict-implicit binders keep their
 -- brackets; applications with such arguments are written with `@`.
 run_meta do
   expectText (← declOf ``binders)
-    ("GinTest.Print.binders : forall {<<\\u{03B1}>> : Type} [_inst : Inhabited.{1} <<\\u{03B1}>>] {{_x : <<\\u{03B1}>>}}, (<<\\u{03B1}>> -> <<\\u{03B1}>>) -> <<\\u{03B1}>> -> <<\\u{03B1}>> := " ++
-   "fun {<<\\u{03B1}>> : Type} [_inst : Inhabited.{1} <<\\u{03B1}>>] {{_x : <<\\u{03B1}>>}} (f : <<\\u{03B1}>> -> <<\\u{03B1}>>) (a : <<\\u{03B1}>>) => f a")
+    ("GinTest.Print.binders : forall {<<\\u{03B1}>> : Type} [_inst : Inhabited.{1} \
+      <<\\u{03B1}>>] {{_x : <<\\u{03B1}>>}}, (<<\\u{03B1}>> -> <<\\u{03B1}>>) -> \
+        <<\\u{03B1}>> -> <<\\u{03B1}>> := " ++
+   "fun {<<\\u{03B1}>> : Type} [_inst : Inhabited.{1} <<\\u{03B1}>>] {{_x : \
+     <<\\u{03B1}>>}} (f : <<\\u{03B1}>> -> <<\\u{03B1}>>) (a : <<\\u{03B1}>>) => f a")
 
 -- [lean-printer] Numerals: a bare number is a `Nat`; bit-vector numerals carry
 -- their type, as written (300 is not reduced); other numerals are printed in
 -- full.
 run_meta do
   expectText (← declOf ``numerals)
-    ("GinTest.Print.numerals : Nat -> Prod (BitVec 8) (Prod (BitVec 8) (Prod (BitVec 8) (Prod Nat (Fin 5)))) := " ++
-   "fun (n : Nat) => @Prod.mk (BitVec 8) (Prod (BitVec 8) (Prod (BitVec 8) (Prod Nat (Fin 5)))) (5 : BitVec 8) " ++
+    ("GinTest.Print.numerals : Nat -> Prod (BitVec 8) (Prod (BitVec 8) (Prod (BitVec 8) \
+      (Prod Nat (Fin 5)))) := " ++
+   "fun (n : Nat) => @Prod.mk (BitVec 8) (Prod (BitVec 8) (Prod (BitVec 8) (Prod Nat \
+     (Fin 5)))) (5 : BitVec 8) " ++
    "(@Prod.mk (BitVec 8) (Prod (BitVec 8) (Prod Nat (Fin 5))) (300 : BitVec 8) " ++
    "(@Prod.mk (BitVec 8) (Prod Nat (Fin 5)) (7 : BitVec 8) (@Prod.mk Nat (Fin 5) " ++
    "(@HAdd.hAdd Nat Nat Nat (@instHAdd Nat instAddNat) n 2) " ++
-   "(@OfNat.ofNat (Fin 5) (nat_lit 3) (@Fin.instOfNat 5 GinTest.Print.numerals._proof_1 (nat_lit 3))))))")
+   "(@OfNat.ofNat (Fin 5) (nat_lit 3) (@Fin.instOfNat 5 GinTest.Print.numerals._proof_1 \
+     (nat_lit 3))))))")
 
 -- [lean-printer] Non-dependent `let`s are printed `have` (a dependent `let`
 -- is tested on a hand-built term below).
@@ -183,7 +192,8 @@ run_meta do
   expectPrinted (expr env (.sort (.succ (.succ u)))) "Type (u+1)"
   expectPrinted (expr env (mkNatLit 7)) "7"
   expectPrinted (expr env (mkRawNatLit 7)) "nat_lit 7"
-  expectPrinted (expr env (mkApp (.const ``Nat.succ []) (mkRawNatLit 7))) "Nat.succ (nat_lit 7)"
+  expectPrinted (expr env (mkApp (.const ``Nat.succ []) (mkRawNatLit 7)))
+    "Nat.succ (nat_lit 7)"
   let pairTy := mkApp2 (.const ``Prod [1, 1]) (.const ``Nat []) (.const ``Bool [])
   expectPrinted (expr env (.lam `p pairTy (.proj ``Prod 1 (.bvar 0)) .default))
     "fun (p : Prod.{1, 1} Nat Bool) => p.2"
@@ -194,10 +204,14 @@ run_meta do
   expectPrinted (expr env (.letE `a (.const ``Nat []) (mkNatLit 1) (.bvar 0) false))
     "let a : Nat := 1; a"
   -- an anonymous binder is named `x`
-  expectPrinted (expr env (.lam .anonymous (.const ``Nat []) (.bvar 0) .default)) "fun (x : Nat) => x"
+  expectPrinted (expr env (.lam .anonymous (.const ``Nat []) (.bvar 0) .default))
+    "fun (x : Nat) => x"
   -- a dependent arrow after a non-dependent one starts a new `∀`
   expectText (← typeOf ``congrArg)
-    ("forall {<<\\u{03B1}>> : Sort u} {<<\\u{03B2}>> : Sort v} {<<a\\u{2081}>> : <<\\u{03B1}>>} {<<a\\u{2082}>> : <<\\u{03B1}>>} (f : <<\\u{03B1}>> -> <<\\u{03B2}>>), <<a\\u{2081}>> = <<a\\u{2082}>> -> f <<a\\u{2081}>> = f <<a\\u{2082}>>")
+    ("forall {<<\\u{03B1}>> : Sort u} {<<\\u{03B2}>> : Sort v} {<<a\\u{2081}>> : \
+      <<\\u{03B1}>>} {<<a\\u{2082}>> : <<\\u{03B1}>>} (f : <<\\u{03B1}>> -> \
+        <<\\u{03B2}>>), <<a\\u{2081}>> = <<a\\u{2082}>> -> f <<a\\u{2081}>> = f \
+          <<a\\u{2082}>>")
 
 -- [lean-printer] The printer is a pure function of the term: the same input
 -- gives the same text, with or without `pp` options set.
@@ -205,4 +219,5 @@ set_option pp.all true in
 set_option pp.notation false in
 run_meta do
   expectText (← typeOf ``Counter.counter_correct)
-    "forall (en : Gin.Signal Gin.System Bool) (t : Nat), Counter.counter en t = Counter.spec en t"
+    "forall (en : Gin.Signal Gin.System Bool) (t : Nat), Counter.counter en t = \
+      Counter.spec en t"

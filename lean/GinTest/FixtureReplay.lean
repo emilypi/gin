@@ -14,7 +14,8 @@ def ofList {α : Type} [Inhabited α] (xs : List α) : Signal System α := fun t
 
 -- [lean-fixture-replay] counter: en = 1 1 0 1 0 0 1 1; count = 0 1 2 2 3 3 3 4.
 #guard (List.range 8).map (fun t =>
-    (Counter.counter (ofList [true, true, false, true, false, false, true, true]) t).toNat)
+    (Counter.counter (ofList [true, true, false, true, false, false, true, true])
+      t).toNat)
   == [0, 1, 2, 2, 3, 3, 3, 4]
 
 -- [lean-fixture-replay] mac: includes the wrap-around (65067 + 65025) mod 2^16 = 64556.

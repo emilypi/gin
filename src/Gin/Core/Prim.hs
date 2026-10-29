@@ -28,10 +28,11 @@
 -- > bv.extract hi lo                      : bv n -> bv (hi - lo + 1)   (n > hi >= lo)
 -- > bv.zext m                             : bv n -> bv m          (m >= n)
 -- > bv.ofBool                             : Bool -> bv 1
--- > sig.pure                              : t -> Signal d t       (t not a function or signal)
--- > sig.lift k                            : (t1 -> .. -> tk -> r) -> Signal d t1 -> .. -> Signal d tk -> Signal d r   (k >= 1)
--- > sig.register v                        : Signal d t -> Signal d t      (valueTy v == t)
--- > sig.mealy v                           : (s -> i -> (s, o)) -> Signal d i -> Signal d o   (valueTy v == s)
+-- > sig.pure : t -> Signal d t (t not a function or signal)
+-- > sig.lift k : (t1 -> .. -> tk -> r) -> Signal d t1 -> .. -> Signal d tk -> Signal d r
+-- > (k >= 1)
+-- > sig.register v : Signal d t -> Signal d t (valueTy v == t)
+-- > sig.mealy v : (s -> i -> (s, o)) -> Signal d i -> Signal d o (valueTy v == s)
 module Gin.Core.Prim
   ( PrimOp (..)
   , primName

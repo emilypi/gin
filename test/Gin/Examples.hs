@@ -19,16 +19,19 @@ module Gin.Examples
   , testCertificate
   , bv
   , sig
+
     -- * counter: 8-bit enable counter, output is the current count
   , counterProgram
   , counterNormal
   , counterNetlist
   , counterVectors
+
     -- * mac: 8x8 -> 16 multiply-accumulate, output is the accumulator
   , macProgram
   , macNormal
   , macNetlist
   , macVectors
+
     -- * detector: overlapping "101" sequence detector (Mealy output)
   , detectorProgram
   , detectorNormal
@@ -91,17 +94,18 @@ counterProgram =
     , progDefs = [Def "Counter.counter" (TFun (sig TBool) (sig (bv 8))) body]
     , progCertificate = testCertificate "Counter.counter_correct"
     }
-  where
-    body =
-      ELam [("en", sig TBool)] $
-        EApp (prim (SigMealy (VBV 8 0)) [stepTy, sig TBool] (sig (bv 8))) [step, v "en"]
-    stepTy = tFuns [bv 8, TBool] (TProd [bv 8, bv 8])
-    step =
-      ELam [("s", bv 8), ("e", TBool)] $
-        mkTuple
-          [ ifE (v "e") (EApp (prim BvAdd [bv 8, bv 8] (bv 8)) [v "s", ELit (VBV 8 1)]) (v "s")
-          , v "s"
-          ]
+ where
+  body =
+    ELam [("en", sig TBool)] $
+      EApp (prim (SigMealy (VBV 8 0)) [stepTy, sig TBool] (sig (bv 8))) [step, v "en"]
+  stepTy = tFuns [bv 8, TBool] (TProd [bv 8, bv 8])
+  step =
+    ELam [("s", bv 8), ("e", TBool)] $
+      mkTuple
+        [ ifE (v "e") (EApp (prim BvAdd [bv 8, bv 8] (bv 8)) [v "s"
+          , ELit (VBV 8 1)]) (v "s")
+        , v "s"
+        ]
 
 counterNormal :: NModule
 counterNormal =
@@ -129,8 +133,11 @@ counterNetlist =
     , modOutputs = [Output (Net (Ident "count") (HVec 8)) (ORef (Ident "s"))]
     , modDecls =
         [ DReg (Net (Ident "s") (HVec 8)) (HLitVec 8 0) (ORef (Ident "s_next"))
-        , DAssign (Net (Ident "inc") (HVec 8)) (HBin BAdd (ORef (Ident "s")) (OConst (HLitVec 8 1)))
-        , DAssign (Net (Ident "s_next") (HVec 8)) (HMux (ORef (Ident "en")) (ORef (Ident "inc")) (ORef (Ident "s")))
+        , DAssign (Net (Ident "inc") (HVec 8)) (HBin BAdd (ORef (Ident "s")) (OConst
+          (HLitVec 8 1)))
+        , DAssign
+            (Net (Ident "s_next") (HVec 8))
+            (HMux (ORef (Ident "en")) (ORef (Ident "inc")) (ORef (Ident "s")))
         ]
     }
 
@@ -168,30 +175,33 @@ macProgram =
     , progDefs = [Def "Mac.mac" (tFuns [sig (bv 8), sig (bv 8)] (sig (bv 16))) body]
     , progCertificate = testCertificate "Mac.mac_correct"
     }
-  where
-    pairTy = TProd [bv 8, bv 8]
-    body =
-      ELam [("x", sig (bv 8)), ("y", sig (bv 8))] $
-        EApp
-          (prim (SigMealy (VBV 16 0)) [stepTy, sig pairTy] (sig (bv 16)))
-          [ step
-          , EApp
-              (prim (SigLift 2) [tFuns [bv 8, bv 8] pairTy, sig (bv 8), sig (bv 8)] (sig pairTy))
-              [ELam [("a", bv 8), ("b", bv 8)] (mkTuple [v "a", v "b"]), v "x", v "y"]
-          ]
-    stepTy = tFuns [bv 16, pairTy] (TProd [bv 16, bv 16])
-    zext16 e = EApp (prim (BvZext 16) [bv 8] (bv 16)) [e]
-    step =
-      ELam [("acc", bv 16), ("p", pairTy)] $
-        ELet
-          [ Bind "acc'" (bv 16) $
-              EApp
-                (prim BvAdd [bv 16, bv 16] (bv 16))
-                [ v "acc"
-                , EApp (prim BvMul [bv 16, bv 16] (bv 16)) [zext16 (EProj 0 (v "p")), zext16 (EProj 1 (v "p"))]
-                ]
-          ]
-          (mkTuple [v "acc'", v "acc"])
+ where
+  pairTy = TProd [bv 8, bv 8]
+  body =
+    ELam [("x", sig (bv 8)), ("y", sig (bv 8))] $
+      EApp
+        (prim (SigMealy (VBV 16 0)) [stepTy, sig pairTy] (sig (bv 16)))
+        [ step
+        , EApp
+            (prim (SigLift 2) [tFuns [bv 8, bv 8] pairTy, sig (bv 8)
+              , sig (bv 8)] (sig pairTy))
+            [ELam [("a", bv 8), ("b", bv 8)] (mkTuple [v "a", v "b"]), v "x", v "y"]
+        ]
+  stepTy = tFuns [bv 16, pairTy] (TProd [bv 16, bv 16])
+  zext16 e = EApp (prim (BvZext 16) [bv 8] (bv 16)) [e]
+  step =
+    ELam [("acc", bv 16), ("p", pairTy)] $
+      ELet
+        [ Bind "acc'" (bv 16) $
+            EApp
+              (prim BvAdd [bv 16, bv 16] (bv 16))
+              [ v "acc"
+              , EApp
+                  (prim BvMul [bv 16, bv 16] (bv 16))
+                  [zext16 (EProj 0 (v "p")), zext16 (EProj 1 (v "p"))]
+              ]
+        ]
+        (mkTuple [v "acc'", v "acc"])
 
 macNormal :: NModule
 macNormal =
@@ -223,8 +233,11 @@ macNetlist =
         [ DReg (Net (Ident "acc_q") (HVec 16)) (HLitVec 16 0) (ORef (Ident "sum"))
         , DAssign (Net (Ident "xz") (HVec 16)) (HZext 16 (ORef (Ident "x")))
         , DAssign (Net (Ident "yz") (HVec 16)) (HZext 16 (ORef (Ident "y")))
-        , DAssign (Net (Ident "prod") (HVec 16)) (HBin BMul (ORef (Ident "xz")) (ORef (Ident "yz")))
-        , DAssign (Net (Ident "sum") (HVec 16)) (HBin BAdd (ORef (Ident "acc_q")) (ORef (Ident "prod")))
+        , DAssign (Net (Ident "prod") (HVec 16)) (HBin BMul (ORef (Ident "xz")) (ORef
+          (Ident "yz")))
+        , DAssign
+            (Net (Ident "sum") (HVec 16))
+            (HBin BAdd (ORef (Ident "acc_q")) (ORef (Ident "prod")))
         ]
     }
 
@@ -269,23 +282,23 @@ detectorProgram =
         ]
     , progCertificate = testCertificate "Detector.detector_correct"
     }
-  where
-    stepTy = tFuns [bv 2, TBool] (TProd [bv 2, TBool])
-    body =
-      ELam [("b", sig TBool)] $
-        EApp
-          (prim (SigMealy (VBV 2 0)) [stepTy, sig TBool] (sig TBool))
-          [EGlobal "Detector.step", v "b"]
-    lit2 = ELit . VBV 2
-    isState n = EApp (prim BvEq [bv 2, bv 2] TBool) [v "s", lit2 n]
-    pick a b = ifE (v "i") (lit2 a) (lit2 b)
-    step =
-      ELam [("s", bv 2), ("i", TBool)] $
-        EIf
-          [ (isState 0, mkTuple [pick 1 0, ELit (VBool False)])
-          , (isState 1, mkTuple [pick 1 2, ELit (VBool False)])
-          ]
-          (mkTuple [pick 1 0, v "i"])
+ where
+  stepTy = tFuns [bv 2, TBool] (TProd [bv 2, TBool])
+  body =
+    ELam [("b", sig TBool)] $
+      EApp
+        (prim (SigMealy (VBV 2 0)) [stepTy, sig TBool] (sig TBool))
+        [EGlobal "Detector.step", v "b"]
+  lit2 = ELit . VBV 2
+  isState n = EApp (prim BvEq [bv 2, bv 2] TBool) [v "s", lit2 n]
+  pick a b = ifE (v "i") (lit2 a) (lit2 b)
+  step =
+    ELam [("s", bv 2), ("i", TBool)] $
+      EIf
+        [ (isState 0, mkTuple [pick 1 0, ELit (VBool False)])
+        , (isState 1, mkTuple [pick 1 2, ELit (VBool False)])
+        ]
+        (mkTuple [pick 1 0, v "i"])
 
 -- | One mux per scalar component of the step function's result.
 detectorNormal :: NModule
@@ -322,17 +335,30 @@ detectorNetlist =
         [ DReg (vec2 "s") (HLitVec 2 0) (ORef (Ident "s_next"))
         , DAssign (bit "is0") (HBin BEq (ORef (Ident "s")) (OConst (HLitVec 2 0)))
         , DAssign (bit "is1") (HBin BEq (ORef (Ident "s")) (OConst (HLitVec 2 1)))
-        , DAssign (vec2 "pick10") (HMux (ORef (Ident "b")) (OConst (HLitVec 2 1)) (OConst (HLitVec 2 0)))
-        , DAssign (vec2 "pick12") (HMux (ORef (Ident "b")) (OConst (HLitVec 2 1)) (OConst (HLitVec 2 2)))
-        , DAssign (vec2 "s_inner") (HMux (ORef (Ident "is1")) (ORef (Ident "pick12")) (ORef (Ident "pick10")))
-        , DAssign (vec2 "s_next") (HMux (ORef (Ident "is0")) (ORef (Ident "pick10")) (ORef (Ident "s_inner")))
-        , DAssign (bit "hit_inner") (HMux (ORef (Ident "is1")) (OConst (HLitBit False)) (ORef (Ident "b")))
-        , DAssign (bit "o_hit") (HMux (ORef (Ident "is0")) (OConst (HLitBit False)) (ORef (Ident "hit_inner")))
+        , DAssign
+            (vec2 "pick10")
+            (HMux (ORef (Ident "b")) (OConst (HLitVec 2 1)) (OConst (HLitVec 2 0)))
+        , DAssign
+            (vec2 "pick12")
+            (HMux (ORef (Ident "b")) (OConst (HLitVec 2 1)) (OConst (HLitVec 2 2)))
+        , DAssign
+            (vec2 "s_inner")
+            (HMux (ORef (Ident "is1")) (ORef (Ident "pick12")) (ORef (Ident "pick10")))
+        , DAssign
+            (vec2 "s_next")
+            (HMux (ORef (Ident "is0")) (ORef (Ident "pick10")) (ORef (Ident "s_inner")))
+        , DAssign
+            (bit "hit_inner")
+            (HMux (ORef (Ident "is1")) (OConst (HLitBit False)) (ORef (Ident "b")))
+        , DAssign
+            (bit "o_hit")
+            (HMux (ORef (Ident "is0")) (OConst (HLitBit False)) (ORef (Ident
+              "hit_inner")))
         ]
     }
-  where
-    vec2 n = Net (Ident n) (HVec 2)
-    bit n = Net (Ident n) HBit
+ where
+  vec2 n = Net (Ident n) (HVec 2)
+  bit n = Net (Ident n) HBit
 
 -- | b = 1 0 1 0 1 1 0 1; hit = 0 0 1 0 1 0 0 1 (overlapping matches).
 detectorVectors :: Vectors

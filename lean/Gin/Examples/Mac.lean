@@ -31,20 +31,24 @@ theorem step_eq (S : Nat) (a b : BitVec 8) :
   apply BitVec.eq_of_toNat_eq
   have ha := a.isLt
   have hb := b.isLt
-  simp only [BitVec.toNat_add, BitVec.toNat_mul, BitVec.toNat_setWidth, BitVec.toNat_ofNat]
-  rw [Nat.mod_eq_of_lt (a := a.toNat) (by omega), Nat.mod_eq_of_lt (a := b.toNat) (by omega)]
+  simp only [BitVec.toNat_add, BitVec.toNat_mul, BitVec.toNat_setWidth,
+    BitVec.toNat_ofNat]
+  rw [Nat.mod_eq_of_lt (a := a.toNat) (by omega), Nat.mod_eq_of_lt (a := b.toNat) (by
+    omega)]
   omega
 
 theorem state_eq (x y : Signal System (BitVec 8)) (t : Nat) :
     mealyState (fun (acc : BitVec 16) (p : BitVec 8 × BitVec 8) =>
       let acc' := acc + p.1.setWidth 16 * p.2.setWidth 16
       (acc', acc)) 0 (lift2 (·, ·) x y) t
-      = BitVec.ofNat 16 ((List.range t).map (fun i => (x i).toNat * (y i).toNat)).sum := by
+      = BitVec.ofNat 16 ((List.range t).map (fun i => (x i).toNat * (y i).toNat)).sum
+        := by
   induction t with
   | zero => rfl
   | succ t ih =>
     rw [mealyState_succ, ih, List.range_succ, List.map_append, List.sum_append]
-    simp only [lift2, List.map_cons, List.map_nil, List.sum_cons, List.sum_nil, Nat.add_zero]
+    simp only [lift2, List.map_cons, List.map_nil, List.sum_cons, List.sum_nil,
+      Nat.add_zero]
     exact step_eq _ _ _
 
 /-- The refinement theorem: the accumulator meets its specification at every

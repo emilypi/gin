@@ -82,7 +82,8 @@ structure VectorSource where
   rows : UInt64 → Nat → Array Cycle
 
 /-- The signal carrying `xs[t]` at cycle `t`. -/
-def ofArray {dom : Domain} {α : Type} [Inhabited α] (xs : Array α) : Signal dom α := fun t => xs[t]!
+def ofArray {dom : Domain} {α : Type} [Inhabited α] (xs : Array α) : Signal dom α :=
+  fun t => xs[t]!
 
 /-- `n` samples, one per cycle. -/
 def drawSamples {α : Type} [PortValue α] (n : Nat) (g : Rng) : Array α × Rng := Id.run do
@@ -112,11 +113,13 @@ def VectorSource.of0 {dom : Domain} {ο : Type} [OutputValues ο] (f : Signal do
     VectorSource where
   inputs := []
   outputs := OutputValues.tys ο
-  rows _ n := (List.range n).toArray.map fun t => { inputs := [], outputs := OutputValues.values (f t) }
+  rows _ n := (List.range n).toArray.map fun t =>
+    { inputs := [], outputs := OutputValues.values (f t) }
 
 /-- Vectors of a one-input circuit. `gen n g` draws the `n` inputs; by
 default they are uniformly distributed. -/
-def VectorSource.of1 {dom : Domain} {α ο : Type} [PortValue α] [Inhabited α] [OutputValues ο]
+def VectorSource.of1 {dom : Domain} {α ο : Type} [PortValue α] [Inhabited α]
+  [OutputValues ο]
     (f : Signal dom α → Signal dom ο) (gen : Nat → Rng → Array α × Rng := drawSamples) :
     VectorSource where
   inputs := [PortValue.ty α]
@@ -129,7 +132,8 @@ def VectorSource.of1 {dom : Domain} {α ο : Type} [PortValue α] [Inhabited α]
 
 /-- Vectors of a two-input circuit. `gen n g` draws the `n` input pairs; by
 default each cycle draws the first input, then the second, uniformly. -/
-def VectorSource.of2 {dom : Domain} {α β ο : Type} [PortValue α] [Inhabited α] [PortValue β]
+def VectorSource.of2 {dom : Domain} {α β ο : Type} [PortValue α] [Inhabited α]
+  [PortValue β]
     [Inhabited β] [OutputValues ο] (f : Signal dom α → Signal dom β → Signal dom ο)
     (gen : Nat → Rng → Array (α × β) × Rng := drawPairs) : VectorSource where
   inputs := [PortValue.ty α, PortValue.ty β]
@@ -145,7 +149,8 @@ def VectorSource.of2 {dom : Domain} {α β ο : Type} [PortValue α] [Inhabited 
 
 /-- `n` triples of samples, one per cycle; each cycle draws the first
 component, then the second, then the third. -/
-def drawTriples {α β γ : Type} [PortValue α] [PortValue β] [PortValue γ] (n : Nat) (g : Rng) :
+def drawTriples {α β γ : Type} [PortValue α] [PortValue β] [PortValue γ] (n : Nat) (g :
+  Rng) :
     Array (α × β × γ) × Rng := Id.run do
   let mut g := g
   let mut xs := #[]
@@ -159,7 +164,8 @@ def drawTriples {α β γ : Type} [PortValue α] [PortValue β] [PortValue γ] (
 
 /-- Vectors of a three-input circuit. `gen n g` draws the `n` input
 triples; by default each cycle draws the inputs in order, uniformly. -/
-def VectorSource.of3 {dom : Domain} {α β γ ο : Type} [PortValue α] [Inhabited α] [PortValue β]
+def VectorSource.of3 {dom : Domain} {α β γ ο : Type} [PortValue α] [Inhabited α]
+  [PortValue β]
     [Inhabited β] [PortValue γ] [Inhabited γ] [OutputValues ο]
     (f : Signal dom α → Signal dom β → Signal dom γ → Signal dom ο)
     (gen : Nat → Rng → Array (α × β × γ) × Rng := drawTriples) : VectorSource where
@@ -172,7 +178,8 @@ def VectorSource.of3 {dom : Domain} {α β γ ο : Type} [PortValue α] [Inhabit
     let zs := ts.map (·.2.2)
     let out := f (ofArray xs) (ofArray ys) (ofArray zs)
     (List.range n).toArray.map fun t =>
-      { inputs := [PortValue.toValue xs[t]!, PortValue.toValue ys[t]!, PortValue.toValue zs[t]!],
+      { inputs := [PortValue.toValue xs[t]!, PortValue.toValue ys[t]!,
+        PortValue.toValue zs[t]!],
         outputs := OutputValues.values (out t) }
 
 /-! ## Biased generators
@@ -198,7 +205,8 @@ def enableRuns (n : Nat) (g : Rng) : Array Bool × Rng := Id.run do
 /-- Bit-stream pieces for `patternBits`: an isolated `101`, an overlapping
 `10101`, and filler. -/
 def patternPieces : Array (List Bool) :=
-  #[[true, false, true, false, false], [true, false, true, false, true], [false], [true, true],
+  #[[true, false, true, false, false], [true, false, true, false, true], [false],
+    [true, true],
     [false, false], [true], [false, true, true, false], [false, false, false]]
 
 /-- A bit stream assembled from `patternPieces`, chosen uniformly, so that
@@ -221,7 +229,8 @@ def largeOperand (w : Nat) (g : Rng) : BitVec w × Rng :=
 
 /-- Operand pairs from `largeOperand`; large products overflow an
 accumulator within a few cycles. -/
-def largeOperands {w v : Nat} (n : Nat) (g : Rng) : Array (BitVec w × BitVec v) × Rng := Id.run do
+def largeOperands {w v : Nat} (n : Nat) (g : Rng) : Array (BitVec w × BitVec v) × Rng
+  := Id.run do
   let mut g := g
   let mut xs := #[]
   for _ in [0:n] do

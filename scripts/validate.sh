@@ -25,7 +25,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-examples=(counter detector mac)
+examples=(counter detector mac muxadd memorymap)
 
 step() {
   printf '\nvalidate: %s\n' "$*"
@@ -44,7 +44,8 @@ fi
 
 for n in "${examples[@]}"; do
   step "gin validate examples/$n"
-  cabal run -v0 gin -- validate "examples/$n/$n.gin.json" --vectors "examples/$n/$n.vectors.json" \
+  cabal run -v0 gin -- validate "examples/$n/$n.gin.json" --vectors \
+    "examples/$n/$n.vectors.json" \
     --min-cycles 1024
 done
 

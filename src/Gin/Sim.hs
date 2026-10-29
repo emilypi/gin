@@ -152,12 +152,12 @@ simulateNormal :: NModule -> [[Value]] -> Either GinError [[Value]]
 simulateNormal nm rows = do
   validateRows [(unName n, t) | (n, t) <- nmInputs nm] rows
   go initial (zip [0 ..] rows) []
-  where
-    initial = Map.fromList [(nbName b, v) | b@NBind {nbRhs = NReg v _} <- nmBinds nm]
-    go _ [] acc = Right (reverse acc)
-    go regs ((t, row) : rest) acc = do
-      (outs, regs') <- inCycle t (normalCycle nm regs row)
-      go regs' rest (outs : acc)
+ where
+  initial = Map.fromList [(nbName b, v) | b@NBind {nbRhs = NReg v _} <- nmBinds nm]
+  go _ [] acc = Right (reverse acc)
+  go regs ((t, row) : rest) acc = do
+    (outs, regs') <- inCycle t (normalCycle nm regs row)
+    go regs' rest (outs : acc)
 
 ----------------------------------------------------------------------
 -- Shared
@@ -184,25 +184,26 @@ inCycle t = withContext ("in cycle " <> showT t)
 -- | Every row has one valid value per port, of the port's type.
 validateRows :: [(Text, Ty)] -> [[Value]] -> Either GinError ()
 validateRows ports = zipWithM_ checkRow [0 ..]
-  where
-    checkRow t row = inCycle t $ do
-      unless (length row == length ports) . failAt StSim $
-        "expected "
-          <> showT (length ports)
-          <> " input values ("
-          <> Text.intercalate ", " (fmap fst ports)
-          <> "), got "
-          <> showT (length row)
-      zipWithM_ checkValue ports row
-    checkValue (name, ty) v =
-      unless (validValue v && valueTy v == ty) . failAt StSim $
-        "input " <> name <> ": expected a value of type " <> showT ty <> ", got " <> showT v
+ where
+  checkRow t row = inCycle t $ do
+    unless (length row == length ports) . failAt StSim $
+      "expected "
+        <> showT (length ports)
+        <> " input values ("
+        <> Text.intercalate ", " (fmap fst ports)
+        <> "), got "
+        <> showT (length row)
+    zipWithM_ checkValue ports row
+  checkValue (name, ty) v =
+    unless (validValue v && valueTy v == ty) . failAt StSim $
+      "input " <> name <> ": expected a value of type " <> showT ty <> ", got " <> showT v
 
 -- | The value is valid and has the given type.
 hasType :: Text -> Ty -> Value -> Either GinError Value
 hasType what ty v
   | validValue v && valueTy v == ty = Right v
-  | otherwise = failAt StSim (what <> ": expected type " <> showT ty <> ", got " <> showT v)
+  | otherwise =
+    failAt StSim (what <> ": expected type " <> showT ty <> ", got " <> showT v)
 
 ----------------------------------------------------------------------
 -- Core IR: limits
@@ -309,7 +310,8 @@ data NodeKind s
   | -- | The state (the cycle it belongs to, and its value) and the input.
     NRegister !(STRef s (Int, Thunk s)) !(Node s)
   | -- | Step function, state, input, and the step result of one cycle.
-    NMealy !(Thunk s) !(STRef s (Int, Thunk s)) !(Node s) !(STRef s (Maybe (Int, Thunk s)))
+    NMealy !(Thunk s) !(STRef s (Int, Thunk s)) !(Node s) !(STRef s (Maybe (Int
+      , Thunk s)))
   | -- | A recursive binder of signal type, and the node it stands for.
     NPlaceholder !Text !(Thunk s)
 
@@ -509,25 +511,30 @@ force = \case
       Running _ -> do
         t <- currentCycle
         failWith (Bottom (Loop (Just (cellState c)) [] t))
-      Pending g m -> maybe (pure Nothing) recheck g >>= maybe (compute c m) (failWith . passing c . Bottom)
-  where
-    recheck (Guard active l) = (\stuck -> if stuck then Just l else Nothing) <$> running active
+      Pending g m ->
+        maybe (pure Nothing) recheck g
+          >>= maybe (compute c m) (failWith . passing c . Bottom)
+ where
+  recheck (Guard active l) = (\stuck ->
+    if stuck then Just l else Nothing) <$> running active
 
 -- | Compute a cell's value as the work that created it, so a value
 -- created while building the network is charged to the work done once
 -- even when a cycle is the first to need it.
 compute :: Cell s -> Eval s (D s) -> Eval s (D s)
-compute c m = withCharge (cellCharge c) tick >> do
-  a <- fresh
-  outer <- innermost
-  liftST (writeSTRef (cellState c) (Running a))
-  attempt (deeper (Just (Active (cellState c) a)) (withCharge (cellCharge c) m)) >>= \case
-    Right d -> d <$ liftST (writeSTRef (cellState c) (Done d))
-    Left f -> do
-      liftST . writeSTRef (cellState c) $ case f of
-        Bottom l -> Pending (Just (Guard outer l)) m
-        Abort _ -> Pending Nothing m
-      failWith (passing c f)
+compute c m =
+  withCharge (cellCharge c) tick >> do
+    a <- fresh
+    outer <- innermost
+    liftST (writeSTRef (cellState c) (Running a))
+    attempt (deeper (Just (Active (cellState c) a)) (withCharge (cellCharge c) m))
+      >>= \case
+      Right d -> d <$ liftST (writeSTRef (cellState c) (Done d))
+      Left f -> do
+        liftST . writeSTRef (cellState c) $ case f of
+          Bottom l -> Pending (Just (Guard outer l)) m
+          Abort _ -> Pending Nothing m
+        failWith (passing c f)
 
 -- | Record that a failure propagated out of the computation of a cell.
 passing :: Cell s -> Failure s -> Failure s
@@ -541,10 +548,10 @@ passing c = \case
             }
     | otherwise -> Bottom l
   Abort e -> Abort (maybe e (`nestedIn` e) (cellContext c))
-  where
-    addName n ns
-      | n `elem` ns || length ns >= 8 = ns
-      | otherwise = n : ns
+ where
+  addName n ns
+    | n `elem` ns || length ns >= 8 = ns
+    | otherwise = n : ns
 
 -- | Add a context line, unless the error already carries many.
 nestedIn :: Text -> GinError -> GinError
@@ -574,13 +581,13 @@ loopError l =
       <> atCycle
       <> " depends on itself (feedback must pass through sig.register or the state of"
       <> " sig.mealy)"
-  where
-    subject = case reverse (loopNames l) of
-      [] -> "a value"
-      ns -> "the value of " <> Text.intercalate ", " ns
-    atCycle
-      | loopCycle l >= 0 = " at cycle " <> showT (loopCycle l)
-      | otherwise = ""
+ where
+  subject = case reverse (loopNames l) of
+    [] -> "a value"
+    ns -> "the value of " <> Text.intercalate ", " ns
+  atCycle
+    | loopCycle l >= 0 = " at cycle " <> showT (loopCycle l)
+    | otherwise = ""
 
 ----------------------------------------------------------------------
 -- Core IR: running the program
@@ -595,7 +602,8 @@ runCore prog rows = do
       <*> newSTRef (-1)
       <*> newSTRef 0
       <*> newSTRef Map.empty
-  either (Left . failureError) Right <$> runEval (coreRun prog rows) sim (Here 0 Nothing Once)
+  either (Left . failureError) Right
+    <$> runEval (coreRun prog rows) sim (Here 0 Nothing Once)
 
 -- | Build the signal network, then run it one cycle per row. Each cycle
 -- computes the nodes in dependency order first (a node that needs a value
@@ -609,7 +617,9 @@ coreRun prog rows = do
   let top = progTop prog
   inputs <- traverse (const (newNode NInput)) (topInputs top)
   (out, order) <- within ("in def " <> unName (topDef top)) $ do
-    g <- globalThunk ("top entity def " <> unName (topDef top) <> " is not defined") (topDef top)
+    g <-
+      globalThunk ("top entity def " <> unName (topDef top)
+        <> " is not defined") (topDef top)
     f <- force g
     out <- applyAll f [Ready (DSig n) | n <- inputs] >>= asNode "the top entity's result"
     order <- network out
@@ -620,7 +630,10 @@ coreRun prog rows = do
         liftST $ do
           writeSTRef (simCycle sim) t
           writeSTRef (simSteps sim) 0
-        zipWithM_ (\n v -> liftST (writeSTRef (nodeCell n) (Just (t, Ready (fromValue v))))) inputs row
+        zipWithM_
+          (\n v -> liftST (writeSTRef (nodeCell n) (Just (t, Ready (fromValue v)))))
+          inputs
+          row
         outs <- within ("in cycle " <> showT t) $ do
           traverse_ (\n -> tick >> tryBottom (cellOf n >>= force)) order
           v <- cellOf out >>= force >>= deepValue
@@ -629,11 +642,11 @@ coreRun prog rows = do
         liftST (sequence_ commits)
         pure (outs : acc)
   reverse <$> foldM step [] (zip [0 ..] rows)
-  where
-    stateful n = case nodeKind n of
-      NRegister {} -> True
-      NMealy {} -> True
-      _ -> False
+ where
+  stateful n = case nodeKind n of
+    NRegister {} -> True
+    NMealy {} -> True
+    _ -> False
 
 -- | Recursion among globals is rejected up front: a global is evaluated
 -- at most once, so it must not need itself.
@@ -644,8 +657,8 @@ noGlobalRecursion prog =
     ds : _ ->
       failAt StSim $
         "recursion among globals: " <> Text.intercalate ", " (fmap (unName . defName) ds)
-  where
-    graph = [(d, defName d, Set.toList (globalRefs (defBody d))) | d <- progDefs prog]
+ where
+  graph = [(d, defName d, Set.toList (globalRefs (defBody d))) | d <- progDefs prog]
 
 -- | Every global def, as a value computed on first use.
 defineGlobals :: Program Ty Name -> Eval s ()
@@ -653,10 +666,11 @@ defineGlobals prog = do
   defs <- traverse global (progDefs prog)
   sim <- askSim
   liftST (writeSTRef (simGlobals sim) (Map.fromList defs))
-  where
-    global d = do
-      th <- delay Nothing (Just ("in def " <> unName (defName d))) (eval Map.empty (defBody d))
-      pure (defName d, th)
+ where
+  global d = do
+    th <-
+      delay Nothing (Just ("in def " <> unName (defName d))) (eval Map.empty (defBody d))
+    pure (defName d, th)
 
 globalThunk :: Text -> Name -> Eval s (Thunk s)
 globalThunk missing n = do
@@ -669,25 +683,25 @@ globalThunk missing n = do
 -- on the way, so the whole network is built before the first cycle.
 network :: Node s -> Eval s [Node s]
 network root = go Set.empty [Enter root] []
-  where
-    go _ [] order = pure (reverse order)
-    go seen (visit : rest) order = case visit of
-      Leave n -> go seen rest (n : order)
-      Enter n
-        | Set.member (nodeId n) seen -> go seen rest order
-        | otherwise -> do
-            next <- successors n
-            go (Set.insert (nodeId n) seen) (fmap Enter next <> (Leave n : rest)) order
-    successors n = case nodeKind n of
-      NInput -> pure []
-      NPure _ -> pure []
-      NLift _ ns -> pure ns
-      NRegister _ s -> pure [s]
-      NMealy _ _ s _ -> pure [s]
-      NPlaceholder _ target ->
-        tryBottom (force target) >>= \case
-          Right (DSig m) -> pure [m]
-          _ -> pure []
+ where
+  go _ [] order = pure (reverse order)
+  go seen (visit : rest) order = case visit of
+    Leave n -> go seen rest (n : order)
+    Enter n
+      | Set.member (nodeId n) seen -> go seen rest order
+      | otherwise -> do
+          next <- successors n
+          go (Set.insert (nodeId n) seen) (fmap Enter next <> (Leave n : rest)) order
+  successors n = case nodeKind n of
+    NInput -> pure []
+    NPure _ -> pure []
+    NLift _ ns -> pure ns
+    NRegister _ s -> pure [s]
+    NMealy _ _ s _ -> pure [s]
+    NPlaceholder _ target ->
+      tryBottom (force target) >>= \case
+        Right (DSig m) -> pure [m]
+        _ -> pure []
 
 -- | A step of the depth-first walk in 'network'.
 data Visit s = Enter (Node s) | Leave (Node s)
@@ -696,12 +710,14 @@ data Visit s = Enter (Node s) | Leave (Node s)
 -- component that is not productive marked as such, and return the action
 -- that stores it. All next states are computed before any is stored.
 advance :: Int -> Node s -> Eval s (ST s ())
-advance t n = tick >> case nodeKind n of
-  NRegister st s -> store st <$> settle (cellOf s >>= force)
-  NMealy f st i memo -> store st <$> settle (mealyStep f st i memo >>= force >>= pairPart 0 >>= force)
-  _ -> pure (pure ())
-  where
-    store st th = writeSTRef st (t + 1, th)
+advance t n =
+  tick >> case nodeKind n of
+    NRegister st s -> store st <$> settle (cellOf s >>= force)
+    NMealy f st i memo ->
+      store st <$> settle (mealyStep f st i memo >>= force >>= pairPart 0 >>= force)
+    _ -> pure (pure ())
+ where
+  store st th = writeSTRef st (t + 1, th)
 
 -- | Compute a value completely, keeping each component that is not
 -- productive as 'Undefined'.
@@ -737,8 +753,8 @@ splitOutputs ports v = case ports of
           <> ", remaining outputs) on the output spine, got "
           <> showT v
   [] -> failAt StSim "the top entity has no outputs"
-  where
-    port p = hasType ("output " <> portName p) (portTy p)
+ where
+  port p = hasType ("output " <> portName p) (portTy p)
 
 ----------------------------------------------------------------------
 -- Core IR: signals
@@ -771,7 +787,8 @@ cellOf :: Node s -> Eval s (Thunk s)
 cellOf n = case nodeKind n of
   NPure x -> pure x
   NRegister st _ -> stateAt st
-  NInput -> cached (nodeCell n) (abort "internal error: an input has no value at this cycle")
+  NInput -> cached (nodeCell n) (abort "internal error: an input has no value at this \
+    \cycle")
   NLift f ns -> cached (nodeCell n) . delay Nothing Nothing $ do
     fv <- force f
     traverse cellOf ns >>= applyAll fv
@@ -802,8 +819,12 @@ stateAt st = do
     else abort "internal error: a register or mealy state is not available at this cycle"
 
 -- | The step function applied to the current state and input.
-mealyStep
-  :: Thunk s -> STRef s (Int, Thunk s) -> Node s -> STRef s (Maybe (Int, Thunk s)) -> Eval s (Thunk s)
+mealyStep ::
+  Thunk s ->
+  STRef s (Int, Thunk s) ->
+  Node s ->
+  STRef s (Maybe (Int, Thunk s)) ->
+  Eval s (Thunk s)
 mealyStep f st i memo = cached memo . delay Nothing Nothing $ do
   fv <- force f
   s <- stateAt st
@@ -870,10 +891,10 @@ literal v = case v of
 -- | The tuples and scalars a value is made of.
 valueSize :: Value -> Int
 valueSize = go 0
-  where
-    go !n = \case
-      VTuple vs -> foldl' go (n + 1) vs
-      _ -> n + 1
+ where
+  go !n = \case
+    VTuple vs -> foldl' go (n + 1) vs
+    _ -> n + 1
 
 project :: Int -> D s -> Eval s (Thunk s)
 project i = \case
@@ -916,11 +937,11 @@ agree loop cond th el = do
     (DBool x, DBool y) | x == y -> pure a
     (DBV w x, DBV w' y) | w == w' && x == y -> pure a
     _ -> failWith (Bottom loop)
-  where
-    select x y =
-      tryBottom (force cond) >>= \case
-        Right d -> choose d (force x) (force y)
-        Left loop' -> agree loop' cond x y
+ where
+  select x y =
+    tryBottom (force cond) >>= \case
+      Right d -> choose d (force x) (force y)
+      Left loop' -> agree loop' cond x y
 
 closure :: Env s -> [Name] -> Expr Ty Name -> D s
 closure env names body = DFun $ \arg -> case names of
@@ -941,11 +962,11 @@ applyAll = foldM apply
 -- | A prim as a curried function of 'primArity' arguments.
 primValue :: PrimOp -> D s
 primValue op = collect (primArity op) []
-  where
-    collect k acc = DFun $ \arg ->
-      if k <= 1
-        then runPrim op (reverse (arg : acc))
-        else pure (collect (k - 1) (arg : acc))
+ where
+  collect k acc = DFun $ \arg ->
+    if k <= 1
+      then runPrim op (reverse (arg : acc))
+      else pure (collect (k - 1) (arg : acc))
 
 -- | A saturated prim application. Combinational prims need the values of
 -- all their arguments; signal prims build a node, needing only which
@@ -970,12 +991,12 @@ runPrim op args
         memo <- liftST (newSTRef Nothing)
         DSig <$> newNode (NMealy f st n memo)
       _ -> abort (primName op <> " applied to unexpected arguments")
-  where
-    signal th = force th >>= asNode (primName op <> " argument")
-    scalar = \case
-      DBool b -> pure (VBool b)
-      DBV w x -> pure (VBV w x)
-      _ -> abort (primName op <> " applied to a value that is not a Bool or a bit vector")
+ where
+  signal th = force th >>= asNode (primName op <> " argument")
+  scalar = \case
+    DBool b -> pure (VBool b)
+    DBV w x -> pure (VBV w x)
+    _ -> abort (primName op <> " applied to a value that is not a Bool or a bit vector")
 
 ----------------------------------------------------------------------
 -- Core IR: recursive lets
@@ -990,14 +1011,20 @@ letRec :: Env s -> [Bind Ty Name] -> Eval s (Env s)
 letRec env binds = do
   work <- currentCharge
   refs <- traverse (const (tick >> liftST (newSTRef (Pending Nothing unset)))) binds
-  let cell b = Lazy . Cell (Just (unName (bindName b))) (Just ("in bind " <> unName (bindName b))) work
+  let cell b =
+        Lazy . Cell (Just (unName (bindName b))) (Just ("in bind "
+          <> unName (bindName b))) work
       cells = zipWith cell binds refs
-  slots <- sequence [recSlot (unName (bindName b)) (bindTy b) c | (b, c) <- zip binds cells]
+  slots <- sequence [recSlot (unName (bindName b)) (bindTy b) c | (b, c) <-
+    zip binds cells]
   let env' = foldr (\(b, s) -> Map.insert (bindName b) s) env (zip binds slots)
-  zipWithM_ (\b r -> liftST (writeSTRef r (Pending Nothing (eval env' (bindExpr b))))) binds refs
+  zipWithM_
+    (\b r -> liftST (writeSTRef r (Pending Nothing (eval env' (bindExpr b)))))
+    binds
+    refs
   pure env'
-  where
-    unset = abort "internal error: a recursive binder was used before it was defined"
+ where
+  unset = abort "internal error: a recursive binder was used before it was defined"
 
 -- | What a recursive binder of the given type is bound to, given the
 -- binder's value.
@@ -1011,50 +1038,56 @@ recSlot name ty value = case ty of
         _ -> pure n
     Ready . DSig <$> newNode (NPlaceholder name target)
   TProd ts | any carriesSignal ts -> do
-    let part i t = delay Nothing Nothing (force value >>= project i >>= force) >>= recSlot name t
+    let part i t =
+          delay Nothing Nothing (force value >>= project i >>= force) >>= recSlot name t
     Ready . DTuple <$> zipWithM part [0 ..] ts
   _ -> pure value
-  where
-    carriesSignal = \case
-      TSignal _ _ -> True
-      TProd ts -> any carriesSignal ts
-      _ -> False
+ where
+  carriesSignal = \case
+    TSignal _ _ -> True
+    TProd ts -> any carriesSignal ts
+    _ -> False
 
 ----------------------------------------------------------------------
 -- Normal form
 
 -- | One cycle: evaluate the binds in order, read the outputs, and compute
 -- the register state of the next cycle.
-normalCycle :: NModule -> Map Name Value -> [Value] -> Either GinError ([Value], Map Name Value)
+normalCycle ::
+  NModule -> Map Name Value -> [Value] -> Either GinError ([Value], Map Name Value)
 normalCycle nm regs row = do
   env <- foldM bindStep (Map.fromList (zip (fmap fst (nmInputs nm)) row)) (nmBinds nm)
   outs <- traverse (output env) (nmOutputs nm)
-  regs' <- Map.fromList <$> sequence [nextState env b a | b@NBind {nbRhs = NReg _ a} <- nmBinds nm]
+  regs' <-
+    Map.fromList <$> sequence [nextState env b a | b@NBind {nbRhs = NReg _ a} <-
+      nmBinds nm]
   Right (outs, regs')
-  where
-    bindStep env b = withContext ("in bind " <> unName (nbName b)) $ do
-      when (Map.member (nbName b) env) . failAt StSim $
-        unName (nbName b) <> " is bound more than once"
-      v <- case nbRhs b of
-        NPrim op as -> traverse (atom env) as >>= evalPrim op
-        NMux c th el ->
-          atom env c >>= \case
-            VBool True -> atom env th
-            VBool False -> atom env el
-            other -> failAt StSim ("mux condition is not a Bool: " <> showT other)
-        NReg _ _ ->
-          maybe (failAt StSim "register has no state") Right (Map.lookup (nbName b) regs)
-        NAtom a -> atom env a
-      _ <- hasType (unName (nbName b)) (nbTy b) v
-      Right (Map.insert (nbName b) v env)
-    output env o = atom env (noAtom o) >>= hasType ("output " <> noName o) (noTy o)
-    nextState env b a = do
-      v <- atom env a >>= hasType ("register " <> unName (nbName b) <> " next value") (nbTy b)
-      Right (nbName b, v)
-    atom env = \case
-      ALit v -> Right v
-      AVar n ->
-        maybe
-          (failAt StSim ("reads " <> unName n <> ", which is not an input or an earlier bind"))
-          Right
-          (Map.lookup n env)
+ where
+  bindStep env b = withContext ("in bind " <> unName (nbName b)) $ do
+    when (Map.member (nbName b) env) . failAt StSim $
+      unName (nbName b) <> " is bound more than once"
+    v <- case nbRhs b of
+      NPrim op as -> traverse (atom env) as >>= evalPrim op
+      NMux c th el ->
+        atom env c >>= \case
+          VBool True -> atom env th
+          VBool False -> atom env el
+          other -> failAt StSim ("mux condition is not a Bool: " <> showT other)
+      NReg _ _ ->
+        maybe (failAt StSim "register has no state") Right (Map.lookup (nbName b) regs)
+      NAtom a -> atom env a
+    _ <- hasType (unName (nbName b)) (nbTy b) v
+    Right (Map.insert (nbName b) v env)
+  output env o = atom env (noAtom o) >>= hasType ("output " <> noName o) (noTy o)
+  nextState env b a = do
+    v <-
+      atom env a >>= hasType ("register " <> unName (nbName b) <> " next value") (nbTy b)
+    Right (nbName b, v)
+  atom env = \case
+    ALit v -> Right v
+    AVar n ->
+      maybe
+        (failAt StSim ("reads " <> unName n <> ", which is not an input or an earlier \
+          \bind"))
+        Right
+        (Map.lookup n env)

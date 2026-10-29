@@ -62,7 +62,9 @@ addK k = ELam [("z", bv 8)] (bin8 BvAdd (var "z") (lit8 k))
 -- | @sig.lift k f s1 .. sk@ for argument types @as@ and result type @r@.
 lift :: [Ty] -> Ty -> Expr Ty Name -> [Expr Ty Name] -> Expr Ty Name
 lift as r f ss =
-  EApp (prim (SigLift (fromIntegral (length as))) (tFuns as r : fmap sig as) (sig r)) (f : ss)
+  EApp
+    (prim (SigLift (fromIntegral (length as))) (tFuns as r : fmap sig as) (sig r))
+    (f : ss)
 
 register :: Value -> Expr Ty Name -> Expr Ty Name
 register v s = EApp (prim (SigRegister v) [sig (valueTy v)] (sig (valueTy v))) [s]
@@ -87,10 +89,10 @@ program name ins outs defs =
 -- | @Test.top@ as a lambda over input signals named like the ports.
 mkTop :: [(Text, Ty)] -> Ty -> Expr Ty Name -> Def Ty Name
 mkTop ins out body = Def "Test.top" (tFuns (fmap (sig . snd) ins) (sig out)) lams
-  where
-    lams = case ins of
-      [] -> body
-      _ -> ELam [(Name n, sig t) | (n, t) <- ins] body
+ where
+  lams = case ins of
+    [] -> body
+    _ -> ELam [(Name n, sig t) | (n, t) <- ins] body
 
 -- | A normal form for a program built with 'program'.
 normalForm :: Text -> [(Name, Ty)] -> [NOutput] -> [NBind] -> NModule
@@ -107,17 +109,23 @@ normalForm name ins outs binds =
 ----------------------------------------------------------------------
 -- Example programs
 
--- > counter en = let rec c = register 0 (lift2 (\e v -> if e then v + 1 else v) en c) in c
+-- > counter en = let rec c = register 0 (lift2 (\e v -> if e then v + 1 else v) en c) in
+-- > c
 --
 -- Without the register, @c@ depends on itself within the cycle.
 recCounter :: Bool -> Program Ty Name
 recCounter withRegister =
-  program "counter" [Port "en" TBool] [Port "count" (bv 8)] [mkTop [("en", TBool)] (bv 8) body]
-  where
-    step = ELam [("e", TBool), ("v", bv 8)] (ifE (var "e") (EApp (addK 1) [var "v"]) (var "v"))
-    lifted = lift [TBool, bv 8] (bv 8) step [var "en", var "c"]
-    next = if withRegister then register (VBV 8 0) lifted else lifted
-    body = ELetRec [Bind "c" (sig (bv 8)) next] (var "c")
+  program
+    "counter"
+    [Port "en" TBool]
+    [Port "count" (bv 8)]
+    [mkTop [("en", TBool)] (bv 8) body]
+ where
+  step =
+    ELam [("e", TBool), ("v", bv 8)] (ifE (var "e") (EApp (addK 1) [var "v"]) (var "v"))
+  lifted = lift [TBool, bv 8] (bv 8) step [var "en", var "c"]
+  next = if withRegister then register (VBV 8 0) lifted else lifted
+  body = ELetRec [Bind "c" (sig (bv 8)) next] (var "c")
 
 -- | 'counterNormal' as produced from a program built with 'program'.
 recCounterNormal :: NModule
@@ -127,32 +135,38 @@ recCounterNormal = counterNormal {nmCertificate = testCertificate "Test.top_corr
 mutualRec :: Bool -> Program Ty Name
 mutualRec withRegister =
   program "mutual" [Port "x" (bv 8)] [Port "y" (bv 8)] [mkTop [("x", bv 8)] (bv 8) body]
-  where
-    a = lift [bv 8] (bv 8) (addK 1) [var "b"]
-    b = if withRegister then register (VBV 8 0) (var "a") else lift [bv 8] (bv 8) (addK 1) [var "a"]
-    body = ELetRec [Bind "a" (sig (bv 8)) a, Bind "b" (sig (bv 8)) b] (var "a")
+ where
+  a = lift [bv 8] (bv 8) (addK 1) [var "b"]
+  b =
+    if withRegister
+      then register (VBV 8 0) (var "a")
+      else lift [bv 8] (bv 8) (addK 1) [var "a"]
+  body = ELetRec [Bind "a" (sig (bv 8)) a, Bind "b" (sig (bv 8)) b] (var "a")
 
 -- > free = let rec c = register 0 (lift (+ 1) c) in c   -- no inputs at all
 freeCounter :: Program Ty Name
 freeCounter =
   program "free" [] [Port "count" (bv 8)] [Def "Test.top" (sig (bv 8)) body]
-  where
-    body =
-      ELetRec
-        [Bind "c" (sig (bv 8)) (register (VBV 8 0) (lift [bv 8] (bv 8) (addK 1) [var "c"]))]
-        (var "c")
+ where
+  body =
+    ELetRec
+      [Bind "c" (sig (bv 8)) (register (VBV 8 0) (lift [bv 8] (bv 8) (addK 1) [var "c"]))]
+      (var "c")
 
 -- > fib _ = mealy (\st _ -> ((st.1, st.0 + st.1), st.0)) (0, 1)
 fibProgram :: Program Ty Name
-fibProgram = program "fib" [Port "en" TBool] [Port "f" (bv 8)] [mkTop [("en", TBool)] (bv 8) body]
-  where
-    stTy = TProd [bv 8, bv 8]
-    st i = EProj i (var "st")
-    step =
-      ELam [("st", stTy), ("e", TBool)] $
-        mkTuple [mkTuple [st 1, bin8 BvAdd (st 0) (st 1)], st 0]
-    mealyTy = [tFuns [stTy, TBool] (TProd [stTy, bv 8]), sig TBool]
-    body = EApp (prim (SigMealy (VTuple [VBV 8 0, VBV 8 1])) mealyTy (sig (bv 8))) [step, var "en"]
+fibProgram =
+  program "fib" [Port "en" TBool] [Port "f" (bv 8)] [mkTop [("en", TBool)] (bv 8) body]
+ where
+  stTy = TProd [bv 8, bv 8]
+  st i = EProj i (var "st")
+  step =
+    ELam [("st", stTy), ("e", TBool)] $
+      mkTuple [mkTuple [st 1, bin8 BvAdd (st 0) (st 1)], st 0]
+  mealyTy = [tFuns [stTy, TBool] (TProd [stTy, bv 8]), sig TBool]
+  body =
+    EApp (prim (SigMealy (VTuple [VBV 8 0, VBV 8 1])) mealyTy (sig (bv 8))) [step
+      , var "en"]
 
 fibNormal :: NModule
 fibNormal =
@@ -173,11 +187,11 @@ pairRegister =
     [Port "x" (bv 8), Port "b" TBool]
     [Port "xq" (bv 8), Port "bq" TBool]
     [mkTop [("x", bv 8), ("b", TBool)] pairTy body]
-  where
-    pairTy = TProd [bv 8, TBool]
-    pair = ELam [("u", bv 8), ("c", TBool)] (mkTuple [var "u", var "c"])
-    paired = lift [bv 8, TBool] pairTy pair [var "x", var "b"]
-    body = register (VTuple [VBV 8 0, VBool True]) paired
+ where
+  pairTy = TProd [bv 8, TBool]
+  pair = ELam [("u", bv 8), ("c", TBool)] (mkTuple [var "u", var "c"])
+  paired = lift [bv 8, TBool] pairTy pair [var "x", var "b"]
+  body = register (VTuple [VBV 8 0, VBool True]) paired
 
 pairRegisterNormal :: NModule
 pairRegisterNormal =
@@ -214,7 +228,8 @@ rows8 = [[VBV 8 1], [VBV 8 255], [VBV 8 0]]
 -- | A program from 8-bit input @x@ to 8-bit output @y@ whose top
 -- definition has the given type and body.
 withTop :: Text -> Ty -> Expr Ty Name -> Program Ty Name
-withTop name ty body = program name [Port "x" (bv 8)] [Port "y" (bv 8)] [Def "Test.top" ty body]
+withTop name ty body =
+  program name [Port "x" (bv 8)] [Port "y" (bv 8)] [Def "Test.top" ty body]
 
 -- | Like 'withTop', with the body under a lambda binding the input signal @x@.
 withBody :: Text -> Expr Ty Name -> Program Ty Name
@@ -240,13 +255,13 @@ twoOutputs =
     [Port "x" (bv 8), Port "y" (bv 8)]
     [Port "sum" (bv 8), Port "diff" (bv 8)]
     [mkTop [("x", bv 8), ("y", bv 8)] resTy body]
-  where
-    resTy = TProd [bv 8, bv 8]
-    f =
-      ELam
-        [("a", bv 8), ("b", bv 8)]
-        (mkTuple [bin8 BvAdd (var "a") (var "b"), bin8 BvSub (var "a") (var "b")])
-    body = lift [bv 8, bv 8] resTy f [var "x", var "y"]
+ where
+  resTy = TProd [bv 8, bv 8]
+  f =
+    ELam
+      [("a", bv 8), ("b", bv 8)]
+      (mkTuple [bin8 BvAdd (var "a") (var "b"), bin8 BvSub (var "a") (var "b")])
+  body = lift [bv 8, bv 8] resTy f [var "x", var "y"]
 
 -- > lift2 (\a b -> (a + b, (a == b, a))) x y
 --
@@ -258,30 +273,37 @@ threeOutputs flat =
     [Port "x" (bv 8), Port "y" (bv 8)]
     [Port "sum" (bv 8), Port "same" TBool, Port "first" (bv 8)]
     [mkTop [("x", bv 8), ("y", bv 8)] resTy body]
-  where
-    s = bin8 BvAdd (var "a") (var "b")
-    e = eq8 (var "a") (var "b")
-    (resTy, result)
-      | flat = (TProd [bv 8, TBool, bv 8], mkTuple [s, e, var "a"])
-      | otherwise = (TProd [bv 8, TProd [TBool, bv 8]], mkTuple [s, mkTuple [e, var "a"]])
-    body = lift [bv 8, bv 8] resTy (ELam [("a", bv 8), ("b", bv 8)] result) [var "x", var "y"]
+ where
+  s = bin8 BvAdd (var "a") (var "b")
+  e = eq8 (var "a") (var "b")
+  (resTy, result)
+    | flat = (TProd [bv 8, TBool, bv 8], mkTuple [s, e, var "a"])
+    | otherwise = (TProd [bv 8, TProd [TBool, bv 8]], mkTuple [s, mkTuple [e, var "a"]])
+  body =
+    lift [bv 8, bv 8] resTy (ELam [("a", bv 8), ("b", bv 8)] result) [var "x", var "y"]
 
 -- | Definitions @Chain.g0 = base@ and @Chain.g(i+1) = \\x -> step Chain.gi x@
 -- over 8-bit vectors, and a top entity applying @Chain.gn@ pointwise to its
 -- input.
-chainProgram :: Int -> Expr Ty Name -> (Expr Ty Name -> Expr Ty Name -> Expr Ty Name) -> Program Ty Name
+chainProgram ::
+  Int -> Expr Ty Name -> (Expr Ty Name -> Expr Ty Name -> Expr Ty Name) -> Program Ty Name
 chainProgram = chainProgramOf (bv 8)
 
-chainProgramOf :: Ty -> Int -> Expr Ty Name -> (Expr Ty Name -> Expr Ty Name -> Expr Ty Name) -> Program Ty Name
+chainProgramOf ::
+  Ty ->
+  Int ->
+  Expr Ty Name ->
+  (Expr Ty Name -> Expr Ty Name -> Expr Ty Name) ->
+  Program Ty Name
 chainProgramOf ty n base step =
   program "chain" [Port "x" ty] [Port "y" ty] (top : Def (g 0) fTy base : defs)
-  where
-    g :: Int -> Name
-    g i = Name ("Chain.g" <> tshow i)
-    fTy = TFun ty ty
-    level i = Def (g (i + 1)) fTy (ELam [("x", ty)] (step (EGlobal (g i)) (var "x")))
-    defs = fmap level [0 .. n - 1]
-    top = mkTop [("x", ty)] ty (lift [ty] ty (EGlobal (g n)) [var "x"])
+ where
+  g :: Int -> Name
+  g i = Name ("Chain.g" <> tshow i)
+  fTy = TFun ty ty
+  level i = Def (g (i + 1)) fTy (ELam [("x", ty)] (step (EGlobal (g i)) (var "x")))
+  defs = fmap level [0 .. n - 1]
+  top = mkTop [("x", ty)] ty (lift [ty] ty (EGlobal (g n)) [var "x"])
 
 -- | @g(i+1) x = g i (g i x)@ from @g0 x = not x@: @2^n@ distinct binds.
 nestedChain :: Int -> Program Ty Name
@@ -304,10 +326,10 @@ identityChain n = chainProgram n (ELam [("x", bv 8)] (var "x")) twice
 -- but emits no binds, since both branches agree.
 wideChain :: Int -> Program Ty Name
 wideChain n = chainProgramOf TBool n base twice
-  where
-    wide = ELit (VTuple (replicate 10000 (VBool False)))
-    both = mkTuple [var "x", wide]
-    base = ELam [("x", TBool)] (EProj 0 (ifE (var "x") both both))
+ where
+  wide = ELit (VTuple (replicate 10000 (VBool False)))
+  both = mkTuple [var "x", wide]
+  base = ELam [("x", TBool)] (EProj 0 (ifE (var "x") both both))
 
 twice :: Expr Ty Name -> Expr Ty Name -> Expr Ty Name
 twice g x = EApp g [EApp g [x]]
@@ -322,13 +344,14 @@ deepState d = foldr (\_ v -> VTuple [VBool False, v]) (VBool False) [1 .. d]
 -- The state never changes and the output is the input, so every state
 -- register is dead.
 deepMealy :: Int -> Program Ty Name
-deepMealy d = program "deep" [Port "b" TBool] [Port "o" TBool] [mkTop [("b", TBool)] TBool body]
-  where
-    v = deepState d
-    st = valueTy v
-    stepTy = tFuns [st, TBool] (TProd [st, TBool])
-    step = ELam [("st", st), ("i", TBool)] (mkTuple [var "st", var "i"])
-    body = EApp (prim (SigMealy v) [stepTy, sig TBool] (sig TBool)) [step, var "b"]
+deepMealy d =
+  program "deep" [Port "b" TBool] [Port "o" TBool] [mkTop [("b", TBool)] TBool body]
+ where
+  v = deepState d
+  st = valueTy v
+  stepTy = tFuns [st, TBool] (TProd [st, TBool])
+  step = ELam [("st", st), ("i", TBool)] (mkTuple [var "st", var "i"])
+  body = EApp (prim (SigMealy v) [stepTy, sig TBool] (sig TBool)) [step, var "b"]
 
 -- > deepReg x = let r = register (deepState d) (lift nest x) in lift deepest r
 --
@@ -337,13 +360,13 @@ deepMealy d = program "deep" [Port "b" TBool] [Port "o" TBool] [mkTop [("b", TBo
 deepRegister :: Int -> Program Ty Name
 deepRegister d =
   program "deepreg" [Port "x" TBool] [Port "y" TBool] [mkTop [("x", TBool)] TBool body]
-  where
-    v = deepState d
-    t = valueTy v
-    nest = ELam [("b", TBool)] (foldr (\_ e -> mkTuple [var "b", e]) (var "b") [1 .. d])
-    deepest = ELam [("t", t)] (foldr (\_ e -> EProj 1 e) (var "t") [1 .. d])
-    reg = register v (lift [TBool] t nest [var "x"])
-    body = ELet [Bind "r" (sig t) reg] (lift [t] TBool deepest [var "r"])
+ where
+  v = deepState d
+  t = valueTy v
+  nest = ELam [("b", TBool)] (foldr (\_ e -> mkTuple [var "b", e]) (var "b") [1 .. d])
+  deepest = ELam [("t", t)] (foldr (\_ e -> EProj 1 e) (var "t") [1 .. d])
+  reg = register v (lift [TBool] t nest [var "x"])
+  body = ELet [Bind "r" (sig t) reg] (lift [t] TBool deepest [var "r"])
 
 -- | @TBool@ paired with itself @k@ times. Each level is shared, so the type
 -- takes @k@ steps to build although it has @2^k@ components.
@@ -354,9 +377,9 @@ doubledTy k = foldr (\_ t -> TProd [t, t]) TBool [1 .. k]
 -- whose last value is a tuple of @2^k@ Bools, shared at every level.
 doublings :: Text -> Expr Ty Name -> Int -> [Bind Ty Name]
 doublings name base k = [Bind (n i) (doubledTy i) (rhs i) | i <- [0 .. k]]
-  where
-    n i = Name (name <> tshow i)
-    rhs i = if i == 0 then base else mkTuple [EVar (n (i - 1)), EVar (n (i - 1))]
+ where
+  n i = Name (name <> tshow i)
+  rhs i = if i == 0 then base else mkTuple [EVar (n (i - 1)), EVar (n (i - 1))]
 
 -- | Component 0, @k@ times over.
 firsts :: Int -> Expr Ty Name -> Expr Ty Name
@@ -369,10 +392,10 @@ firsts k e = foldr (\_ -> EProj 0) e [1 .. k]
 sharedTuple :: Int -> Program Ty Name
 sharedTuple k =
   program "shared" [Port "b" TBool] [Port "o" TBool] [mkTop [("b", TBool)] TBool body]
-  where
-    tk = var ("t" <> tshow k)
-    f = ELam [("c", TBool)] (ELet (doublings "t" (var "c") k) (firsts k tk))
-    body = lift [TBool] TBool f [var "b"]
+ where
+  tk = var ("t" <> tshow k)
+  f = ELam [("c", TBool)] (ELet (doublings "t" (var "c") k) (firsts k tk))
+  body = lift [TBool] TBool f [var "b"]
 
 -- > sharedIf b = lift (\c -> let t0 = c; u0 = base; t(i+1) = (ti, ti);
 -- >                              u(i+1) = (ui, ui)
@@ -383,12 +406,12 @@ sharedTuple k =
 sharedIf :: Expr Ty Name -> Int -> Program Ty Name
 sharedIf base k =
   program "sharedif" [Port "b" TBool] [Port "o" TBool] [mkTop [("b", TBool)] TBool body]
-  where
-    final name = var (name <> tshow k)
-    binds = doublings "t" (var "c") k <> doublings "u" base k
-    chosen = ifE (var "c") (final "t") (final "u")
-    f = ELam [("c", TBool)] (ELet binds (firsts k chosen))
-    body = lift [TBool] TBool f [var "b"]
+ where
+  final name = var (name <> tshow k)
+  binds = doublings "t" (var "c") k <> doublings "u" base k
+  chosen = ifE (var "c") (final "t") (final "u")
+  f = ELam [("c", TBool)] (ELet binds (firsts k chosen))
+  body = lift [TBool] TBool f [var "b"]
 
 -- > long x = let f1 = \v -> v; f(i+1) = \v -> fi (fi v) in lift fk x
 --
@@ -396,23 +419,23 @@ sharedIf base k =
 -- long and sharing a prefix, so that comparing two names costs @len@.
 longNames :: Int -> Int -> Program Ty Name
 longNames len k = withBody "long" (ELet (bind1 : fmap bindI [2 .. k]) applied)
-  where
-    prefix = Text.replicate len "p"
-    f i = Name (prefix <> "f" <> tshow i)
-    x = Name (prefix <> "x")
-    fTy = TFun (bv 8) (bv 8)
-    bind1 = Bind (f (1 :: Int)) fTy (ELam [(x, bv 8)] (EVar x))
-    call i e = EApp (EVar (f (i - 1))) [e]
-    bindI i = Bind (f i) fTy (ELam [(x, bv 8)] (call i (call i (EVar x))))
-    applied = lift [bv 8] (bv 8) (EVar (f k)) [var "x"]
+ where
+  prefix = Text.replicate len "p"
+  f i = Name (prefix <> "f" <> tshow i)
+  x = Name (prefix <> "x")
+  fTy = TFun (bv 8) (bv 8)
+  bind1 = Bind (f (1 :: Int)) fTy (ELam [(x, bv 8)] (EVar x))
+  call i e = EApp (EVar (f (i - 1))) [e]
+  bindI i = Bind (f i) fTy (ELam [(x, bv 8)] (call i (call i (EVar x))))
+  applied = lift [bv 8] (bv 8) (EVar (f k)) [var "x"]
 
 -- | @g(i+1) x = g i (g i x)@ from @g0 x = let v = not x in v@, with @v@
 -- named by @len@ repetitions of the letter: @2^k@ binds bound to @v@.
 longBinder :: Int -> Int -> Program Ty Name
 longBinder len k = chainProgram k base twice
-  where
-    v = Name (Text.replicate len "v")
-    base = ELam [("x", bv 8)] (ELet [Bind v (bv 8) (not8 (var "x"))] (EVar v))
+ where
+  v = Name (Text.replicate len "v")
+  base = ELam [("x", bv 8)] (ELet [Bind v (bv 8) (not8 (var "x"))] (EVar v))
 
 -- | A module of @k@ chained @bool.not@ binds, valid for @k <= maxNormalBinds@.
 notChain :: Int -> NModule
@@ -425,10 +448,10 @@ notChain k =
     , nmBinds = [NBind (b i) TBool (NPrim BoolNot [AVar (prev i)]) | i <- [0 .. k - 1]]
     , nmCertificate = testCertificate "Chain.chain_correct"
     }
-  where
-    b :: Int -> Name
-    b i = Name ("b" <> tshow i)
-    prev i = if i == 0 then "en" else b (i - 1)
+ where
+  b :: Int -> Name
+  b i = Name ("b" <> tshow i)
+  prev i = if i == 0 then "en" else b (i - 1)
 
 ----------------------------------------------------------------------
 -- Inspecting results
@@ -438,9 +461,10 @@ normalized p = case normalize p of
   Left e -> fail ("normalize failed: " <> show e)
   Right m -> pure m
 
-shouldFailWith :: (Show a) => Either GinError a -> Text -> Expectation
+shouldFailWith :: Show a => Either GinError a -> Text -> Expectation
 shouldFailWith r needle = case r of
-  Right a -> expectationFailure ("expected an error mentioning " <> show needle <> ": " <> show a)
+  Right a ->
+    expectationFailure ("expected an error mentioning " <> show needle <> ": " <> show a)
   Left e -> do
     errStage e `shouldBe` StNormalize
     Text.unpack (errMessage e) `shouldContain` Text.unpack needle
@@ -453,26 +477,27 @@ canonical :: NModule -> NModule
 canonical m =
   m
     { nmOutputs = [o {noAtom = renameAtom (noAtom o)} | o <- nmOutputs m]
-    , nmBinds = sortOn nbName [NBind (rename n) t (renameRhs r) | NBind n t r <- nmBinds m]
+    , nmBinds = sortOn nbName [NBind (rename n) t (renameRhs r) | NBind n t r <-
+      nmBinds m]
     }
-  where
-    rhss = Map.fromList [(nbName b, nbRhs b) | b <- nmBinds m]
-    labels = foldl' visit Map.empty [n | AVar n <- fmap noAtom (nmOutputs m)]
-    visit seen n
-      | Map.member n seen = seen
-      | Just r <- Map.lookup n rhss =
-          foldl' visit (Map.insert n (Map.size seen) seen) (toListOf (rhsAtoms . _AVar) r)
-      | otherwise = seen
-    rename n = maybe n label (Map.lookup n labels)
-    label k = Name ("#" <> Text.justifyRight 6 '0' (tshow (k :: Int)))
-    renameAtom = \case
-      AVar n -> AVar (rename n)
-      a -> a
-    renameRhs = \case
-      NPrim op as -> NPrim op (fmap renameAtom as)
-      NMux c a b -> NMux (renameAtom c) (renameAtom a) (renameAtom b)
-      NReg v a -> NReg v (renameAtom a)
-      NAtom a -> NAtom (renameAtom a)
+ where
+  rhss = Map.fromList [(nbName b, nbRhs b) | b <- nmBinds m]
+  labels = foldl' visit Map.empty [n | AVar n <- fmap noAtom (nmOutputs m)]
+  visit seen n
+    | Map.member n seen = seen
+    | Just r <- Map.lookup n rhss =
+        foldl' visit (Map.insert n (Map.size seen) seen) (toListOf (rhsAtoms . _AVar) r)
+    | otherwise = seen
+  rename n = maybe n label (Map.lookup n labels)
+  label k = Name ("#" <> Text.justifyRight 6 '0' (tshow (k :: Int)))
+  renameAtom = \case
+    AVar n -> AVar (rename n)
+    a -> a
+  renameRhs = \case
+    NPrim op as -> NPrim op (fmap renameAtom as)
+    NMux c a b -> NMux (renameAtom c) (renameAtom a) (renameAtom b)
+    NReg v a -> NReg v (renameAtom a)
+    NAtom a -> NAtom (renameAtom a)
 
 -- | @m@ satisfies the normal-form invariants and equals @expected@ up to
 -- bind names and bind order.
@@ -486,11 +511,11 @@ shouldNormalizeLike m expected = do
 -- itself when it is an input or a literal.
 drivers :: NModule -> [Either Atom NRhs]
 drivers m = fmap (driver . noAtom) (nmOutputs m)
-  where
-    rhss = Map.fromList [(nbName b, nbRhs b) | b <- nmBinds m]
-    driver a = case a of
-      AVar n | Just r <- Map.lookup n rhss -> Right r
-      _ -> Left a
+ where
+  rhss = Map.fromList [(nbName b, nbRhs b) | b <- nmBinds m]
+  driver a = case a of
+    AVar n | Just r <- Map.lookup n rhss -> Right r
+    _ -> Left a
 
 isReg :: NRhs -> Bool
 isReg = \case
@@ -548,9 +573,18 @@ mutants =
     , "not scalar"
     , c {nmInputs = nmInputs c <> [("pad", TProd [TBool, TBool])]}
     )
-  , ("1: an input of width zero", "not scalar", c {nmInputs = nmInputs c <> [("pad", bv 0)]})
-  , ("2: two inputs with the same name", "duplicate", c {nmInputs = [("en", TBool), ("en", TBool)]})
-  , ("2: a bind named like an input", "duplicate", c {nmInputs = [("en", TBool), ("inc", bv 8)]})
+  , ("1: an input of width zero", "not scalar", c {nmInputs =
+    nmInputs c <> [("pad", bv 0)]})
+  ,
+    ( "2: two inputs with the same name"
+    , "duplicate"
+    , c {nmInputs = [("en", TBool), ("en", TBool)]}
+    )
+  ,
+    ( "2: a bind named like an input"
+    , "duplicate"
+    , c {nmInputs = [("en", TBool), ("inc", bv 8)]}
+    )
   , ("2: two binds with the same name", "duplicate", c {nmBinds = [s, inc, inc, sNext]})
   ,
     ( "3: operands of different widths"
@@ -610,11 +644,11 @@ mutants =
     )
   , ("8: one bind over the limit", "too many binds", notChain (maxNormalBinds + 1))
   ]
-  where
-    c = counterNormal
-    s = NBind "s" (bv 8) (NReg (VBV 8 0) (AVar "s_next"))
-    inc = NBind "inc" (bv 8) (NPrim BvAdd [AVar "s", ALit (VBV 8 1)])
-    sNext = NBind "s_next" (bv 8) (NMux (AVar "en") (AVar "inc") (AVar "s"))
+ where
+  c = counterNormal
+  s = NBind "s" (bv 8) (NReg (VBV 8 0) (AVar "s_next"))
+  inc = NBind "inc" (bv 8) (NPrim BvAdd [AVar "s", ALit (VBV 8 1)])
+  sNext = NBind "s_next" (bv 8) (NMux (AVar "en") (AVar "inc") (AVar "s"))
 
 ----------------------------------------------------------------------
 
@@ -632,7 +666,8 @@ spec = do
       it "[norm-counter] lowers the counter to the hand-written normal form" $ do
         m <- normalized counterProgram
         m `shouldNormalizeLike` counterNormal
-      it "[norm-counter] names the state register after the step function's state binder" $ do
+      it "[norm-counter] names the state register after the step function's state \
+        \binder" $ do
         m <- normalized counterProgram
         [nbName b | b <- nmBinds m, isReg (nbRhs b)] `shouldBe` ["s"]
       it "[norm-mac] lowers mac to the hand-written normal form" $ do
@@ -650,7 +685,8 @@ spec = do
         m `shouldNormalizeLike` detectorNormal
 
     describe "recursive let" $ do
-      it "[norm-loop] rejects a feedback path without a register as a combinational loop" $
+      it "[norm-loop] rejects a feedback path without a register as a combinational \
+        \loop" $
         normalize (recCounter False) `shouldFailWith` "combinational loop"
       it "[norm-loop] rejects a binding defined as itself" $ do
         let selfLoop = ELetRec [Bind "c" (sig (bv 8)) (var "c")] (var "c")
@@ -695,9 +731,11 @@ spec = do
       it "[norm-deadloop] rejects a copy loop an output reads, as simulateCore does" $ do
         let p = withBody "live" (ELetRec [Bind "c" (sig (bv 8)) (var "c")] (var "c"))
         normalize p `shouldFailWith` "combinational loop"
-        either (Text.isInfixOf "not productive" . errMessage) (const False) (simulateCore p rows8)
+        either (Text.isInfixOf "not productive" . errMessage) (const False)
+          (simulateCore p rows8)
           `shouldBe` True
-      it "[norm-deadloop] rejects a loop through the condition of an if whose branches agree" $ do
+      it "[norm-deadloop] rejects a loop through the condition of an if whose branches \
+        \agree" $ do
         -- Outside the fragment normalize supports (see "Gin.Normalize"):
         -- evaluation by need gives s the value x, since both branches are x
         -- whatever the condition is, but the normal form would compute the
@@ -706,7 +744,8 @@ spec = do
               ELam [("v", bv 8), ("a", bv 8)] $
                 ifE (eq8 (var "v") (lit8 0)) (var "a") (bin8 BvAdd (var "a") (lit8 0))
             body =
-              ELetRec [Bind "s" (sig (bv 8)) (lift [bv 8, bv 8] (bv 8) f [var "s", var "x"])] (var "s")
+              ELetRec [Bind "s" (sig (bv 8)) (lift [bv 8, bv 8] (bv 8) f [var "s"
+                , var "x"])] (var "s")
             p = withBody "agree" body
         normalize p `shouldFailWith` "combinational loop"
         simulateCore p rows8 `shouldBe` Right rows8
@@ -737,16 +776,20 @@ spec = do
       it "lowers a multi-way if to one mux per condition" $ do
         let f =
               ELam [("a", bv 8)] $
-                EIf [(eq8 (var "a") (lit8 0), lit8 1), (eq8 (var "a") (lit8 1), lit8 2)] (var "a")
+                EIf [(eq8 (var "a") (lit8 0), lit8 1), (eq8 (var "a") (lit8 1)
+                  , lit8 2)] (var "a")
             p = pointwise "multiif" f
             rows = [[VBV 8 x] | x <- [0, 1, 2, 200]]
         m <- normalized p
         checkNormal m `shouldBe` Right ()
         length (filter isMux (fmap nbRhs (nmBinds m))) `shouldBe` 2
-        simulateCore p rows `shouldBe` Right [[VBV 8 1], [VBV 8 2], [VBV 8 2], [VBV 8 200]]
+        simulateCore p rows
+          `shouldBe` Right [[VBV 8 1], [VBV 8 2], [VBV 8 2], [VBV 8 200]]
         simulateNormal m rows `shouldBe` simulateCore p rows
       it "saturates a partially applied prim" $ do
-        m <- normalized (pointwise "partial" (EApp (prim BvAdd [bv 8, bv 8] (bv 8)) [lit8 1]))
+        m <-
+          normalized (pointwise "partial" (EApp (prim BvAdd [bv 8
+            , bv 8] (bv 8)) [lit8 1]))
         checkNormal m `shouldBe` Right ()
         drivers m `shouldBe` [Right (NPrim BvAdd [ALit (VBV 8 1), AVar "x"])]
       it "keeps bound names distinct from input names that source binders reuse" $ do
@@ -757,7 +800,8 @@ spec = do
         nmInputs m `shouldBe` [("x", bv 8)]
         fmap nbName (nmBinds m) `shouldNotContain` ["x"]
         drivers m `shouldBe` [Right (NPrim BvAdd [AVar "x", ALit (VBV 8 1)])]
-      it "names tuple components after their binder, with bounded names for deep nesting" $ do
+      it "names tuple components after their binder, with bounded names for deep \
+        \nesting" $ do
         shallow <- normalized (deepRegister 2)
         nmBinds shallow `shouldBe` [NBind "r_1_1" TBool (NReg (VBool False) (AVar "x"))]
         deep <- normalized (deepRegister 200)
@@ -768,7 +812,8 @@ spec = do
         m <- normalized (longBinder 1000 4)
         checkNormal m `shouldBe` Right ()
         length (nmBinds m) `shouldBe` 16
-        fmap (Text.take 8 . unName . nbName) (nmBinds m) `shouldSatisfy` all (== "vvvvvvvv")
+        fmap (Text.take 8 . unName . nbName) (nmBinds m) `shouldSatisfy` all (==
+          "vvvvvvvv")
         fmap (Text.length . unName . nbName) (nmBinds m) `shouldSatisfy` all (<= 80)
 
     describe "unsupported programs" $ do
@@ -778,30 +823,38 @@ spec = do
             f = ELam [("a", bv 8)] (EApp (EProj 0 pairIf) [var "a"])
         normalize (pointwise "fnif" f) `shouldFailWith` "function"
       it "rejects a function where an output port expects a scalar" $ do
-        let adder = ELam [("a", bv 8)] (ELam [("b", bv 8)] (bin8 BvAdd (var "a") (var "b")))
+        let adder =
+              ELam [("a", bv 8)] (ELam [("b", bv 8)] (bin8 BvAdd (var "a") (var "b")))
             fnTy = TFun (bv 8) (bv 8)
             body = ELam [("x", sig (bv 8))] (lift [bv 8] fnTy adder [var "x"])
-        normalize (withTop "fnout" (TFun (sig (bv 8)) (sig fnTy)) body) `shouldFailWith` "output"
+        normalize (withTop "fnout" (TFun (sig (bv 8)) (sig fnTy)) body)
+          `shouldFailWith` "output"
       it "rejects a reference to an unknown global" $
-        normalize (pointwise "unknown" (EGlobal "Test.missing")) `shouldFailWith` "unknown global"
+        normalize (pointwise "unknown" (EGlobal "Test.missing")) `shouldFailWith`
+          "unknown global"
       it "rejects a recursive global instead of looping" $ do
-        normalize (withTop "recglobal" sigFun8 (EGlobal "Test.top")) `shouldFailWith` "recursive"
-      it "reports the binding and the definitions an error comes from, innermost first" $ do
+        normalize (withTop "recglobal" sigFun8 (EGlobal "Test.top")) `shouldFailWith`
+          "recursive"
+      it "reports the binding and the definitions an error comes from, innermost \
+        \first" $ do
         let branch k = mkTuple [addK k, lit8 k]
             bad = ifE (eq8 (var "a") (lit8 0)) (branch 1) (branch 2)
             badTy = TProd [TFun (bv 8) (bv 8), bv 8]
             helper = ELam [("a", bv 8)] (ELet [Bind "bad" badTy bad] (var "a"))
             p = pointwise "where" (EGlobal "Test.helper")
-            r = normalize p {progDefs = Def "Test.helper" (TFun (bv 8) (bv 8)) helper : progDefs p}
+            r = normalize p {progDefs =
+              Def "Test.helper" (TFun (bv 8) (bv 8)) helper : progDefs p}
         r `shouldFailWith` "function"
         either (Just . errContext) (const Nothing) r
           `shouldBe` Just
-            ["in bind bad", "in def Test.helper", "in def Test.top", "in top entity where"]
+            ["in bind bad", "in def Test.helper", "in def Test.top"
+              , "in top entity where"]
 
     describe "determinism" $ do
       it "[norm-determinism] gives identical output for equal programs" $
         for_ (twoOutputs : fibProgram : [p | (_, p, _) <- examples]) $ \p -> do
-          let rebuilt = p {progDefs = [Def (defName d) (defTy d) (defBody d) | d <- progDefs p]}
+          let rebuilt = p {progDefs = [Def (defName d) (defTy d) (defBody d) | d <-
+                progDefs p]}
           normalize rebuilt `shouldBe` normalize p
       it "[norm-determinism] does not depend on the order of definitions" $ do
         let p = detectorProgram
@@ -824,7 +877,8 @@ spec = do
         shouldTripLimit (nestedChain 17) (tshow maxNormalBinds)
       it "[norm-limit] charges evaluation steps at a cost independent of name length" $
         shouldTripLimit (longNames 100000 24) "steps"
-      it "[norm-limit] lowers a deeply nested mealy state in time linear in its depth" $ do
+      it "[norm-limit] lowers a deeply nested mealy state in time linear in its \
+        \depth" $ do
         r <- timeout (10 * 1000000) (evaluate (normalize (deepMealy 50000)))
         case r of
           Nothing -> expectationFailure "normalize did not finish within 10 s"
@@ -832,16 +886,19 @@ spec = do
             m <- either (fail . show) pure result
             nmBinds m `shouldBe` []
             nmOutputs m `shouldBe` [NOutput "o" TBool (AVar "b")]
-      it "[norm-limit] names a tuple shared at every level in time linear in its depth" $ do
+      it "[norm-limit] names a tuple shared at every level in time linear in its \
+        \depth" $ do
         m <- normalizedWithin 10 (sharedTuple 40)
         nmBinds m `shouldBe` []
         nmOutputs m `shouldBe` [NOutput "o" TBool (AVar "b")]
-      it "[norm-limit] lowers an if over equal shared tuples in time linear in their depth" $ do
+      it "[norm-limit] lowers an if over equal shared tuples in time linear in their \
+        \depth" $ do
         m <- normalizedWithin 10 (sharedIf (var "c") 40)
         nmBinds m `shouldBe` []
         nmOutputs m `shouldBe` [NOutput "o" TBool (AVar "b")]
       it "[norm-limit] muxes tuples shared at every level once per distinct pair" $ do
-        m <- normalizedWithin 10 (sharedIf (EApp (prim BoolNot [TBool] TBool) [var "c"]) 40)
+        m <-
+          normalizedWithin 10 (sharedIf (EApp (prim BoolNot [TBool] TBool) [var "c"]) 40)
         checkNormal m `shouldBe` Right ()
         fmap nbRhs (nmBinds m)
           `shouldBe` [NPrim BoolNot [AVar "b"], NMux (AVar "b") (AVar "b") (AVar "u0")]

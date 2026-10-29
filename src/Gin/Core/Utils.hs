@@ -39,17 +39,17 @@ import Numeric.Natural (Natural)
 
 -- | Fail with an error from the given stage, without context. Works in
 -- @Either GinError@ and in every monad stacked on it.
-failAt :: (MonadError GinError m) => Stage -> Text -> m a
+failAt :: MonadError GinError m => Stage -> Text -> m a
 failAt stage = throwError . ginError stage
 
 -- | 'withContext' for any monad that can fail with a 'GinError'.
-withContextM :: (MonadError GinError m) => Text -> m a -> m a
+withContextM :: MonadError GinError m => Text -> m a -> m a
 withContextM ctx m = m `catchError` (liftEither . withContext ctx . Left)
 
 ----------------------------------------------------------------------
 -- Messages
 
-showT :: (Show a) => a -> Text
+showT :: Show a => a -> Text
 showT = Text.pack . show
 
 -- | Quote and escape a name from the IR for an error message.
@@ -74,5 +74,5 @@ punctuate sep = \case
 -- least one).
 hexDigits :: Natural -> Integer -> Text
 hexDigits w v = Text.justifyRight digits '0' (Text.pack (showHex (v `mod` (2 ^ w)) ""))
-  where
-    digits = max 1 (fromIntegral ((w + 3) `div` 4))
+ where
+  digits = max 1 (fromIntegral ((w + 3) `div` 4))

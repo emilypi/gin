@@ -21,4 +21,5 @@ import Language.Haskell.TH (DecsQ, Name)
 -- | A lens for every field of the record, named after the field with an
 -- @L@ suffix. A field that only some constructors have gets a traversal.
 makeFieldLenses :: Name -> DecsQ
-makeFieldLenses = makeLensesWith (lensRules & lensField .~ mappingNamer (\field -> [field <> "L"]))
+makeFieldLenses = makeLensesWith (lensRules & lensField .~ mappingNamer (\field ->
+  [field <> "L"]))

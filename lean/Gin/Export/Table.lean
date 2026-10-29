@@ -20,7 +20,9 @@ def withVectors (es : List Entry) (sources : List (String × VectorSource)) : Li
 def vectorSources : List (String × VectorSource) := [
   ("counter", .of1 Counter.counter enableRuns),
   ("detector", .of1 Detector.detector patternBits),
-  ("mac", .of2 Mac.mac largeOperands)]
+  ("mac", .of2 Mac.mac largeOperands),
+  ("muxadd", .of2 MuxAdd.muxadd),
+  ("memorymap", .of1 MemoryMap.memorymap)]
 
 /-- Every exportable circuit. -/
 def table : List Entry := withVectors entries vectorSources

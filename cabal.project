@@ -1,4 +1,8 @@
-packages: .
+packages: . ../yolk
+-- Companion API: emilypi/yolk at 6aa9b0228ba678dcecd3cf98d289126cce9d07ff.
+
+allow-newer: hkd:base
+jobs: 1
 
 tests: True
 

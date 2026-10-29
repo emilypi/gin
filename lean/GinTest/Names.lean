@@ -39,7 +39,8 @@ def spec (en : Signal System Bool) (t : Nat) : BitVec 8 :=
   BitVec.ofNat 8 ((List.range t).countP (fun i => en i))
 
 /-- Output type that drags the honest `spec` into the closure. -/
-@[reducible] def Out : Type := (fun (_ : Signal System Bool → Nat → BitVec 8) => BitVec 8) spec
+@[reducible] def Out : Type := (fun (_ : Signal System Bool → Nat → BitVec 8) => BitVec
+  8) spec
 
 /-- The specification actually proved; its last letter is Greek ϲ (U+03F2). -/
 def speϲ (_en : Signal System Bool) (_t : Nat) : Out := (0 : BitVec 8)
@@ -67,7 +68,8 @@ def «spec✝» (en : Signal System Bool) (t : Nat) : BitVec 8 :=
   BitVec.ofNat 8 ((List.range t).countP (fun i => en i))
 
 /-- Drags `Atk2.«spec✝»` in. -/
-@[reducible] def Out : Type := (fun (_ : Signal System Bool → Nat → BitVec 8) => BitVec 8) «spec✝»
+@[reducible] def Out : Type := (fun (_ : Signal System Bool → Nat → BitVec 8) => BitVec
+  8) «spec✝»
 
 end Atk2
 
@@ -165,7 +167,8 @@ def asciiCertificate (c : Gin.Export.Certificate) : Bool :=
 run_meta do
   let c ← Gin.Export.certify ``Atk.counter_correct ``Atk.counter [``Atk.counter]
   unless c.statement ==
-      "forall (en : Gin.Signal Gin.System Bool) (t : Nat), Atk.counter en t = Atk.<<spe\\u{03F2}>> en t" do
+      "forall (en : Gin.Signal Gin.System Bool) (t : Nat), Atk.counter en t = \
+        Atk.<<spe\\u{03F2}>> en t" do
     throwError "statement {c.statement}"
   let names := c.specDefinitions.map (·.name)
   unless names == ["Atk.spec", "Atk.Out", "Atk.<<spe\\u{03F2}>>"] do
@@ -176,7 +179,8 @@ run_meta do
 -- `"on\u{200B}"`, so the condition does not read as `"on" = "on"`.
 run_meta do
   let c ← Gin.Export.certify ``Atk5.counter_correct ``Atk5.counter [``Atk5.counter]
-  let some d := c.specDefinitions.find? (·.name == "Atk5.spec") | throwError "no Atk5.spec"
+  let some d := c.specDefinitions.find? (·.name == "Atk5.spec") | throwError
+    "no Atk5.spec"
   unless GinTest.containsStr d.body "(\"on\" = \"on\\u{200B}\")" do
     throwError "printed {d.body}"
   unless asciiCertificate c do throwError "the certificate is not ASCII"
@@ -186,7 +190,8 @@ run_meta do
 -- (U+202E) cannot reorder the text around it.
 #guard stringLit "on\u200B" == "\"on\\u{200B}\""
 #guard stringLit "a\u202Eb" == "\"a\\u{202E}b\""
-#guard stringLit "q\"b\\n\n\t\x7f~ " == "\"q\\u{0022}b\\u{005C}n\\u{000A}\\u{0009}\\u{007F}~ \""
+#guard stringLit "q\"b\\n\n\t\x7f~ " ==
+  "\"q\\u{0022}b\\u{005C}n\\u{000A}\\u{0009}\\u{007F}~ \""
 #guard stringLit "𝔹" == "\"\\u{1D539}\""
 run_meta do
   let s := text (expr (← getEnv) (mkStrLit "a\u202Eb"))
@@ -203,7 +208,8 @@ run_meta do
 -- [lean-names] The inaccessible name is refused, so the colliding
 -- trace is never written.
 run_meta do
-  GinTest.expectError (Gin.Export.certify ``Atk2.counter_correct ``Atk2.counter [``Atk2.counter])
+  GinTest.expectError (Gin.Export.certify ``Atk2.counter_correct ``Atk2.counter
+    [``Atk2.counter])
     ["cannot print", "inaccessible", "refusing to export"]
 
 -- [lean-names] Escaped components never collide with bare ones or with each
@@ -251,7 +257,8 @@ run_meta do
   unless refused (expr env (mkConst (Name.mkNum .anonymous 1))) "numeric" do
     throwError "root 1 printed"
   let zero := Name.mkNum .anonymous 0
-  unless refused (expr env (.sort (.succ (.param zero)))) "numeric" do throwError "Type 0 printed"
+  unless refused (expr env (.sort (.succ (.param zero)))) "numeric" do throwError
+    "Type 0 printed"
   unless refused (expr env (mkConst ``List [.param zero])) "numeric" do
     throwError "List with level parameter 0 printed"
   unless refused (decl env `A [zero] (.sort (.param zero)) none) "numeric" do
@@ -276,7 +283,8 @@ run_meta do
 -- entries (`some` is `Option.some` through `export Option (none some)`)
 run_meta do
   let env ← importModules #[{ module := `Init }] {} (loadExts := false)
-  unless (Gin.Export.Print.aliases env).contains `some do throwError "alias some not found"
+  unless (Gin.Export.Print.aliases env).contains `some do throwError
+    "alias some not found"
   unless text (expr env (mkConst `some)) == "@_root_.some" do throwError "some"
 
 -- [lean-names] A binder name cannot inject text: it is one escaped
@@ -286,12 +294,14 @@ run_meta do
   let nm := Name.mkStr2 "t) (h : False) (y" "✝"
   let e := Expr.lam nm (mkConst ``Nat) (.bvar 0) .default
   let s := text (expr env e)
-  let x := "<<t\\u{0029}\\u{0020}\\u{0028}h\\u{0020}\\u{003A}\\u{0020}False\\u{0029}\\u{0020}" ++
+  let x :=
+    "<<t\\u{0029}\\u{0020}\\u{0028}h\\u{0020}\\u{003A}\\u{0020}False\\u{0029}\\u{0020}" ++
     "\\u{0028}y\\u{002E}\\u{271D}>>"
   unless s == s!"fun ({x} : Nat) => {x}" do throwError "printed {s}"
   -- a binder named like a projection of a bound variable
   let nm2 := Name.mkStr2 "t" "succ"
-  let e2 := Expr.lam `t (mkConst ``Nat) (.lam nm2 (mkConst ``Nat) (.bvar 0) .default) .default
+  let e2 := Expr.lam `t (mkConst ``Nat) (.lam nm2 (mkConst ``Nat) (.bvar 0) .default)
+    .default
   let s2 := text (expr env e2)
   unless s2 == "fun (t : Nat) (<<t\\u{002E}succ>> : Nat) => <<t\\u{002E}succ>>" do
     throwError "printed {s2}"
@@ -300,15 +310,18 @@ run_meta do
 -- name, or a bound variable prints like a constant of its term.
 #guard (Gin.Export.checkDistinctNames ["A.s", "B.s", "A.s"]) matches .error _
 #guard (Gin.Export.checkDistinctNames ["A.s", "B.s"]) matches .ok _
-#guard (Gin.Export.Print.checkBound (Std.HashSet.ofList ["A", "A.s"]) #["x", "A"]) matches .error _
-#guard (Gin.Export.Print.checkBound (Std.HashSet.ofList ["A", "A.s"]) #["x"]) matches .ok _
+#guard (Gin.Export.Print.checkBound (Std.HashSet.ofList ["A", "A.s"]) #["x", "A"])
+  matches .error _
+#guard (Gin.Export.Print.checkBound (Std.HashSet.ofList ["A", "A.s"]) #["x"]) matches
+  .ok _
 
 -- [lean-names] `@` is decided by walking the type with definitions unfolded:
 -- `g : F` hides an implicit binder behind `F`, so `@g 5 3` keeps its `@`.
 run_meta do
   let ci ← getConstInfo ``useG
   let s := text (decl (← getEnv) ``useG [] ci.type ci.value?)
-  unless s == "GinTest.Names.useG : Nat := @GinTest.Names.g 5 3" do throwError "printed {s}"
+  unless s == "GinTest.Names.useG : Nat := @GinTest.Names.g 5 3" do throwError
+    "printed {s}"
 
 -- [lean-names] `@` is printed when a binder after the last argument is
 -- implicit (Lean would insert that argument), for an unapplied constant
@@ -340,5 +353,6 @@ run_meta do
   GinTest.expectError (Gin.Export.translateDef ``«c✝» (NameSet.empty.insert ``«c✝»))
     ["inaccessible"]
   GinTest.expectError
-    (Gin.Export.translateDef ``useInaccessible ((NameSet.empty.insert ``useInaccessible).insert ``«c✝»))
+    (Gin.Export.translateDef ``useInaccessible ((NameSet.empty.insert
+      ``useInaccessible).insert ``«c✝»))
     ["inaccessible"]

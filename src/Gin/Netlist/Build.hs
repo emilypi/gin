@@ -130,27 +130,27 @@ resetName = Ident "rst"
 -- lowercased.
 reserveInterface :: NModule -> Either GinError (Set Text)
 reserveInterface m = Map.keysSet <$> foldM reserve Map.empty interface
-  where
-    interface =
-      [ ("top name", nmName m)
-      , ("clock port", unIdent clockName)
-      , ("reset port", unIdent resetName)
-      ]
-        <> [("input port", unName n) | (n, _) <- nmInputs m]
-        <> [("output port", noName o) | o <- nmOutputs m]
-    -- Lowercased name -> what holds it, for the error message.
-    reserve :: Map Text Text -> (Text, Text) -> Either GinError (Map Text Text)
-    reserve held (what, name)
-      | not (isLegalIdent name) =
-          failAt StNetlist $
-            what <> " " <> quote name <> " is not a legal identifier: " <> legalRule
-      | Just holder <- Map.lookup (Text.toLower name) held =
-          failAt StNetlist $ what <> " " <> quote name <> " collides with the " <> holder
-      | otherwise = Right (Map.insert (Text.toLower name) (what <> " " <> quote name) held)
-    legalRule =
-      "it must match [a-z][a-z0-9_]*, have at most 64 characters, contain no \"__\", \
-      \not end in \"_\", not start with \"gin_\" and not be a reserved word of \
-      \Verilog, SystemVerilog, VHDL or the supported tools"
+ where
+  interface =
+    [ ("top name", nmName m)
+    , ("clock port", unIdent clockName)
+    , ("reset port", unIdent resetName)
+    ]
+      <> [("input port", unName n) | (n, _) <- nmInputs m]
+      <> [("output port", noName o) | o <- nmOutputs m]
+  -- Lowercased name -> what holds it, for the error message.
+  reserve :: Map Text Text -> (Text, Text) -> Either GinError (Map Text Text)
+  reserve held (what, name)
+    | not (isLegalIdent name) =
+        failAt StNetlist $
+          what <> " " <> quote name <> " is not a legal identifier: " <> legalRule
+    | Just holder <- Map.lookup (Text.toLower name) held =
+        failAt StNetlist $ what <> " " <> quote name <> " collides with the " <> holder
+    | otherwise = Right (Map.insert (Text.toLower name) (what <> " " <> quote name) held)
+  legalRule =
+    "it must match [a-z][a-z0-9_]*, have at most 64 characters, contain no \"__\", \
+    \not end in \"_\", not start with \"gin_\" and not be a reserved word of \
+    \Verilog, SystemVerilog, VHDL or the supported tools"
 
 -- | What each normal-form variable is called in the netlist, and its type.
 type Env = Map Name (Ident, Ty)
@@ -158,19 +158,21 @@ type Env = Map Name (Ident, Ty)
 -- | Inputs keep their (port) names; binds are named with 'sanitize', in
 -- order, against the reserved names and the binds named before them.
 nameBinds :: Set Text -> [(Name, Ty)] -> [NBind] -> Either GinError Env
-nameBinds reserved inputs binds = snd <$> foldM step (Taken reserved Map.empty, inputEnv) binds
-  where
-    inputEnv = Map.fromList [(n, (Ident (unName n), t)) | (n, t) <- inputs]
-    step (taken, env) b
-      | nbName b `Map.member` env =
+nameBinds reserved inputs binds =
+  snd <$> foldM step (Taken reserved Map.empty, inputEnv) binds
+ where
+  inputEnv = Map.fromList [(n, (Ident (unName n), t)) | (n, t) <- inputs]
+  step (taken, env) b
+    | nbName b `Map.member` env =
+        failAt StNetlist $
+          "bind name " <> quote (unName (nbName b)) <> " is already an input or a bind"
+    | otherwise = case claimName taken (unName (nbName b)) of
+        Just (i, taken') ->
+          taken' `seq` Right (taken', Map.insert (nbName b) (Ident i, nbTy b) env)
+        Nothing ->
           failAt StNetlist $
-            "bind name " <> quote (unName (nbName b)) <> " is already an input or a bind"
-      | otherwise = case claimName taken (unName (nbName b)) of
-          Just (i, taken') ->
-            taken' `seq` Right (taken', Map.insert (nbName b) (Ident i, nbTy b) env)
-          Nothing ->
-            failAt StNetlist $
-              "no free legal name for bind " <> quote (unName (nbName b)) <> " (too many names)"
+            "no free legal name for bind " <> quote (unName (nbName b))
+              <> " (too many names)"
 
 -- | @sanitize taken name@ turns @name@ into a legal identifier
 -- ('isLegalIdent') that differs, case-insensitively, from every name in
@@ -192,7 +194,8 @@ nameBinds reserved inputs binds = snd <$> foldM step (Taken reserved Map.empty, 
 -- name of step 4 is returned as it is.
 sanitize :: Set Text -> Text -> Text
 sanitize taken name =
-  maybe (baseName name) fst (claimName (Taken (Set.map Text.toLower taken) Map.empty) name)
+  maybe (baseName name) fst (claimName (Taken (Set.map Text.toLower taken) Map.empty)
+    name)
 
 -- | The names taken so far, lowercased, and for each base name (steps 1–4
 -- of 'sanitize') whose suffix search has run, the suffix to resume it at.
@@ -214,13 +217,14 @@ claimName (Taken names resume) name
   | otherwise = do
       k <- find free [start .. start + Set.size names]
       let candidate = suffixed k
-      Just (candidate, Taken (Set.insert candidate names) (Map.insert base (k + 1) resume))
-  where
-    base = baseName name
-    start = Map.findWithDefault 1 base resume
-    suffixed :: Int -> Text
-    suffixed k = base <> "_" <> showT k
-    free k = suffixed k `Set.notMember` names && isLegalIdent (suffixed k)
+      Just (candidate
+        , Taken (Set.insert candidate names) (Map.insert base (k + 1) resume))
+ where
+  base = baseName name
+  start = Map.findWithDefault 1 base resume
+  suffixed :: Int -> Text
+  suffixed k = base <> "_" <> showT k
+  free k = suffixed k `Set.notMember` names && isLegalIdent (suffixed k)
 
 -- | Steps 1–4 of 'sanitize'.
 baseName :: Text -> Text
@@ -232,22 +236,22 @@ baseName =
     . filter (not . Text.null)
     . Text.splitOn "_"
     . Text.map legalChar
-  where
-    legalChar c
-      | isAsciiUpper c = toLower c
-      | isAsciiLower c || isDigit c = c
-      | otherwise = '_'
-    avoidReserved t
-      | needsPrefix nonEmpty = "n_" <> nonEmpty
-      | otherwise = nonEmpty
-      where
-        nonEmpty = if Text.null t then "n" else t
-    needsPrefix t =
-      not (startsWithLetter t)
-        || t `Set.member` reservedWords
-        || t == "gin"
-        || "gin_" `Text.isPrefixOf` t
-    startsWithLetter = maybe False (isAsciiLower . fst) . Text.uncons
+ where
+  legalChar c
+    | isAsciiUpper c = toLower c
+    | isAsciiLower c || isDigit c = c
+    | otherwise = '_'
+  avoidReserved t
+    | needsPrefix nonEmpty = "n_" <> nonEmpty
+    | otherwise = nonEmpty
+   where
+    nonEmpty = if Text.null t then "n" else t
+  needsPrefix t =
+    not (startsWithLetter t)
+      || t `Set.member` reservedWords
+      || t == "gin"
+      || "gin_" `Text.isPrefixOf` t
+  startsWithLetter = maybe False (isAsciiLower . fst) . Text.uncons
 
 ----------------------------------------------------------------------
 -- Declarations
@@ -267,7 +271,8 @@ lowerBind env b = withContext ("in bind " <> quote (unName (nbName b))) $ do
   net <- Net <$> (fst <$> resolve env (nbName b)) <*> hwType (nbTy b)
   case nbRhs b of
     NPrim op args -> DAssign net <$> lowerPrim env op args
-    NMux c t e -> DAssign net <$> (HMux <$> operand env c <*> operand env t <*> operand env e)
+    NMux c t e ->
+      DAssign net <$> (HMux <$> operand env c <*> operand env t <*> operand env e)
     NReg v a -> DReg net <$> literal v <*> operand env a
     NAtom a -> DAssign net . HOperand <$> operand env a
 
@@ -300,27 +305,29 @@ lowerPrim env op args = case (op, args) of
   _
     | isCombinational op ->
         failAt StNetlist $
-          primName op <> " takes " <> operands (primArity op) <> ", got " <> showT (length args)
+          primName op <> " takes " <> operands (primArity op) <> ", got "
+            <> showT (length args)
     | otherwise -> failAt StNetlist (primName op <> " is not a combinational primitive")
-  where
-    opnd = operand env
-    operands = \case
-      1 -> "1 operand"
-      k -> showT k <> " operands"
-    bin o a b = HBin o <$> opnd a <*> opnd b
-    un o a = HUn o <$> opnd a
-    shift mk k a = do
-      w <- vectorWidth env a
-      if k < w then mk k <$> opnd a else Right (HOperand (OConst (HLitVec w 0)))
-    extract hi lo a = do
-      w <- vectorWidth env a
-      when (hi < lo || hi >= w) . failAt StNetlist $
-        "bv.extract " <> showT hi <> " " <> showT lo <> " of a " <> showT w <> "-bit operand"
-      let width = hi - lo + 1
-      case a of
-        ALit (VBV _ v) ->
-          Right (HOperand (OConst (HLitVec width ((v `div` 2 ^ lo) `mod` 2 ^ width))))
-        _ -> HSlice hi lo <$> opnd a
+ where
+  opnd = operand env
+  operands = \case
+    1 -> "1 operand"
+    k -> showT k <> " operands"
+  bin o a b = HBin o <$> opnd a <*> opnd b
+  un o a = HUn o <$> opnd a
+  shift mk k a = do
+    w <- vectorWidth env a
+    if k < w then mk k <$> opnd a else Right (HOperand (OConst (HLitVec w 0)))
+  extract hi lo a = do
+    w <- vectorWidth env a
+    when (hi < lo || hi >= w) . failAt StNetlist $
+      "bv.extract " <> showT hi <> " " <> showT lo <> " of a " <> showT w
+        <> "-bit operand"
+    let width = hi - lo + 1
+    case a of
+      ALit (VBV _ v) ->
+        Right (HOperand (OConst (HLitVec width ((v `div` 2 ^ lo) `mod` 2 ^ width))))
+      _ -> HSlice hi lo <$> opnd a
 
 operand :: Env -> Atom -> Either GinError Operand
 operand env = \case
@@ -333,14 +340,17 @@ vectorWidth env a =
   atomTy >>= \case
     TBitVec w -> Right w
     t -> failAt StNetlist ("expected a bit-vector operand, got " <> showT t)
-  where
-    atomTy = case a of
-      AVar n -> snd <$> resolve env n
-      ALit v -> Right (valueTy v)
+ where
+  atomTy = case a of
+    AVar n -> snd <$> resolve env n
+    ALit v -> Right (valueTy v)
 
 resolve :: Env -> Name -> Either GinError (Ident, Ty)
 resolve env n =
-  maybe (failAt StNetlist ("unknown variable " <> quote (unName n))) Right (Map.lookup n env)
+  maybe
+    (failAt StNetlist ("unknown variable " <> quote (unName n)))
+    Right
+    (Map.lookup n env)
 
 literal :: Value -> Either GinError HLit
 literal v
@@ -363,24 +373,25 @@ hwType t = case t of
 -- are kept.
 dropUnread :: [Output] -> [Decl] -> [Decl]
 dropUnread outputs decls = filter ((`Set.notMember` dead) . netName . declNet) decls
-  where
-    byName = Map.fromList [(netName (declNet d), d) | d <- decls]
-    -- How often each net is read, by outputs and by declarations.
-    reads0 =
-      Map.fromListWith
-        (+)
-        [(i, 1 :: Int) | i <- concatMap (refs . outDriver) outputs <> concatMap declReads decls]
-    unread counts i = Map.findWithDefault 0 i counts == 0
-    dead = sweep reads0 Set.empty (filter (unread reads0) (Map.keys byName))
-    sweep counts done = \case
-      [] -> done
-      i : rest
-        | i `Set.member` done -> sweep counts done rest
-        | otherwise ->
-            let rs = maybe [] declReads (Map.lookup i byName)
-                counts' = foldl' (flip (Map.adjust (subtract 1))) counts rs
-                next = filter (\r -> Map.member r byName && unread counts' r) rs
-             in sweep counts' (Set.insert i done) (next <> rest)
+ where
+  byName = Map.fromList [(netName (declNet d), d) | d <- decls]
+  -- How often each net is read, by outputs and by declarations.
+  reads0 =
+    Map.fromListWith
+      (+)
+      [(i, 1 :: Int) | i <-
+        concatMap (refs . outDriver) outputs <> concatMap declReads decls]
+  unread counts i = Map.findWithDefault 0 i counts == 0
+  dead = sweep reads0 Set.empty (filter (unread reads0) (Map.keys byName))
+  sweep counts done = \case
+    [] -> done
+    i : rest
+      | i `Set.member` done -> sweep counts done rest
+      | otherwise ->
+          let rs = maybe [] declReads (Map.lookup i byName)
+              counts' = foldl' (flip (Map.adjust (subtract 1))) counts rs
+              next = filter (\r -> Map.member r byName && unread counts' r) rs
+           in sweep counts' (Set.insert i done) (next <> rest)
 
 declReads :: Decl -> [Ident]
 declReads = \case
@@ -421,8 +432,8 @@ certificateHeader m =
            , "validation: run gin validate with the exported vectors"
            ]
     )
-  where
-    cert = nmCertificate m
+ where
+  cert = nmCertificate m
 
 -- | The package version, as in @gin.cabal@.
 ginVersion :: Text

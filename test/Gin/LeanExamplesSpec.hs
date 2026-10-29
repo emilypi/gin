@@ -113,7 +113,9 @@ vectorsSpec ex = do
   it "[lean-vectors-match] simulateCore reproduces the exported vectors exactly" $
     withExported ex $ \p vs ->
       runCore p (inputRows vs) `shouldBe` Right (outputRows vs)
-  it "[lean-vectors-match] simulateNormal . normalize reproduces the exported vectors exactly" $
+  it
+    "[lean-vectors-match] simulateNormal . normalize reproduces the exported vectors \
+      \exactly" $
     withExported ex $ \p vs ->
       stage "normalizing" (normalize p) $ \m -> do
         checkNormal m `shouldBe` Right ()
@@ -137,20 +139,24 @@ fixtureSpec ex = do
   it "[lean-fixture-agreement] the fixture reproduces the exported vectors" $
     withExported ex $ \_ vs ->
       runCore fixture (inputRows vs) `shouldBe` Right (outputRows vs)
-  where
-    fixture = exFixture ex
-    fixtureVs = exFixtureVectors ex
+ where
+  fixture = exFixture ex
+  fixtureVs = exFixtureVectors ex
 
 -- | @gin validate@ on the committed files, with the HDL tools of the
 -- process's @PATH@, as a user runs it.
 validateSpec :: LeanExample -> Spec
 validateSpec ex = do
-  itWithTools hdlTools "[lean-e2e] gin validate passes every check on all three targets" $ do
+  itWithTools hdlTools "[lean-e2e] gin validate passes every check on all three \
+    \targets" $ do
     r <- gin ["validate", programFile ex, "--vectors", vectorsFile ex]
     r `shouldExit` ExitSuccess
-    checkLines r `shouldBe` (["sim-core: PASS", "sim-normal: PASS"] <> concatMap passes targets)
+    checkLines r
+      `shouldBe` (["sim-core: PASS", "sim-normal: PASS"] <> concatMap passes targets)
     runErr r `shouldBe` ""
-  itWithTools hdlTools "[lean-e2e] gin validate fails every simulation when an output is changed" $
+  itWithTools
+    hdlTools
+    "[lean-e2e] gin validate fails every simulation when an output is changed" $
     withExported ex $ \_ vs -> case changeLastOutput vs of
       Nothing -> expectationFailure "the vectors have no output to change"
       Just (changed, mismatch) -> withTempDir $ \dir -> do
@@ -164,14 +170,15 @@ validateSpec ex = do
             normal `shouldBe` "sim-normal: FAIL " <> mismatch
             -- The designs still lint; every testbench reports the change.
             fmap (Text.unwords . take 2 . Text.words) hdl
-              `shouldBe` concatMap (\t -> [check t "lint" "PASS", check t "run" "FAIL"]) targets
+              `shouldBe` concatMap (\t ->
+                [check t "lint" "PASS", check t "run" "FAIL"]) targets
           ls -> expectationFailure ("expected one line per check, got " <> show ls)
         -- The failing runs' output goes to standard error: one mismatch each.
         length (filter (mismatchMarker `Text.isInfixOf`) (Text.lines (runErr r)))
           `shouldBe` length targets
-  where
-    passes t = [check t "lint" "PASS", check t "run" "PASS"]
-    check t what verdict = checkName t what <> ": " <> verdict
+ where
+  passes t = [check t "lint" "PASS", check t "run" "PASS"]
+  check t what verdict = checkName t what <> ": " <> verdict
 
 ----------------------------------------------------------------------
 -- The examples
@@ -201,14 +208,14 @@ withExported ex k = do
   programJson <- readBytes (programFile ex)
   vectorsJson <- readBytes (vectorsFile ex)
   stage ("loading " <> programFile ex) (load programJson vectorsJson) (uncurry k)
-  where
-    readBytes path = LazyByteString.fromStrict <$> ByteString.readFile path
-    load programJson vectorsJson = do
-      p <- decodeProgram programJson
-      checkProgram p
-      checkCertificate defaultPolicy (progCertificate p)
-      vs <- decodeVectors vectorsJson
-      pure (p, vs)
+ where
+  readBytes path = LazyByteString.fromStrict <$> ByteString.readFile path
+  load programJson vectorsJson = do
+    p <- decodeProgram programJson
+    checkProgram p
+    checkCertificate defaultPolicy (progCertificate p)
+    vs <- decodeVectors vectorsJson
+    pure (p, vs)
 
 -- | Continue with a stage's result, or fail with its rendered error.
 stage :: String -> Either GinError a -> (a -> Expectation) -> Expectation
@@ -297,7 +304,8 @@ capture :: Handle -> FilePath -> IO a -> IO (a, Text)
 capture h file act = do
   hFlush h
   a <- withBinaryFile file WriteMode $ \fh ->
-    bracket (hDuplicate h) (\saved -> hFlush h >> hDuplicateTo saved h >> hClose saved) $ \_ ->
+    bracket (hDuplicate h) (\saved ->
+      hFlush h >> hDuplicateTo saved h >> hClose saved) $ \_ ->
       hDuplicateTo fh h >> act
   (,) a . Text.decodeUtf8Lenient <$> ByteString.readFile file
 
@@ -310,11 +318,11 @@ checkName t what = targetName t <> "-" <> what
 -- found, may come before or between them and are skipped.
 checkLines :: Run -> [Text]
 checkLines = filter isCheck . Text.lines . runOut
-  where
-    isCheck l = any (\c -> (c <> ": ") `Text.isPrefixOf` l) checks
-    checks =
-      ["sim-core", "sim-normal"]
-        <> [checkName t what | t <- targets, what <- ["lint", "run"]]
+ where
+  isCheck l = any (\c -> (c <> ": ") `Text.isPrefixOf` l) checks
+  checks =
+    ["sim-core", "sim-normal"]
+      <> [checkName t what | t <- targets, what <- ["lint", "run"]]
 
 shouldExit :: Run -> ExitCode -> Expectation
 shouldExit r code =

@@ -105,31 +105,34 @@ renderDesign dialect m =
       <> [");"]
       <> section (concatMap declaration (modDecls m))
       <> section (concatMap statement (modDecls m))
-      <> section [indent ("assign " <> name n <> " = " <> operand o <> ";") | Output n o <- outs]
+      <> section [indent ("assign " <> name n <> " = " <> operand o
+        <> ";") | Output n o <- outs]
       <> ["endmodule"]
-  where
-    nets = moduleNets m
-    unread = notFullyRead m
-    name = unIdent . netName
-    outs = modOutputs m
-    portKeyword = case dialect of
-      Verilog2005 -> "wire "
-      SystemVerilog2017 -> "logic "
-    ports =
-      [("input", Net (modClock m) HBit), ("input", Net (modReset m) HBit)]
-        <> fmap ("input",) (modInputs m)
-        <> [("output", outNet o) | o <- outs]
-    portIdents = fmap (netName . snd) ports
-    portLines = [dir <> " " <> portKeyword <> typeRange (netType n) <> name n | (dir, n) <- ports]
-    declaration d =
-      suppressIf (netName n) (indent (keyword <> typeRange (netType n) <> name n <> ";"))
-      where
-        n = declNet d
-        keyword = case (dialect, d) of
-          (SystemVerilog2017, _) -> "logic "
-          (Verilog2005, DAssign {}) -> "wire "
-          (Verilog2005, DReg {}) -> "reg "
-    statement = fmap indent . \case
+ where
+  nets = moduleNets m
+  unread = notFullyRead m
+  name = unIdent . netName
+  outs = modOutputs m
+  portKeyword = case dialect of
+    Verilog2005 -> "wire "
+    SystemVerilog2017 -> "logic "
+  ports =
+    [("input", Net (modClock m) HBit), ("input", Net (modReset m) HBit)]
+      <> fmap ("input",) (modInputs m)
+      <> [("output", outNet o) | o <- outs]
+  portIdents = fmap (netName . snd) ports
+  portLines =
+    [dir <> " " <> portKeyword <> typeRange (netType n) <> name n | (dir, n) <- ports]
+  declaration d =
+    suppressIf (netName n) (indent (keyword <> typeRange (netType n) <> name n <> ";"))
+   where
+    n = declNet d
+    keyword = case (dialect, d) of
+      (SystemVerilog2017, _) -> "logic "
+      (Verilog2005, DAssign {}) -> "wire "
+      (Verilog2005, DReg {}) -> "reg "
+  statement =
+    fmap indent . \case
       DAssign n e ->
         let printed = printedExpr e
          in comparisonPragmas
@@ -144,16 +147,16 @@ renderDesign dialect m =
         , indent "end"
         , "end"
         ]
-    always = case dialect of
-      Verilog2005 -> "always"
-      SystemVerilog2017 -> "always_ff"
-    suppressIf i l
-      | i `Set.member` unread =
-          [ indent "/* verilator lint_off UNUSEDSIGNAL */"
-          , l
-          , indent "/* verilator lint_on UNUSEDSIGNAL */"
-          ]
-      | otherwise = [l]
+  always = case dialect of
+    Verilog2005 -> "always"
+    SystemVerilog2017 -> "always_ff"
+  suppressIf i l
+    | i `Set.member` unread =
+        [ indent "/* verilator lint_off UNUSEDSIGNAL */"
+        , l
+        , indent "/* verilator lint_on UNUSEDSIGNAL */"
+        ]
+    | otherwise = [l]
 
 -- | Precede a non-empty block with a blank line.
 section :: [Text] -> [Text]
@@ -177,13 +180,13 @@ printedExpr = \case
   HBin BUle _ (OConst l) | isAllOnes l -> decided True
   HBin BUlt (OConst l) _ | isAllOnes l -> decided False
   e -> e
-  where
-    decided = HOperand . OConst . HLitBit
-    -- The value 'literal' prints, which is reduced modulo 2^width.
-    value l = litBits l `mod` (2 ^ width l)
-    width = hwWidth . hlitType
-    isZero l = value l == 0
-    isAllOnes l = value l == 2 ^ width l - 1
+ where
+  decided = HOperand . OConst . HLitBit
+  -- The value 'literal' prints, which is reduced modulo 2^width.
+  value l = litBits l `mod` (2 ^ width l)
+  width = hwWidth . hlitType
+  isZero l = value l == 0
+  isAllOnes l = value l == 2 ^ width l - 1
 
 -- | Wrap the statement printing the given expression, when that is an
 -- unsigned comparison, in pragmas turning off Verilator's warnings for a
@@ -191,12 +194,13 @@ printedExpr = \case
 -- pragmas cover only that statement; every other one is unchanged.
 comparisonPragmas :: HExpr -> [Text] -> [Text]
 comparisonPragmas e ls = case e of
-  HBin op _ _ | op `elem` [BUlt, BUle] -> fmap (pragma "off") codes <> ls <> fmap (pragma "on") back
+  HBin op _ _ | op `elem` [BUlt, BUle] ->
+    fmap (pragma "off") codes <> ls <> fmap (pragma "on") back
   _ -> ls
-  where
-    codes = ["UNSIGNED", "CMPCONST"]
-    back = reverse codes
-    pragma onOff code = "/* verilator lint_" <> onOff <> " " <> code <> " */"
+ where
+  codes = ["UNSIGNED", "CMPCONST"]
+  back = reverse codes
+  pragma onOff code = "/* verilator lint_" <> onOff <> " " <> code <> " */"
 
 -- | The right-hand side of a continuous assignment.
 expression :: Map Ident HwType -> HExpr -> Text
@@ -215,11 +219,11 @@ expression nets = \case
     Just n | w > n -> "{{" <> showT (w - n) <> "{1'b0}}, " <> operand o <> "}"
     _ -> operand o
   HBitToVec o -> operand o
-  where
-    operandWidth = \case
-      ORef i -> hwWidth <$> Map.lookup i nets
-      OConst l -> Just (hwWidth (hlitType l))
-    amount k = sizedHex (bitLength k) (toInteger k)
+ where
+  operandWidth = \case
+    ORef i -> hwWidth <$> Map.lookup i nets
+    OConst l -> Just (hwWidth (hlitType l))
+  amount k = sizedHex (bitLength k) (toInteger k)
 
 unOp :: UnOp -> Text
 unOp = \case
@@ -246,8 +250,8 @@ litBits = \case
 -- | Number of bits needed to write the value, at least one.
 bitLength :: Natural -> Natural
 bitLength = go 1
-  where
-    go acc k = if k < 2 then acc else go (acc + 1) (k `div` 2)
+ where
+  go acc k = if k < 2 then acc else go (acc + 1) (k `div` 2)
 
 -- | Truncated subtraction.
 minus :: Natural -> Natural -> Natural
@@ -264,29 +268,31 @@ notFullyRead m =
     [i | not (any isRegister (modDecls m)), i <- [modClock m, modReset m]]
       <> [ netName n
          | n <- modInputs m <> fmap declNet (modDecls m)
-         , not (covered (hwWidth (netType n)) (Map.findWithDefault [] (netName n) bitReads))
+         , not (covered (hwWidth (netType n)) (Map.findWithDefault [] (netName n)
+           bitReads))
          ]
-  where
-    isRegister = \case
-      DReg {} -> True
-      DAssign {} -> False
-    bitReads :: Map Ident [Maybe (Natural, Natural)]
-    bitReads =
-      Map.fromListWith
-        (<>)
-        [ (i, [r])
-        | (i, r) <- concatMap declReads (modDecls m) <> concatMap (whole . outDriver) (modOutputs m)
-        ]
-    declReads = \case
-      DReg _ _ o -> whole o
-      DAssign _ e -> case printedExpr e of
-        HSlice hi lo (ORef i) -> [(i, Just (lo, hi))]
-        printed -> concatMap whole (exprOperands printed)
-    whole = \case
-      ORef i -> [(i, Nothing)]
-      OConst _ -> []
-    covered w rs = any isNothing rs || cover w 0 (sortOn fst (catMaybes rs))
-    cover w next = \case
-      _ | next >= w -> True
-      [] -> False
-      (lo, hi) : rest -> lo <= next && cover w (max next (hi + 1)) rest
+ where
+  isRegister = \case
+    DReg {} -> True
+    DAssign {} -> False
+  bitReads :: Map Ident [Maybe (Natural, Natural)]
+  bitReads =
+    Map.fromListWith
+      (<>)
+      [ (i, [r])
+      | (i, r) <-
+        concatMap declReads (modDecls m) <> concatMap (whole . outDriver) (modOutputs m)
+      ]
+  declReads = \case
+    DReg _ _ o -> whole o
+    DAssign _ e -> case printedExpr e of
+      HSlice hi lo (ORef i) -> [(i, Just (lo, hi))]
+      printed -> concatMap whole (exprOperands printed)
+  whole = \case
+    ORef i -> [(i, Nothing)]
+    OConst _ -> []
+  covered w rs = any isNothing rs || cover w 0 (sortOn fst (catMaybes rs))
+  cover w next = \case
+    _ | next >= w -> True
+    [] -> False
+    (lo, hi) : rest -> lo <= next && cover w (max next (hi + 1)) rest

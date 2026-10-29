@@ -28,7 +28,8 @@ def oddBeq (x y : Signal System (BitVec 8)) : Signal System Bool :=
 
 /-- `<` at a hand-written order must not be read as `bv.ult`. -/
 def oddLt (x y : Signal System (BitVec 8)) : Signal System Bool :=
-  lift2 (fun a b => @decide (@LT.lt _ ⟨fun a b => b.toNat < a.toNat⟩ a b) (Nat.decLt _ _)) x y
+  lift2 (fun a b => @decide (@LT.lt _ ⟨fun a b => b.toNat < a.toNat⟩ a b) (Nat.decLt _
+    _)) x y
 
 /-- A shift by a signal amount. -/
 def variableShift (x y : Signal System (BitVec 8)) : Signal System (BitVec 8) :=
@@ -40,10 +41,12 @@ def repeatInc : Nat → BitVec 8 → BitVec 8
   | n + 1, x => repeatInc n (x + 1)
 
 /-- Uses the recursive helper. -/
-def usesRecursion (x : Signal System (BitVec 8)) : Signal System (BitVec 8) := lift (repeatInc 3) x
+def usesRecursion (x : Signal System (BitVec 8)) : Signal System (BitVec 8) := lift
+  (repeatInc 3) x
 
 /-- A helper defined by well-founded recursion. -/
-def incLog (n : Nat) (x : BitVec 8) : BitVec 8 := if n < 2 then x else incLog (n / 2) (x + 1)
+def incLog (n : Nat) (x : BitVec 8) : BitVec 8 := if n < 2 then x else incLog (n / 2)
+  (x + 1)
 termination_by n
 decreasing_by omega
 
@@ -62,7 +65,8 @@ def boolMatch (x : Signal System Bool) : Signal System (BitVec 8) :=
   lift (fun b => match b with | true => 1 | false => 0) x
 
 /-- A nested pair pattern. -/
-def nestedPattern (x : Signal System (BitVec 8 × BitVec 8 × BitVec 8)) : Signal System (BitVec 8) :=
+def nestedPattern (x : Signal System (BitVec 8 × BitVec 8 × BitVec 8)) : Signal System
+  (BitVec 8) :=
   lift (fun p => let (a, b, c) := p; a + b + c) x
 
 /-- A register whose initial value is computed. -/
@@ -112,7 +116,8 @@ def ofFin (x : Signal System (BitVec 8)) : Signal System (BitVec 8) :=
 def Fast : Domain := ⟨"System", 5000⟩
 
 /-- Mixes two clock domains. -/
-def mixedDomains (x : Signal System Bool) (_y : Signal Fast Bool) : Signal System Bool := x
+def mixedDomains (x : Signal System Bool) (_y : Signal Fast Bool) : Signal System Bool
+  := x
 
 /-- A 100 Hz clock: its period in picoseconds is larger than any number gin
 reads. -/
@@ -140,12 +145,14 @@ run_meta do
   expectError (tr ``variableShift) ["HShiftLeft.hShiftLeft"]
   expectError (tr ``usesRecursion) ["repeatInc"]
   expectError (tr ``usesWf) ["incLog"]
-  expectError (tr ``computedShift) ["shift amount GinTest.Unsupported.log2 8 is not a numeral"]
+  expectError (tr ``computedShift)
+    ["shift amount GinTest.Unsupported.log2 8 is not a numeral"]
   expectError (tr ``boolMatch) ["pattern match", "boolMatch.match_1"]
   expectError (tr ``nestedPattern) ["pattern match", "nestedPattern.match_1"]
   expectError (tr ``computedInit) ["must be literals"]
   expectError (tr ``dependentIf) ["dependent if-then-else"]
-  expectError (tr ``unappliedFunIf) ["unappliedFunIf", "if-then-else", "incByte", "only Bool, BitVec"]
+  expectError (tr ``unappliedFunIf) ["unappliedFunIf", "if-then-else", "incByte",
+    "only Bool, BitVec"]
   expectError (tr ``signalIf) ["if-then-else", "Signal", "between signals"]
   expectError (tr ``usesOpaque) ["GinTest.Unsupported.mystery", "no definition"]
   expectError (tr ``tooWide) ["width 5000"]
@@ -153,10 +160,12 @@ run_meta do
   expectError (tr ``withOption) ["unsupported type Option"]
   expectError (tr ``badExtract) ["extractLsb 9 6"]
   expectError (tr ``ofFin) ["BitVec.ofFin"]
-  expectError (translateTop (testEntry ``mixedDomains ["x", "y"] ["o"] (.of2 mixedDomains)))
+  expectError (translateTop (testEntry ``mixedDomains ["x", "y"] ["o"] (.of2
+    mixedDomains)))
     ["mixes clock domains"]
   expectError (translateTop (testEntry ``slowClock ["x"] ["o"] (.of1 slowClock)))
-    ["GinTest.Unsupported.Slow", "\"Slow\"", "period of 10000000000 ps", "at most 2147483647 ps"]
+    ["GinTest.Unsupported.Slow", "\"Slow\"", "period of 10000000000 ps",
+      "at most 2147483647 ps"]
   -- the bound itself is accepted
   let (top, _) ← translateTop (testEntry ``slowestClock ["x"] ["o"] (.of1 slowestClock))
   unless top.domain == { name := "Slowest", periodPs := 2147483647 } do

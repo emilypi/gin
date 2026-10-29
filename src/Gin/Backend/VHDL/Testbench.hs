@@ -72,16 +72,17 @@ import Numeric.Natural (Natural)
 -- (bidirectional overrides, NUL, …) becomes U+FFFD. Empty lines become a
 -- bare @--@.
 headerComments :: [Text] -> [Text]
-headerComments = fmap comment . concatMap (Text.split isLineEnd . Text.replace "\r\n" "\n")
-  where
-    comment l
-      | Text.null l = "--"
-      | otherwise = "-- " <> Text.map scrub l
-    isLineEnd c = c `elem` ("\n\r\v\f\x85\x2028\x2029" :: String)
-    scrub c
-      | c == '\t' = ' '
-      | generalCategory c `elem` [Control, Format] = '\xFFFD'
-      | otherwise = c
+headerComments =
+  fmap comment . concatMap (Text.split isLineEnd . Text.replace "\r\n" "\n")
+ where
+  comment l
+    | Text.null l = "--"
+    | otherwise = "-- " <> Text.map scrub l
+  isLineEnd c = c `elem` ("\n\r\v\f\x85\x2028\x2029" :: String)
+  scrub c
+    | c == '\t' = ' '
+    | generalCategory c `elem` [Control, Format] = '\xFFFD'
+    | otherwise = c
 
 -- | The libraries and packages every generated file uses. Only
 -- @ieee.std_logic_1164@ and @ieee.numeric_std@ are referenced, whose names
@@ -115,9 +116,9 @@ bitChar b = if b then "'1'" else "'0'"
 -- | Exactly @w@ binary digits of @x mod 2^w@, most significant first.
 binaryDigits :: Natural -> Integer -> Text
 binaryDigits w x = Text.pack [if testBit v i then '1' else '0' | i <- [n - 1, n - 2 .. 0]]
-  where
-    n = fromIntegral w :: Int
-    v = x `mod` 2 ^ w
+ where
+  n = fromIntegral w :: Int
+  v = x `mod` 2 ^ w
 
 ----------------------------------------------------------------------
 -- Testbench
@@ -153,9 +154,9 @@ renderTestbench m vs =
       <> ["begin"]
       <> indent (instantiation m <> [""] <> stimulus m (length rows) (malformed m rows))
       <> ["end architecture gin_tb;"]
-  where
-    tb = unIdent (modName m) <> "_tb"
-    rows = vecCycles vs
+ where
+  tb = unIdent (modName m) <> "_tb"
+  rows = vecCycles vs
 
 indent :: [Text] -> [Text]
 indent = fmap (\l -> if Text.null l then l else "  " <> l)
@@ -181,13 +182,13 @@ table m rows =
     <> ["constant gin_vectors : gin_rows(0 to " <> showT (length rows - 1) <> ") := ("]
     <> indent (punctuate "," (zipWith row [0 :: Int ..] rows))
     <> [");", ""]
-  where
-    fields = modInputs m <> outputNets m
-    row t c =
-      showT t <> " => (" <> Text.intercalate ", " (entries c) <> ")"
-    entries c = cells (modInputs m) (cycInputs c) <> cells (outputNets m) (cycOutputs c)
-    cells ns vals = zipWith cell ns (vals <> repeat (VBool False))
-    cell n v = name n <> " => " <> dataLiteral (netType n) v
+ where
+  fields = modInputs m <> outputNets m
+  row t c =
+    showT t <> " => (" <> Text.intercalate ", " (entries c) <> ")"
+  entries c = cells (modInputs m) (cycInputs c) <> cells (outputNets m) (cycOutputs c)
+  cells ns vals = zipWith cell ns (vals <> repeat (VBool False))
+  cell n v = name n <> " => " <> dataLiteral (netType n) v
 
 -- | A table entry: @'0'@ / @'1'@ for 'HBit', an exact-width hex bit-string
 -- @\<w\>x"\<hex\>"@ for 'HVec'. Entries only appear in named record
@@ -196,15 +197,15 @@ dataLiteral :: HwType -> Value -> Text
 dataLiteral ty v = case ty of
   HBit -> bitChar (asBit v)
   HVec w -> showT w <> "x\"" <> Text.toUpper (hexDigits w (asInteger v)) <> "\""
-  where
-    asBit = \case
-      VBool b -> b
-      VBV _ x -> odd x
-      VTuple _ -> False
-    asInteger = \case
-      VBool b -> if b then 1 else 0
-      VBV _ x -> x
-      VTuple _ -> 0
+ where
+  asBit = \case
+    VBool b -> b
+    VBV _ x -> odd x
+    VTuple _ -> False
+  asInteger = \case
+    VBool b -> if b then 1 else 0
+    VBV _ x -> x
+    VTuple _ -> 0
 
 -- | Clock and reset start low and high; inputs start at zero; outputs are
 -- left to the design.
@@ -215,9 +216,9 @@ signalDecls m =
   ]
     <> [decl (netName n) (netType n) (Just (zero (netType n))) | n <- modInputs m]
     <> [decl (netName n) (netType n) Nothing | n <- outputNets m]
-  where
-    decl i ty initial =
-      "signal " <> sig i <> " : " <> vhdlType ty <> maybe "" (" := " <>) initial <> ";"
+ where
+  decl i ty initial =
+    "signal " <> sig i <> " : " <> vhdlType ty <> maybe "" (" := " <>) initial <> ";"
 
 zero :: HwType -> Text
 zero = \case
@@ -229,9 +230,9 @@ instantiation m =
   ["gin_dut : entity work." <> unIdent (modName m), "  port map ("]
     <> fmap ("    " <>) (punctuate "," [unIdent i <> " => " <> sig i | i <- formals])
     <> ["  );"]
-  where
-    formals =
-      [modClock m, modReset m] <> fmap netName (modInputs m <> outputNets m)
+ where
+  formals =
+    [modClock m, modReset m] <> fmap netName (modInputs m <> outputNets m)
 
 -- | The number of row values that do not fit the module's ports (missing,
 -- ill-typed or extra, among inputs and outputs) and the first cycle
@@ -240,16 +241,17 @@ malformed :: Module -> [Cycle] -> Maybe (Int, Int)
 malformed m rows = case filter ((> 0) . snd) (zip [0 ..] counts) of
   [] -> Nothing
   (first, _) : _ -> Just (sum counts, first)
-  where
-    counts = fmap misfits rows
-    misfits c = mismatched (modInputs m) (cycInputs c) + mismatched (outputNets m) (cycOutputs c)
-    mismatched ns vals =
-      length (filter not (zipWith fits (fmap netType ns) vals))
-        + abs (length ns - length vals)
-    fits ty = \case
-      VBool _ -> ty == HBit
-      VBV w x -> ty == HVec w && x >= 0 && x < 2 ^ w
-      VTuple _ -> False
+ where
+  counts = fmap misfits rows
+  misfits c =
+    mismatched (modInputs m) (cycInputs c) + mismatched (outputNets m) (cycOutputs c)
+  mismatched ns vals =
+    length (filter not (zipWith fits (fmap netType ns) vals))
+      + abs (length ns - length vals)
+  fits ty = \case
+    VBool _ -> ty == HBit
+    VBV w x -> ty == HVec w && x >= 0 && x < 2 ^ w
+    VTuple _ -> False
 
 -- | The process that drives the protocol for @n@ cycles, counting the
 -- malformed values (see 'malformed') as mismatches up front.
@@ -262,61 +264,62 @@ stimulus m n bad =
   ]
     <> indent body
     <> ["end process gin_stimulus;"]
-  where
-    clk = sig (modClock m)
-    rst = sig (modReset m)
-    body =
-      [ "-- Reset: clock low, reset high, every input zero; one rising edge"
-      , "-- loads the registers' initial values, then reset is released."
-      , clk <> " <= '0';"
-      , rst <> " <= '1';"
-      ]
-        <> [sig (netName i) <> " <= " <> zero (netType i) <> ";" | i <- modInputs m]
-        <> [ "wait for 5 ns;"
-           , clk <> " <= '1';"
-           , "wait for 5 ns;"
-           , clk <> " <= '0';"
-           , rst <> " <= '0';"
-           ]
-        <> maybe [] reportMalformed bad
-        <> cycles
-        <> verdict
-    reportMalformed (k, first) =
-      [ "-- Missing, ill-typed or extra values in the vectors: each is a mismatch."
-      , "gin_mismatches := " <> showT k <> ";"
-      , writeText
-          (mismatchMarker <> " malformed-values=" <> showT k <> " first-cycle=" <> showT first)
-      , "writeline(output, gin_line);"
-      ]
-    cycles
-      | n <= 0 = []
-      | otherwise =
-          [ "-- Each cycle: drive the inputs with the clock low, compare every"
-          , "-- output 1 ns later, then one rising edge."
-          , "for gin_t in 0 to " <> showT (n - 1) <> " loop"
-          ]
-            <> indent
-              ( [sig (netName i) <> " <= " <> field i <> ";" | i <- modInputs m]
-                  <> ["wait for 1 ns;"]
-                  <> concatMap compareOutput (outputNets m)
-                  <> [ "wait for 4 ns;"
-                     , clk <> " <= '1';"
-                     , "wait for 5 ns;"
-                     , clk <> " <= '0';"
-                     ]
-              )
-            <> ["end loop;"]
-    verdict =
-      [ "if gin_mismatches = 0 then"
-      , "  " <> writeText (passMarker <> " cycles=" <> showT (max 0 n))
-      , "else"
-      , "  " <> writeText (failMarker <> " mismatches=")
-      , "  write(gin_line, gin_mismatches);"
-      , "end if;"
-      , "writeline(output, gin_line);"
-      , "std.env.finish;"
-      , "wait;"
-      ]
+ where
+  clk = sig (modClock m)
+  rst = sig (modReset m)
+  body =
+    [ "-- Reset: clock low, reset high, every input zero; one rising edge"
+    , "-- loads the registers' initial values, then reset is released."
+    , clk <> " <= '0';"
+    , rst <> " <= '1';"
+    ]
+      <> [sig (netName i) <> " <= " <> zero (netType i) <> ";" | i <- modInputs m]
+      <> [ "wait for 5 ns;"
+         , clk <> " <= '1';"
+         , "wait for 5 ns;"
+         , clk <> " <= '0';"
+         , rst <> " <= '0';"
+         ]
+      <> maybe [] reportMalformed bad
+      <> cycles
+      <> verdict
+  reportMalformed (k, first) =
+    [ "-- Missing, ill-typed or extra values in the vectors: each is a mismatch."
+    , "gin_mismatches := " <> showT k <> ";"
+    , writeText
+        (mismatchMarker <> " malformed-values=" <> showT k <> " first-cycle="
+          <> showT first)
+    , "writeline(output, gin_line);"
+    ]
+  cycles
+    | n <= 0 = []
+    | otherwise =
+        [ "-- Each cycle: drive the inputs with the clock low, compare every"
+        , "-- output 1 ns later, then one rising edge."
+        , "for gin_t in 0 to " <> showT (n - 1) <> " loop"
+        ]
+          <> indent
+            ( [sig (netName i) <> " <= " <> field i <> ";" | i <- modInputs m]
+                <> ["wait for 1 ns;"]
+                <> concatMap compareOutput (outputNets m)
+                <> [ "wait for 4 ns;"
+                   , clk <> " <= '1';"
+                   , "wait for 5 ns;"
+                   , clk <> " <= '0';"
+                   ]
+            )
+          <> ["end loop;"]
+  verdict =
+    [ "if gin_mismatches = 0 then"
+    , "  " <> writeText (passMarker <> " cycles=" <> showT (max 0 n))
+    , "else"
+    , "  " <> writeText (failMarker <> " mismatches=")
+    , "  write(gin_line, gin_mismatches);"
+    , "end if;"
+    , "writeline(output, gin_line);"
+    , "std.env.finish;"
+    , "wait;"
+    ]
 
 -- | The table entry for a port in cycle @gin_t@.
 field :: Net -> Text
@@ -341,8 +344,8 @@ compareOutput n =
       , "writeline(output, gin_line);"
       ]
     <> ["end if;"]
-  where
-    actual = sig (netName n)
-    render x = case netType n of
-      HBit -> "to_string(" <> x <> ")"
-      HVec _ -> "to_hstring(" <> x <> ")"
+ where
+  actual = sig (netName n)
+  render x = case netType n of
+    HBit -> "to_string(" <> x <> ")"
+    HVec _ -> "to_hstring(" <> x <> ")"

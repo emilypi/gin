@@ -1,3 +1,5 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 -- |
 -- Module       : Gin.Driver
 -- Copyright    : (c) 2026 Emily Pillmore
@@ -10,10 +12,12 @@
 -- Runs the compiler pipeline and implements the CLI commands.
 --
 -- > gin check     FILE.gin.json [--allow-axiom NAME]... [--spec-hash HEX]
--- > gin compile   FILE.gin.json [--target T]... [-o DIR] [--allow-axiom NAME]... [--spec-hash HEX]
--- > gin testbench FILE.gin.json --vectors V.json [--target T]... [-o DIR] [--allow-axiom NAME]...
+-- > gin compile FILE.gin.json [--target T]... [-o DIR] [--allow-axiom NAME]...
+-- > [--spec-hash HEX]
+-- > gin testbench FILE.gin.json --vectors V.json [--target T]... [-o DIR] [--allow-axiom
+-- > NAME]...
 -- >               [--spec-hash HEX]
--- > gin sim       FILE.gin.json --vectors V.json [--allow-axiom NAME]... [--spec-hash HEX]
+-- > gin sim FILE.gin.json --vectors V.json [--allow-axiom NAME]... [--spec-hash HEX]
 -- >               [--sim-timeout SECONDS]
 -- > gin validate  FILE.gin.json --vectors V.json [--target T]... [-o DIR]
 -- >               [--allow-axiom NAME]... [--spec-hash HEX] [--allow-missing-tools]
@@ -110,6 +114,44 @@
 module Gin.Driver
   ( runCli
   , runCliWith
+
+    -- * Optics
+  , memLanesL
+  , memAddressWidthL
+  , memWordsL
+  , memTrafficL
+  , memTimeoutSecondsL
+  , inFileL
+  , inAllowAxiomsL
+  , inSpecHashL
+  , inOptimizeL
+  , inCandidateL
+  , outTargetsL
+  , outDirL
+  , simTimeoutSecondsL
+  , toolAllowMissingL
+  , toolTimeoutSecondsL
+  , valToolsL
+  , valSimL
+  , valMinCyclesL
+  , trToolL
+  , trArgsL
+  , trJudgeL
+  , _CheckCmd
+  , _CompileCmd
+  , _TestbenchCmd
+  , _SimCmd
+  , _ValidateCmd
+  , _OptimizeCmd
+  , _PipelineCmd
+  , _ProveCmd
+  , _MemoryCmd
+  , _Pass
+  , _Fail
+  , _Skip
+  , _Finished
+  , _TimedOut
+  , _NotStarted
   ) where
 
 import Control.Applicative (many, optional, (<**>), (<|>))
@@ -128,9 +170,11 @@ import Control.Exception
   , throwIO
   , try
   )
+import Control.Lens (makePrisms, view)
 import Control.Monad (guard, unless, void)
 import Control.Monad.Except (ExceptT (..), liftEither, runExceptT)
 import Control.Monad.IO.Class (liftIO)
+import Data.Aeson qualified as A
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isDigit)
@@ -138,8 +182,8 @@ import Data.Containers.ListUtils (nubOrd)
 import Data.Either (fromRight)
 import Data.Foldable (for_, traverse_)
 import Data.Functor ((<&>))
-import Data.List (find)
-import Data.Maybe (catMaybes, fromMaybe, isJust, listToMaybe)
+import Data.List (find, nubBy)
+import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, listToMaybe)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -147,6 +191,7 @@ import Data.Text.Encoding qualified as Text
 import Data.Traversable (for)
 import GHC.Clock (getMonotonicTime)
 import GHC.IO.Exception (IOException (..))
+import GHC.TypeNats (KnownNat)
 import Gin.Backend.SystemVerilog (systemVerilog)
 import Gin.Backend.Types
   ( Backend (..)
@@ -159,10 +204,17 @@ import Gin.Backend.Types
   )
 import Gin.Backend.VHDL (vhdl)
 import Gin.Backend.Verilog (verilog)
-import Gin.Certificate (CertPolicy (..), certificateSpecHash, checkCertificate, defaultPolicy)
+import Gin.Certificate
+  ( CertPolicy (..)
+  , certificateSpecHash
+  , checkCertificate
+  , defaultPolicy
+  )
+import Gin.Core.Bounded
 import Gin.Core.Check (checkProgram)
-import Gin.Core.Json (decodeProgram, decodeVectors)
+import Gin.Core.Json (decodeProgram, decodeVectors, encodeVectors)
 import Gin.Core.Normal (NModule)
+import Gin.Core.Optics (makeFieldLenses)
 import Gin.Core.Syntax
   ( Certificate
   , Name
@@ -174,10 +226,44 @@ import Gin.Core.Syntax
   )
 import Gin.Core.Utils (failAt, invisible, showT)
 import Gin.Error (GinError (..), Stage (..), ginError, renderError, safeLine, withContext)
+import Gin.Evaluate.Memory qualified as MemoryEval
+import Gin.Hash (sha256Hex)
 import Gin.Limits (defaultSimTimeoutSeconds, defaultToolTimeoutSeconds, maxInputBytes)
+import Gin.Memory qualified as Memory
 import Gin.Netlist.Build (buildNetlist)
 import Gin.Netlist.Types (HwType (..), Ident (..), Module (..), Net (..), Output (..))
 import Gin.Normalize (checkNormal, normalize)
+import Gin.Optimize.Evidence (emitEquivalence, equivalenceTheoremName)
+import Gin.Optimize.Policy
+  ( Policy
+  , TimeoutSeconds
+  , decodePolicy
+  , encodePolicy
+  , objectiveName
+  , policyObjectives
+  , policyTimeoutSeconds
+  )
+import Gin.Optimize.Portfolio
+  ( Portfolio
+  , buildPortfolio
+  , candidateId
+  , candidateModule
+  , candidateObjectives
+  , encodePortfolio
+  , measureCircuit
+  , metricOperators
+  , portfolioBaseline
+  , portfolioCandidates
+  , selectCandidate
+  )
+import Gin.Schedule
+  ( PipelineDepth
+  , pipelineCircuit
+  , pipelineVectors
+  , scheduledLatency
+  , scheduledModule
+  , scheduledStageDepth
+  )
 import Gin.Sim (isBudgetError, simulateCore, simulateNormal)
 import Gin.Vectors (Cycle (..), Vectors (..))
 import Options.Applicative
@@ -212,14 +298,16 @@ import Options.Applicative
   )
 import System.Directory
   ( createDirectoryIfMissing
+  , doesPathExist
   , findExecutablesInDirectories
   , makeAbsolute
   , removeFile
+  , renameDirectory
   , renameFile
   )
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
-import System.FilePath ((<.>), (</>))
+import System.FilePath (takeDirectory, (<.>), (</>))
 import System.IO
   ( Handle
   , IOMode (..)
@@ -230,7 +318,7 @@ import System.IO
   , stdout
   , withBinaryFile
   )
-import System.IO.Temp (withSystemTempDirectory)
+import System.IO.Temp (withSystemTempDirectory, withTempDirectory)
 import System.Posix.Signals (sigKILL, signalProcessGroup)
 import System.Process
   ( CreateProcess (..)
@@ -284,6 +372,18 @@ data Command
   | TestbenchCmd !Inputs !FilePath !Outputs
   | SimCmd !Inputs !FilePath !SimOptions
   | ValidateCmd !Inputs !FilePath !Outputs !ValidateOptions
+  | OptimizeCmd !Inputs !FilePath !(Maybe FilePath) !Outputs !SimOptions
+  | PipelineCmd !Inputs !PipelineDepth !(Maybe FilePath) !Outputs !ToolOptions !SimOptions
+  | ProveCmd !Inputs !Outputs !ToolOptions
+  | MemoryCmd !Inputs !MemoryOptions !Outputs
+
+data MemoryOptions = MemoryOptions
+  { memLanes :: ![Memory.LaneCount]
+  , memAddressWidth :: !Memory.AddressWidth
+  , memWords :: !FilePath
+  , memTraffic :: !(Maybe FilePath)
+  , memTimeoutSeconds :: !TimeoutSeconds
+  }
 
 -- | The IR file, the axioms its trace may use beyond
 -- 'defaultPolicy', and the specification hash it must have.
@@ -291,6 +391,8 @@ data Inputs = Inputs
   { inFile :: !FilePath
   , inAllowAxioms :: ![Text]
   , inSpecHash :: !(Maybe Text)
+  , inOptimize :: !(Maybe FilePath)
+  , inCandidate :: !(Maybe Text)
   }
 
 -- | Which targets to generate, and where.
@@ -321,8 +423,10 @@ cliInfo :: ParserInfo Command
 cliInfo =
   info (commands <**> helper) $
     fullDesc
-      <> header "gin - compile proof-carrying Lean 4 circuits to Verilog, SystemVerilog and VHDL"
-      <> progDesc "Check, compile, simulate and validate a circuit exported by the Lean side."
+      <> header "gin - compile proof-carrying Lean 4 circuits to Verilog, SystemVerilog \
+        \and VHDL"
+      <> progDesc "Check, compile, simulate and validate a circuit exported by the Lean \
+        \side."
       <> footer
         "Exit status: 0 on success, 1 when a check, compile or validation fails, \
         \2 on a usage error."
@@ -347,6 +451,40 @@ commands =
         "Run both reference simulators on the vectors and compare their outputs."
         ((\(i, v) s -> SimCmd i v s) <$> inputs vectorsOpt <*> simOptions)
       <> cmd
+        "optimize"
+        "Search a structural Pareto portfolio and write candidates to a new directory."
+        ( (\(i, (p, v, o)) s -> OptimizeCmd i p v o s)
+            <$> inputs ((,,) <$> policyOpt <*> optional vectorsOpt <*> outputs)
+            <*> simOptions
+        )
+      <> cmd
+        "memory"
+        "Generate memory-facing accelerators and compare explicit traffic models."
+        ((\(i, (m, o)) -> MemoryCmd i m o) <$> inputs ((,) <$> memoryOptions <*> outputs))
+      <> cmd
+        "prove"
+        "Replay an exact-cycle candidate's transition equivalence through the Lean \
+          \kernel."
+        ((\(i, o) t -> ProveCmd i o t) <$> inputs outputs <*> toolOptions)
+      <> cmd
+        "pipeline"
+        "Pipeline a combinational kernel under an explicit fixed-latency contract."
+        ( (\(i, (d, v, o)) t s -> PipelineCmd i d v o t s)
+            <$> inputs
+              ( (,,)
+                  <$> option
+                    (checkedNumberReader "logic levels")
+                    ( long "max-depth"
+                        <> metavar "N"
+                        <> help "Maximum structural logic levels per pipeline stage"
+                    )
+                  <*> optional vectorsOpt
+                  <*> outputs
+              )
+            <*> toolOptions
+            <*> simOptions
+        )
+      <> cmd
         "validate"
         "Run sim, then lint the generated HDL and run its testbench with the HDL tools."
         ( (\(i, (v, o)) t s n -> ValidateCmd i v o (ValidateOptions t s n))
@@ -355,14 +493,16 @@ commands =
             <*> simOptions
             <*> minCycles
         )
-  where
-    cmd name desc p = command name (info p (progDesc desc))
+ where
+  cmd name desc p = command name (info p (progDesc desc))
 
 -- | The IR file, the command's own options, then @--allow-axiom@ and
 -- @--spec-hash@, in the order the usage line shows them.
 inputs :: Parser a -> Parser (Inputs, a)
 inputs rest =
-  (\file a axioms hash -> (Inputs file axioms hash, a))
+  ( \file a axioms hash optimize candidate ->
+    (Inputs file axioms hash optimize candidate, a)
+  )
     <$> strArgument (metavar "FILE.gin.json" <> help "IR file exported by the Lean side")
     <*> rest
     <*> many
@@ -381,14 +521,64 @@ inputs rest =
           ( long "spec-hash"
               <> metavar "HEX"
               <> help
-                "Fail unless the certificate's specification hash (SHA-256 of the theorem, \
-                \its statement and its specification's definitions) is HEX"
+                "Fail unless the certificate's specification hash (SHA-256 of the \
+                  \theorem, its statement and its specification's definitions) is HEX"
           )
+      )
+    <*> optional
+      ( strOption
+          ( long "optimize"
+              <> metavar "POLICY.json"
+              <> help "Select from this optimization policy's portfolio"
+          )
+      )
+    <*> optional
+      ( strOption
+          ( long "candidate"
+              <> metavar "SHA256"
+              <> help "Select this candidate digest (requires --optimize)"
+          )
+      )
+
+policyOpt :: Parser FilePath
+policyOpt =
+  strOption
+    (long "policy" <> metavar "POLICY.json"
+      <> help "Bounded structural optimization policy")
+
+memoryOptions :: Parser MemoryOptions
+memoryOptions =
+  MemoryOptions
+    <$> many
+      ( option
+          (checkedNumberReader "lanes")
+          (long "lanes" <> metavar "N" <> help "Lane count to explore (repeatable; \
+            \default 1,2,4)")
+      )
+    <*> option
+      (checkedNumberReader "address bits")
+      (long "address-width" <> metavar "N" <> value (boundedIntLiteral @32)
+        <> showDefault)
+    <*> strOption
+      ( long "words"
+          <> metavar "WORDS.json"
+          <> help "Unsigned input word array for the traffic model"
+      )
+    <*> optional
+      ( strOption
+          (long "traffic" <> metavar "TRAFFIC.json"
+            <> help "Explicit traffic scenario array")
+      )
+    <*> option
+      (checkedNumberReader "seconds")
+      ( long "memory-timeout" <> metavar "SECONDS" <> value (boundedIntLiteral @60)
+        <> showDefault
       )
 
 vectorsOpt :: Parser FilePath
 vectorsOpt =
-  strOption (long "vectors" <> metavar "V.json" <> help "Test vectors exported by the Lean side")
+  strOption
+    (long "vectors" <> metavar "V.json" <> help "Test vectors exported by the Lean side")
 
 outputs :: Parser Outputs
 outputs =
@@ -403,10 +593,11 @@ outputs =
       )
     <*> optional
       ( orCurrent
-          <$> strOption (short 'o' <> metavar "DIR" <> help "Output directory (created if missing)")
+          <$> strOption (short 'o' <> metavar "DIR"
+            <> help "Output directory (created if missing)")
       )
-  where
-    orCurrent dir = if null dir then "." else dir
+ where
+  orCurrent dir = if null dir then "." else dir
 
 toolOptions :: Parser ToolOptions
 toolOptions =
@@ -462,13 +653,19 @@ axiomReader :: ReadM Text
 axiomReader = eitherReader $ \s ->
   let name = Text.pack s
       unquote part = fromMaybe part (Text.stripPrefix "«" part >>= Text.stripSuffix "»")
-      normalized = Text.intercalate "." (fmap unquote (Text.splitOn "." (Text.strip name)))
+      normalized =
+        Text.intercalate "." (fmap unquote (Text.splitOn "." (Text.strip name)))
    in if Text.null normalized || Text.any invisible name
-        then Left "an axiom name must not be empty or contain control or invisible characters"
+        then Left "an axiom name must not be empty or contain control or invisible \
+          \characters"
         else Right name
 
--- | A whole number of seconds, at least 1 and small enough that its
--- microseconds fit in an 'Int'.
+-- | Parse a whole number through the setting's checked constructor.
+checkedNumberReader ::
+  (KnownNat lower, KnownNat upper) => String -> ReadM (BoundedInt lower upper)
+checkedNumberReader label = wholeNumberReader label >>= either fail pure . mkBoundedInt
+
+-- | Whole seconds small enough that microseconds fit in an Int.
 secondsReader :: ReadM Int
 secondsReader = boundedReader "seconds" (toInteger (maxBound :: Int) `div` 1000000)
 
@@ -479,7 +676,8 @@ wholeNumberReader what = boundedReader what (toInteger (maxBound :: Int))
 -- | A whole number from 1 to the bound, in decimal digits only.
 boundedReader :: String -> Integer -> ReadM Int
 boundedReader what bound = eitherReader $ \s ->
-  maybe (Left ("expected a whole number of " <> what <> " from 1 to " <> show bound)) Right $ do
+  maybe (Left ("expected a whole number of " <> what <> " from 1 to "
+    <> show bound)) Right $ do
     guard (not (null s) && length s <= 18 && all isDigit s)
     n <- readMaybe s
     guard (n >= 1 && n <= bound)
@@ -504,35 +702,317 @@ runCommand environment cmd =
 -- | Run a command; 'False' when one of its checks failed.
 execute :: Env -> Command -> Pipe Bool
 execute environment = \case
-  CheckCmd ins -> True <$ loadProgram ins
+  CheckCmd ins -> do
+    prog <- loadProgram ins
+    whenOptimizing ins (void (selectedNormal ins prog))
+    pure True
   CompileCmd ins outs -> do
     prog <- loadProgram ins
-    (_, m) <- compileProgram prog
-    for_ (backendsOf outs) $ \b -> writeGroup (outputDir outs) (generatedFiles m Nothing b)
+    (_, m) <- compileProgram ins prog
+    for_ (backendsOf outs) $ \b ->
+      writeGroup (outputDir outs) (generatedFiles m Nothing b)
     pure True
   TestbenchCmd ins vecFile outs -> do
     prog <- loadProgram ins
     vecs <- loadVectors prog vecFile
-    (_, m) <- compileProgram prog
+    (_, m) <- compileProgram ins prog
     liftEither (testbenchPrecondition m vecs)
-    for_ (backendsOf outs) $ \b -> writeGroup (outputDir outs) (generatedFiles m (Just vecs) b)
+    for_ (backendsOf outs) $ \b ->
+      writeGroup (outputDir outs) (generatedFiles m (Just vecs) b)
     pure True
   SimCmd ins vecFile sim -> do
     prog <- loadProgram ins
     vecs <- loadVectors prog vecFile
-    nm <- liftEither (normalize prog)
+    nm <- selectedNormal ins prog
     liftIO (runSimulators sim prog nm vecs)
   ValidateCmd ins vecFile outs opts -> do
     prog <- loadProgram ins
     vecs <- loadVectors prog vecFile
-    (nm, m) <- compileProgram prog
+    (nm, m) <- compileProgram ins prog
     liftEither (testbenchPrecondition m vecs)
     let backends = backendsOf outs
     vecOk <- liftIO (reportVectors (valMinCycles opts) vecs)
     liftIO (reportToolVersions environment (valTools opts) backends)
     simOk <- liftIO (runSimulators (valSim opts) prog nm vecs)
-    hdlOk <- for backends (validateTarget environment (valTools opts) m vecs (outDir outs))
+    hdlOk <-
+      for backends (validateTarget environment (valTools opts) m vecs (outDir outs))
     pure (vecOk && simOk && and hdlOk)
+  OptimizeCmd ins policyFile vectorsFile outs sim -> do
+    unless (isNothing (inOptimize ins) && isNothing (inCandidate ins)) $
+      failAt
+        StDriver
+        "optimize uses --policy; --optimize and --candidate are for selecting a compiled \
+          \candidate"
+    destination <-
+      maybe
+        (failAt StDriver "optimize requires -o with a new output directory")
+        pure
+        (outDir outs)
+    prog <- loadProgram ins
+    vecs <- traverse (loadVectors prog) vectorsFile
+    policy <- loadOptimizationPolicy policyFile
+    portfolio <- searchPortfolio policy prog
+    baselineOk <- case vecs of
+      Nothing -> pure True
+      Just vectors -> do
+        liftIO (putLine stdout "baseline:")
+        liftIO (runSimulators sim prog (candidateModule (portfolioBaseline portfolio))
+          vectors)
+    checks <- for (portfolioCandidates portfolio) $ \candidate -> do
+      liftIO (putLine stdout ("candidate: " <> candidateId candidate))
+      case vecs of
+        Nothing -> pure True
+        Just vectors
+          | candidateId candidate == candidateId (portfolioBaseline portfolio) ->
+            pure baselineOk
+          | otherwise ->
+            liftIO (runSimulators sim prog (candidateModule candidate) vectors)
+    writePortfolio destination outs policy portfolio vecs baselineOk checks
+    pure (baselineOk && and checks)
+  PipelineCmd ins depth vectorsFile outs toolOpts sim -> do
+    prog <- loadProgram ins
+    original <- selectedNormal ins prog
+    let scheduling = pipelineCircuit depth original
+    scheduled <-
+      liftIO
+        (evaluateWithin (simTimeoutSeconds sim) (length (show scheduling) `seq`
+          scheduling)) >>= \case
+        Nothing -> failAt StDriver "pipeline generation exceeded the simulation timeout"
+        Just r -> liftEither r
+    let nm = scheduledModule scheduled
+        timingBackends =
+          map (timingBackend (view boundedIntValue (scheduledLatency scheduled)))
+            (backendsOf outs)
+    m <- liftEither (buildNetlist nm)
+    vectors <- traverse (loadVectors prog) vectorsFile
+    result <- case vectors of
+      Nothing -> do
+        for_ timingBackends $ \backend ->
+          writeGroup (outputDir outs) (generatedFiles m Nothing backend)
+        pure True
+      Just sourceVectors -> do
+        sourceOk <- liftIO (runSimulators sim prog original sourceVectors)
+        let preparation = pipelineVectors scheduled sourceVectors
+            forcedVectors = case preparation of
+              Left e -> length (show e) `seq` preparation
+              Right vs -> LBS.length (encodeVectors vs) `seq` preparation
+        adjusted <-
+          liftIO (evaluateWithin (simTimeoutSeconds sim) forcedVectors) >>= \case
+            Nothing -> failAt StDriver "pipeline warmup exceeded the simulation timeout"
+            Just r -> liftEither r
+        let expected = map cycOutputs (vecCycles adjusted)
+            rows = map cycInputs (vecCycles adjusted)
+        outcome <-
+          liftIO
+            ( evaluateWithin
+                (simTimeoutSeconds sim)
+                (compareRows (vecOutputs adjusted) expected (simulateNormal nm rows))
+            )
+        simOk <- liftIO (reportAll [("sim-pipeline", fromMaybe (Fail "timeout") outcome)])
+        hdlOk <- for timingBackends $ \backend ->
+          validateTarget environment toolOpts m adjusted (outDir outs) backend
+        pure (sourceOk && simOk && and hdlOk)
+    let timing =
+          A.object
+            [ "format" A..= ("gin-timing/1" :: Text)
+            , "contract" A..= ("fixed-latency" :: Text)
+            , "latencyCycles" A..= scheduledLatency scheduled
+            , "warmupCycles" A..= scheduledLatency scheduled
+            , "initiationInterval" A..= (1 :: Int)
+            , "stageLogicDepth" A..= scheduledStageDepth scheduled
+            , "sourceDigest" A..= sha256Hex (Text.encodeUtf8 (Text.pack (show original)))
+            , "candidateDigest" A..= sha256Hex (Text.encodeUtf8 (Text.pack (show nm)))
+            , "frequencyEvidence" A..= ("unavailable: logic depth is not physical \
+              \timing" :: Text)
+            , "validation"
+                A..= (if isJust vectors then if result then "passed" else "failed" else
+                  "not-run" :: Text)
+            ]
+    writeGroup
+      (outputDir outs)
+      [("timing.json", Text.decodeUtf8 (LBS.toStrict (A.encode timing)))]
+    pure result
+  ProveCmd ins outs tools -> do
+    unless
+      (isJust (inOptimize ins))
+      (failAt StDriver "prove requires --optimize and optionally --candidate")
+    prog <- loadProgram ins
+    original <- liftEither (normalize prog)
+    candidate <- selectedNormal ins prog
+    source <- liftEither (emitEquivalence original candidate)
+    outcome <- liftIO (replayEquivalence environment tools source)
+    liftIO (reportWithOutput "lean-equivalence" outcome)
+    let checked = case fst outcome of Pass -> True; _ -> False
+        evidence =
+          A.object
+            [ "format" A..= ("gin-equivalence/1" :: Text)
+            , "status" A..= (if checked then "kernel-checked-stream" else "unverified"
+              :: Text)
+            , "scope"
+                A..= ("all-cycle output equality with projected state and matching \
+                  \initialization" :: Text)
+            , "sourceDigest" A..= sha256Hex (Text.encodeUtf8 (Text.pack (show original)))
+            , "candidateDigest" A..= sha256Hex (Text.encodeUtf8 (Text.pack (show
+              candidate)))
+            , "proofDigest" A..= sha256Hex (Text.encodeUtf8 source)
+            , "toolchain" A..= ("leanprover/lean4:v4.34.1" :: Text)
+            ]
+    writeGroup
+      (outputDir outs)
+      [ ("GinOptimizationProof.lean", source)
+      , ("evidence.json", Text.decodeUtf8 (LBS.toStrict (A.encode evidence)))
+      ]
+    pure checked
+  MemoryCmd ins options outs -> do
+    unless (all (== SystemVerilog) (outTargets outs)) $
+      failAt StDriver "memory accelerator generation currently supports SystemVerilog"
+    destination <-
+      maybe
+        (failAt StDriver "memory requires -o with a new output directory")
+        pure
+        (outDir outs)
+    prog <- loadProgram ins
+    (names, kernels) <- memoryKernels ins prog
+    words_ <- readInput (memWords options) >>= liftEither . Memory.decodeMemoryWords
+    scenarios <- case memTraffic options of
+      Nothing -> pure Memory.defaultTrafficScenarios
+      Just file -> readInput file >>= liftEither . Memory.decodeTrafficScenarios
+    let lanes =
+          if null (memLanes options)
+            then [boundedIntLiteral @1, boundedIntLiteral @2, boundedIntLiteral @4]
+            else memLanes options
+        configs = [Memory.MemoryConfig n (memAddressWidth options) | n <- lanes]
+        evaluated =
+          MemoryEval.evaluateMemoryPortfolio names kernels configs scenarios words_
+        forced = case evaluated of
+          Left e -> length (show e) `seq` evaluated
+          Right p -> LBS.length (MemoryEval.encodeMemoryPortfolio p) `seq` evaluated
+    result <-
+      liftIO (evaluateWithin (view boundedIntValue (memTimeoutSeconds options)) forced)
+        >>= \case
+        Nothing -> failAt StDriver "memory evaluation deadline exceeded; no frontier \
+          \claim is available"
+        Just r -> liftEither r
+    publishDirectory destination $ \tmp -> do
+      for_ (MemoryEval.memoryDesigns result) $ \design ->
+        writeGroup
+          (tmp </> Text.unpack (MemoryEval.evaluatedIdentity design))
+          [
+            ( "gin_memory_accelerator.sv"
+            , Memory.memorySystemVerilog (MemoryEval.evaluatedDesign design)
+            )
+          ]
+      writeGroup
+        tmp
+        [
+          ( "memory-portfolio.json"
+          , Text.decodeUtf8 (LBS.toStrict (MemoryEval.encodeMemoryPortfolio result))
+          )
+        , ("words.json", Text.decodeUtf8 (LBS.toStrict (A.encode words_)))
+        ]
+    liftIO
+      ( putLine
+          stdout
+          ( "memory: "
+              <> showT (length (MemoryEval.memoryDesigns result))
+              <> " generated designs; "
+              <> showT (length (MemoryEval.memoryFrontier result))
+              <> " on the completed modeled frontier"
+          )
+      )
+    pure True
+
+memoryKernels :: Inputs -> Program Ty Name -> Pipe ([Text], [MemoryEval.MemoryKernel])
+memoryKernels ins prog = case inOptimize ins of
+  Nothing -> do
+    nm <- selectedNormal ins prog
+    pure
+      ( ["operators"]
+      ,
+        [ MemoryEval.MemoryKernel
+            (sha256Hex (Text.encodeUtf8 (Text.pack (show nm))))
+            nm
+            [fromIntegral (metricOperators (measureCircuit nm))]
+        ]
+      )
+  Just file -> do
+    policy <- loadOptimizationPolicy file
+    portfolio <- searchPortfolio policy prog
+    candidates <- case inCandidate ins of
+      Nothing -> pure (portfolioCandidates portfolio)
+      Just ident -> pure <$> liftEither (selectCandidate (Just ident) portfolio)
+    pure
+      ( map objectiveName (policyObjectives policy)
+      , [ MemoryEval.MemoryKernel (candidateId c) (candidateModule c)
+        (candidateObjectives c)
+        | c <- nubBy (\a b -> candidateId a == candidateId b) candidates
+        ]
+      )
+
+whenOptimizing :: Inputs -> Pipe () -> Pipe ()
+whenOptimizing ins action
+  | isJust (inOptimize ins) || isJust (inCandidate ins) = action
+  | otherwise = pure ()
+
+timingBackend :: Int -> Backend -> Backend
+timingBackend latency backend = backend {backendRender = \m ->
+  prefix <> backendRender backend m}
+ where
+  comment = if backendTarget backend == VHDL then "-- " else "// "
+  prefix =
+    comment
+      <> "Fixed-latency artifact: output(t + "
+      <> showT latency
+      <> ") = source(t).\n"
+      <> comment
+      <> "First "
+      <> showT latency
+      <> " cycles after reset are warmup. The trace below describes the source kernel.\n"
+
+-- Compile only newly generated source in a private directory. No evidence
+-- file, .olean cache or status supplied by a caller is accepted as proof.
+replayEquivalence :: Env -> ToolOptions -> Text -> IO (Outcome, Maybe Text)
+replayEquivalence environment options source =
+  withSystemTempDirectory "gin-proof" $ \tmp -> do
+  BS.writeFile (tmp </> "GinOptimizationProof.lean") (Text.encodeUtf8 source)
+  BS.writeFile (tmp </> "lean-toolchain") "leanprover/lean4:v4.34.1\n"
+  lean <- resolveTool environment "lean"
+  checker <- resolveTool environment "leanchecker"
+  case (lean, checker) of
+    (Just compiler, Just replay) -> do
+      built <-
+        runTool
+          environment
+          tmp
+          seconds
+          compiler
+          ["-o", "GinOptimizationProof.olean", "GinOptimizationProof.lean"]
+      case built of
+        Finished ExitSuccess out err
+          | approvedAxioms out && Text.null (Text.strip err) ->
+              runToolWith [("LEAN_PATH"
+                , tmp)] environment tmp seconds replay ["GinOptimizationProof"]
+                >>= judge
+          | otherwise -> pure (Fail "axiom inspection failed", Just (out <> err))
+        other -> judge other
+    _ -> pure (Fail "lean and leanchecker are required for independent replay", Nothing)
+ where
+  seconds = toolTimeoutSeconds options
+  judge (Finished ExitSuccess _ _) = pure (Pass, Nothing)
+  judge (Finished _ out err) =
+    pure (Fail "Lean compilation or kernel replay failed", Just (out <> err))
+  judge TimedOut = pure (Fail "proof deadline exceeded", Nothing)
+  judge (NotStarted why) = pure (Fail why, Nothing)
+  approvedAxioms output =
+    let flattened = Text.unwords (Text.words output)
+        prefix = "'" <> equivalenceTheoremName <> "' depends on axioms: ["
+        noAxioms = "'" <> equivalenceTheoremName <> "' does not depend on any axioms"
+     in flattened == noAxioms || case Text.stripPrefix prefix flattened
+       >>= Text.stripSuffix "]" of
+          Nothing -> False
+          Just names ->
+            all ((`Set.member` allowedAxioms defaultPolicy) . Text.strip) (Text.splitOn
+              "," names)
 
 outputDir :: Outputs -> FilePath
 outputDir = fromMaybe "." . outDir
@@ -576,8 +1056,8 @@ checkSpecHash cert expected =
         <> expected
         <> "; the theorem, its statement or its specification's definitions differ from \
            \the reviewed ones"
-  where
-    actual = certificateSpecHash cert
+ where
+  actual = certificateSpecHash cert
 
 -- | 'defaultPolicy' plus the given axioms. 'checkCertificate' still rejects
 -- the axioms no policy can admit.
@@ -603,11 +1083,11 @@ readInput file =
   liftIO (tryIO (withBinaryFile file ReadMode readBounded)) >>= \case
     Left e -> failAt StDriver ("cannot read " <> Text.pack file <> ": " <> ioMessage e)
     Right bytes -> pure bytes
-  where
-    readBounded h = do
-      contents <- LBS.hGetContents h
-      let bounded = LBS.take (fromIntegral maxInputBytes + 1) contents
-      LBS.fromStrict <$> evaluate (LBS.toStrict bounded)
+ where
+  readBounded h = do
+    contents <- LBS.hGetContents h
+    let bounded = LBS.take (fromIntegral maxInputBytes + 1) contents
+    LBS.fromStrict <$> evaluate (LBS.toStrict bounded)
 
 -- | The vectors must be for the program's top entity, with the same ports
 -- (names, types and order).
@@ -641,16 +1121,16 @@ matchPorts kind expected actual = do
         <> ports (length actual)
         <> ", but the program has "
         <> ports (length expected)
-  where
-    ports n = showT n <> " " <> kind <> (if n == 1 then " port" else " ports")
+ where
+  ports n = showT n <> " " <> kind <> (if n == 1 then " port" else " ports")
 
 renderPort :: Port Ty -> Text
 renderPort p = clip (portName p) <> " : " <> renderTy (portTy p)
-  where
-    renderTy = \case
-      TBool -> "Bool"
-      TBitVec w -> "BitVec " <> showT w
-      _ -> "a non-scalar type"
+ where
+  renderTy = \case
+    TBool -> "Bool"
+    TBitVec w -> "BitVec " <> showT w
+    _ -> "a non-scalar type"
 
 -- | Untrusted names in error messages are cut short.
 clip :: Text -> Text
@@ -661,12 +1141,114 @@ clip t
 ----------------------------------------------------------------------
 -- Compiling and writing files
 
-compileProgram :: Program Ty Name -> Pipe (NModule, Module)
-compileProgram prog = liftEither $ do
-  nm <- normalize prog
-  checkNormal nm
-  m <- buildNetlist nm
+compileProgram :: Inputs -> Program Ty Name -> Pipe (NModule, Module)
+compileProgram ins prog = do
+  nm <- selectedNormal ins prog
+  m <- liftEither (buildNetlist nm)
   pure (nm, m)
+
+selectedNormal :: Inputs -> Program Ty Name -> Pipe NModule
+selectedNormal ins prog = case inOptimize ins of
+  Nothing -> do
+    unless (isNothing (inCandidate ins)) (failAt StDriver
+      "--candidate requires --optimize")
+    liftEither (normalize prog >>= \nm -> nm <$ checkNormal nm)
+  Just file -> do
+    policy <- loadOptimizationPolicy file
+    portfolio <- searchPortfolio policy prog
+    candidateModule <$> liftEither (selectCandidate (inCandidate ins) portfolio)
+
+loadOptimizationPolicy :: FilePath -> Pipe Policy
+loadOptimizationPolicy file =
+  readInput file >>= liftEither . inFileContext file . decodePolicy
+
+-- Force the manifest, including every context-bound graph digest, inside
+-- the deadline. Merely evaluating an Either constructor would leave the
+-- expensive search/reconstruction outside cancellation.
+searchPortfolio :: Policy -> Program Ty Name -> Pipe Portfolio
+searchPortfolio policy prog = do
+  let result = normalize prog >>= buildPortfolio policy
+      forced = case result of
+        Left e -> length (show e) `seq` result
+        Right p -> LBS.length (encodePortfolio p) `seq` result
+  liftIO (evaluateWithin (view boundedIntValue (policyTimeoutSeconds policy)) forced)
+    >>= \case
+    Nothing ->
+      failAt
+        StDriver
+        "optimization deadline exceeded; no feasibility or completeness claim is \
+          \available"
+    Just r -> liftEither r
+
+-- A portfolio is published only after all files have been generated in a
+-- fresh sibling directory. Candidate paths contain only compiler digests.
+-- Existing destinations are rejected, including symlinks to directories.
+publishDirectory :: FilePath -> (FilePath -> Pipe ()) -> Pipe ()
+publishDirectory destination writeFiles = do
+  liftIO (doesPathExist destination) >>= rejectExisting
+  let parent = takeDirectory destination
+  liftIO (createDirectoryIfMissing True parent)
+  result <- liftIO $ withTempDirectory parent ".gin-artifact" $ \tmp -> runExceptT $ do
+    writeFiles tmp
+    liftIO (doesPathExist destination) >>= rejectExisting
+    liftIO (renameDirectory tmp destination)
+  liftEither result
+ where
+  rejectExisting True = failAt StDriver "output directory already exists; choose a new \
+    \-o directory"
+  rejectExisting False = pure ()
+
+writePortfolio ::
+  FilePath -> Outputs -> Policy -> Portfolio -> Maybe Vectors -> Bool -> [Bool] -> Pipe ()
+writePortfolio destination outs policy portfolio vectors baselineOk checks = do
+  exists <- liftIO (doesPathExist destination)
+  whenExists exists
+  let parent = takeDirectory destination
+  liftIO (createDirectoryIfMissing True parent)
+  written <- liftIO $ withTempDirectory parent ".gin-portfolio" $ \tmp -> runExceptT $ do
+    for_
+      ( nubBy
+          (\a b -> candidateId a == candidateId b)
+          (portfolioBaseline portfolio : portfolioCandidates portfolio)
+      ) $ \c -> do
+      m <- liftEither (buildNetlist (candidateModule c))
+      for_ (backendsOf outs) $ \backend ->
+        writeGroup (tmp </> Text.unpack (candidateId c)) (generatedFiles m vectors
+          backend)
+    let validation =
+          A.object
+            [ "format" A..= ("gin-portfolio-validation/1" :: Text)
+            , "vectorsDigest" A..= fmap (sha256Hex . LBS.toStrict . encodeVectors) vectors
+            , "kind" A..= (if isJust vectors then "reference-simulation" else "not-run"
+              :: Text)
+            , "baseline"
+                A..= ( if isJust vectors
+                        then
+                          A.object
+                            ["id" A..= candidateId (portfolioBaseline portfolio)
+                              , "passed" A..= baselineOk]
+                        else A.Null
+                     )
+            , "candidates"
+                A..= [ A.object ["id" A..= candidateId c, "passed" A..= ok]
+                     | isJust vectors
+                     , (c, ok) <- zip (portfolioCandidates portfolio) checks
+                     ]
+            ]
+    writeGroup
+      tmp
+      [ ("portfolio.json", jsonText (encodePortfolio portfolio))
+      , ("policy.json", jsonText (encodePolicy policy))
+      , ("validation.json", jsonText (A.encode validation))
+      ]
+    liftIO (doesPathExist destination) >>= whenExists
+    liftIO (renameDirectory tmp destination)
+  liftEither written
+ where
+  jsonText = Text.decodeUtf8 . LBS.toStrict
+  whenExists True = failAt StDriver "portfolio output directory already exists; choose a \
+    \new -o directory"
+  whenExists False = pure ()
 
 -- | The precondition of 'backendTestbench': the vectors' ports are the
 -- module's, by name, order and type. It follows from 'matchVectors', since
@@ -679,13 +1261,13 @@ testbenchPrecondition m vecs =
         && fmap portShape (vecOutputs vecs) == fmap (netShape . outNet) (modOutputs m)
     )
     (failAt StDriver "the vectors' ports differ from the generated module's ports")
-  where
-    portShape p = (portName p, hwType (portTy p))
-    netShape n = (unIdent (netName n), Just (netType n))
-    hwType = \case
-      TBool -> Just HBit
-      TBitVec w -> Just (HVec w)
-      _ -> Nothing
+ where
+  portShape p = (portName p, hwType (portTy p))
+  netShape n = (unIdent (netName n), Just (netType n))
+  hwType = \case
+    TBool -> Just HBit
+    TBitVec w -> Just (HVec w)
+    _ -> Nothing
 
 -- | The files one backend generates, named after the module: the design
 -- and, given vectors, the testbench.
@@ -693,9 +1275,9 @@ generatedFiles :: Module -> Maybe Vectors -> Backend -> [(FilePath, Text)]
 generatedFiles m mvecs b =
   (base <.> ext, backendRender b m)
     : foldMap (\vecs -> [(base <> "_tb" <.> ext, backendTestbench b m vecs)]) mvecs
-  where
-    base = Text.unpack (unIdent (modName m))
-    ext = backendFileExt b
+ where
+  base = Text.unpack (unIdent (modName m))
+  ext = backendFileExt b
 
 -- | Write a group of files into a directory, creating it if missing. Each
 -- file is written to a temporary name in the directory, and only once
@@ -711,15 +1293,15 @@ writeGroup dir files =
   liftIO (tryIO (createDirectoryIfMissing True dir >> stage files [])) >>= \case
     Left e -> failAt StDriver ("cannot write to " <> Text.pack dir <> ": " <> ioMessage e)
     Right () -> pure ()
-  where
-    stage [] staged = commit (reverse staged) []
-    stage ((name, content) : rest) staged =
-      bracketOnError (writeTemp dir name content) (ignoreIO . removeFile) $ \tmp ->
-        stage rest ((tmp, dir </> name) : staged)
-    commit [] _ = pure ()
-    commit ((tmp, final) : rest) renamed = do
-      renameFile tmp final `onException` traverse_ (ignoreIO . removeFile) renamed
-      commit rest (final : renamed)
+ where
+  stage [] staged = commit (reverse staged) []
+  stage ((name, content) : rest) staged =
+    bracketOnError (writeTemp dir name content) (ignoreIO . removeFile) $ \tmp ->
+      stage rest ((tmp, dir </> name) : staged)
+  commit [] _ = pure ()
+  commit ((tmp, final) : rest) renamed = do
+    renameFile tmp final `onException` traverse_ (ignoreIO . removeFile) renamed
+    commit rest (final : renamed)
 
 -- | Write a file under a fresh hidden temporary name in the directory and
 -- return that name.
@@ -756,7 +1338,9 @@ reportAll checks = not . or <$> traverse (\(name, o) -> isFail o <$ report name 
 report :: Text -> Outcome -> IO ()
 report name = \case
   Pass -> putLine stdout (name <> ": PASS")
-  Fail why -> putLine stdout (name <> ": FAIL" <> (if Text.null why then "" else " " <> safeLine why))
+  Fail why ->
+    putLine stdout (name <> ": FAIL" <> (if Text.null why then "" else " "
+      <> safeLine why))
   Skip why -> putLine stdout (name <> ": SKIP(" <> safeLine why <> ")")
 
 -- | Print the vectors line: @vectors: PASS cycles=<n>@, or
@@ -784,28 +1368,31 @@ runSimulators sim prog nm vecs = do
   normal <- withinTime (compareRows (vecOutputs vecs) expected (simulateNormal nm rows))
   normalOk <- reportAll [("sim-normal", fromMaybe (Fail timedOut) normal)]
   pure (coreOk && normalOk)
-  where
-    seconds = simTimeoutSeconds sim
-    timedOut = "timeout after " <> showT seconds <> " s"
-    withinTime = evaluateWithin seconds
-    rows = fmap cycInputs (vecCycles vecs)
-    expected = fmap cycOutputs (vecCycles vecs)
-    coreOutcome = \case
-      Left e | isBudgetError e -> Skip ("inconclusive: " <> oneLine (errMessage e : errContext e))
-      r -> compareRows (vecOutputs vecs) expected r
+ where
+  seconds = simTimeoutSeconds sim
+  timedOut = "timeout after " <> showT seconds <> " s"
+  withinTime = evaluateWithin seconds
+  rows = fmap cycInputs (vecCycles vecs)
+  expected = fmap cycOutputs (vecCycles vecs)
+  coreOutcome = \case
+    Left e | isBudgetError e ->
+      Skip ("inconclusive: " <> oneLine (errMessage e : errContext e))
+    r -> compareRows (vecOutputs vecs) expected r
 
 -- | Evaluate an outcome, and with it the simulation it judges, in a thread
 -- of its own for at most the given number of seconds; 'Nothing' if it took
 -- longer, in which case the evaluation is stopped. Simulation is pure code
 -- built with @-fno-omit-yields@, so it can always be interrupted.
-evaluateWithin :: Int -> Outcome -> IO (Maybe Outcome)
+evaluateWithin :: Int -> a -> IO (Maybe a)
 evaluateWithin seconds outcome = do
   done <- newEmptyMVar
   worker <- forkIO (try (evaluate outcome) >>= putMVar done)
-  awakeTimeout seconds (readMVar done) >>= \case
-    Nothing -> Nothing <$ killThread worker
-    Just (Left e) -> throwIO (e :: SomeException)
-    Just (Right o) -> pure (Just o)
+  ( awakeTimeout seconds (readMVar done) >>= \case
+      Nothing -> pure Nothing
+      Just (Left e) -> throwIO (e :: SomeException)
+      Just (Right o) -> pure (Just o)
+    )
+    `finally` killThread worker
 
 -- | 'Pass' when the simulated rows equal the expected ones, else the first
 -- mismatch.
@@ -814,32 +1401,33 @@ compareRows ports expected = \case
   Left e -> Fail (oneLine (Text.lines (renderError e)))
   Right actual
     | length actual /= length expected ->
-        Fail ("expected " <> showT (length expected) <> " cycles, got " <> showT (length actual))
+        Fail ("expected " <> showT (length expected) <> " cycles, got "
+          <> showT (length actual))
     | otherwise ->
         maybe Pass Fail . listToMaybe . concat $
           zipWith3 rowMismatches [0 :: Int ..] expected actual
-  where
-    rowMismatches t want got
-      | length want /= length got =
-          [ "cycle="
-              <> showT t
-              <> " expected "
-              <> showT (length want)
-              <> " outputs, got "
-              <> showT (length got)
-          ]
-      | otherwise =
-          [ "cycle="
-              <> showT t
-              <> " port="
-              <> portName p
-              <> " expected="
-              <> renderValue e
-              <> " got="
-              <> renderValue a
-          | (p, e, a) <- zip3 ports want got
-          , e /= a
-          ]
+ where
+  rowMismatches t want got
+    | length want /= length got =
+        [ "cycle="
+            <> showT t
+            <> " expected "
+            <> showT (length want)
+            <> " outputs, got "
+            <> showT (length got)
+        ]
+    | otherwise =
+        [ "cycle="
+          <> showT t
+          <> " port="
+          <> portName p
+          <> " expected="
+          <> renderValue e
+          <> " got="
+          <> renderValue a
+        | (p, e, a) <- zip3 ports want got
+        , e /= a
+        ]
 
 renderValue :: Value -> Text
 renderValue = \case
@@ -858,7 +1446,8 @@ oneLine = Text.intercalate ", " . filter (not . Text.null) . fmap Text.strip
 -- directory and lint and run them there. Nothing is read back from the
 -- output directory, which others may be able to write to. Prints the
 -- target's two check lines.
-validateTarget :: Env -> ToolOptions -> Module -> Vectors -> Maybe FilePath -> Backend -> Pipe Bool
+validateTarget ::
+  Env -> ToolOptions -> Module -> Vectors -> Maybe FilePath -> Backend -> Pipe Bool
 validateTarget environment tools m vecs dir b = do
   traverse_ (`writeGroup` files) dir
   ExceptT . withSystemTempDirectory "gin-validate" $ \work -> runExceptT $ do
@@ -866,13 +1455,14 @@ validateTarget environment tools m vecs dir b = do
     liftIO $ do
       lint <- runCheck environment tools work (lintRuns b base)
       reportWithOutput (check "lint") lint
-      run <- runCheck environment tools work (testbenchRuns b base (length (vecCycles vecs)))
+      run <-
+        runCheck environment tools work (testbenchRuns b base (length (vecCycles vecs)))
       reportWithOutput (check "run") run
       pure (not (isFail (fst lint) || isFail (fst run)))
-  where
-    files = generatedFiles m (Just vecs) b
-    base = Text.unpack (unIdent (modName m))
-    check kind = targetName (backendTarget b) <> "-" <> kind
+ where
+  files = generatedFiles m (Just vecs) b
+  base = Text.unpack (unIdent (modName m))
+  check kind = targetName (backendTarget b) <> "-" <> kind
 
 -- | Print the tools line: each tool the targets' checks run, in the order
 -- they first run, with the first line it prints for its version flag.
@@ -883,21 +1473,22 @@ reportToolVersions environment tools backends = do
     for (nubOrd (concatMap toolsOf backends)) $ \name ->
       (Text.pack name <>) . (" " <>) <$> toolVersion work name
   putLine stdout (safeLine ("tools: " <> Text.intercalate ", " entries))
-  where
-    toolsOf b = fmap trTool (lintRuns b "gin" <> testbenchRuns b "gin" 0)
-    toolVersion work name =
-      resolveTool environment name >>= \case
-        Nothing -> pure "(not found)"
-        Just exe ->
-          runTool environment work (toolTimeoutSeconds tools) exe [versionFlag name] <&> \case
-            Finished _ out err ->
-              fromMaybe "(version unknown)" (firstLine out <|> firstLine err)
-            _ -> "(version unknown)"
-    versionFlag = \case
-      "iverilog" -> "-V"
-      "vvp" -> "-V"
-      _ -> "--version"
-    firstLine = find (not . Text.null) . fmap Text.strip . Text.lines
+ where
+  toolsOf b = fmap trTool (lintRuns b "gin" <> testbenchRuns b "gin" 0)
+  toolVersion work name =
+    resolveTool environment name >>= \case
+      Nothing -> pure "(not found)"
+      Just exe ->
+        runTool environment work (toolTimeoutSeconds tools) exe [versionFlag name]
+          <&> \case
+          Finished _ out err ->
+            fromMaybe "(version unknown)" (firstLine out <|> firstLine err)
+          _ -> "(version unknown)"
+  versionFlag = \case
+    "iverilog" -> "-V"
+    "vvp" -> "-V"
+    _ -> "--version"
+  firstLine = find (not . Text.null) . fmap Text.strip . Text.lines
 
 -- | One external tool invocation and how its result is judged.
 data ToolRun = ToolRun
@@ -914,14 +1505,14 @@ lintRuns b base = case backendTarget b of
   Verilog -> [verilator "1364-2005", iverilog "-g2005"]
   SystemVerilog -> [verilator "1800-2017", iverilog "-g2012"]
   VHDL -> [ToolRun "nvc" ["-M", "1g", "--std=2008", "-a", design] exitedCleanly]
-  where
-    design = base <.> backendFileExt b
-    verilator lang =
-      ToolRun
-        "verilator"
-        ["--lint-only", "-Wall", "--default-language", lang, design]
-        withoutWarnings
-    iverilog gen = ToolRun "iverilog" [gen, "-o", "/dev/null", design] exitedCleanly
+ where
+  design = base <.> backendFileExt b
+  verilator lang =
+    ToolRun
+      "verilator"
+      ["--lint-only", "-Wall", "--default-language", lang, design]
+      withoutWarnings
+  iverilog gen = ToolRun "iverilog" [gen, "-o", "/dev/null", design] exitedCleanly
 
 -- | The commands that build and run the testbench; the last one prints the
 -- testbench protocol.
@@ -935,14 +1526,14 @@ testbenchRuns b base cycles = case backendTarget b of
         ["-M", "1g", "--std=2008", "-a", design, testbench, "-e", base <> "_tb", "-r"]
         (passRule cycles)
     ]
-  where
-    ext = backendFileExt b
-    design = base <.> ext
-    testbench = base <> "_tb" <.> ext
-    icarus gen =
-      [ ToolRun "iverilog" [gen, "-o", "tb.vvp", design, testbench] exitedCleanly
-      , ToolRun "vvp" ["-n", "tb.vvp"] (passRule cycles)
-      ]
+ where
+  ext = backendFileExt b
+  design = base <.> ext
+  testbench = base <> "_tb" <.> ext
+  icarus gen =
+    [ ToolRun "iverilog" [gen, "-o", "tb.vvp", design, testbench] exitedCleanly
+    , ToolRun "vvp" ["-n", "tb.vvp"] (passRule cycles)
+    ]
 
 exitedCleanly :: ExitCode -> Text -> Text -> Maybe Text
 exitedCleanly code _ _ = case code of
@@ -956,7 +1547,8 @@ exitedCleanly code _ _ = case code of
 withoutWarnings :: ExitCode -> Text -> Text -> Maybe Text
 withoutWarnings code out err =
   exitedCleanly code out err
-    <|> if any ("%Warning" `Text.isInfixOf`) [out, err] then Just "reported warnings" else Nothing
+    <|> if any ("%Warning" `Text.isInfixOf`) [out
+      , err] then Just "reported warnings" else Nothing
 
 -- | The testbench pass rule of @docs/semantics.md@, on standard output
 -- only: exit 0, no line containing 'failMarker' or 'mismatchMarker', and
@@ -965,26 +1557,28 @@ withoutWarnings code out err =
 passRule :: Int -> ExitCode -> Text -> Text -> Maybe Text
 passRule cycles code out err =
   listToMaybe (catMaybes [markers, exitedCleanly code out err, passLine])
-  where
-    ls = Text.lines out
-    markers =
-      fmap
-        (\l -> "printed " <> clip (Text.strip l))
-        ( find (failMarker `Text.isInfixOf`) ls
-            <|> find (mismatchMarker `Text.isInfixOf`) ls
-        )
-    passLine = case filter (passMarker `Text.isInfixOf`) ls of
-      [l]
-        | passedCycles l == Just (showT cycles) -> Nothing
-        | otherwise ->
-            Just ("printed " <> clip (Text.strip l) <> ", expected cycles=" <> showT cycles)
-      found ->
-        Just ("printed " <> showT (length found) <> " " <> passMarker <> " lines, expected one")
-    passedCycles l = case Text.breakOn passCycles l of
-      (_, rest)
-        | Text.null rest -> Nothing
-        | otherwise -> Just (Text.takeWhile isDigit (Text.drop (Text.length passCycles) rest))
-    passCycles = passMarker <> " cycles="
+ where
+  ls = Text.lines out
+  markers =
+    fmap
+      (\l -> "printed " <> clip (Text.strip l))
+      ( find (failMarker `Text.isInfixOf`) ls
+          <|> find (mismatchMarker `Text.isInfixOf`) ls
+      )
+  passLine = case filter (passMarker `Text.isInfixOf`) ls of
+    [l]
+      | passedCycles l == Just (showT cycles) -> Nothing
+      | otherwise ->
+          Just ("printed " <> clip (Text.strip l) <> ", expected cycles=" <> showT cycles)
+    found ->
+      Just ("printed " <> showT (length found) <> " " <> passMarker
+        <> " lines, expected one")
+  passedCycles l = case Text.breakOn passCycles l of
+    (_, rest)
+      | Text.null rest -> Nothing
+      | otherwise ->
+        Just (Text.takeWhile isDigit (Text.drop (Text.length passCycles) rest))
+  passCycles = passMarker <> " cycles="
 
 -- | Print a check's line, then, on standard error, the output of the tool
 -- that failed it.
@@ -1001,27 +1595,28 @@ runCheck environment tools work runs = do
   case nubOrd [trTool r | (r, Nothing) <- resolved] of
     [] -> go [(r, exe) | (r, Just exe) <- resolved]
     missing -> pure (missingTools missing, Nothing)
-  where
-    missingTools names =
-      (if toolAllowMissing tools then Skip else Fail) $
-        (if length names == 1 then "missing tool: " else "missing tools: ")
-          <> Text.intercalate ", " (fmap Text.pack names)
-    seconds = toolTimeoutSeconds tools
-    go [] = pure (Pass, Nothing)
-    go ((r, exe) : rest) = do
-      result <- runTool environment work seconds exe (trArgs r)
-      let tool = Text.pack (trTool r)
-          failed why = (Fail (tool <> " " <> why), Nothing)
-      case result of
-        Finished code out err -> case trJudge r code out err of
-          Nothing -> go rest
-          Just why -> pure (Fail (tool <> " " <> why), Just (toolOutput r out err))
-        TimedOut -> pure (failed ("timed out after " <> showT seconds <> " s"))
-        NotStarted why -> pure (failed ("could not be started: " <> why))
-    toolOutput r out err =
-      Text.intercalate "\n" $
-        safeLine ("output of " <> Text.unwords (fmap Text.pack (trTool r : trArgs r)) <> ":")
-          : (excerpt out <> excerpt err)
+ where
+  missingTools names =
+    (if toolAllowMissing tools then Skip else Fail) $
+      (if length names == 1 then "missing tool: " else "missing tools: ")
+        <> Text.intercalate ", " (fmap Text.pack names)
+  seconds = toolTimeoutSeconds tools
+  go [] = pure (Pass, Nothing)
+  go ((r, exe) : rest) = do
+    result <- runTool environment work seconds exe (trArgs r)
+    let tool = Text.pack (trTool r)
+        failed why = (Fail (tool <> " " <> why), Nothing)
+    case result of
+      Finished code out err -> case trJudge r code out err of
+        Nothing -> go rest
+        Just why -> pure (Fail (tool <> " " <> why), Just (toolOutput r out err))
+      TimedOut -> pure (failed ("timed out after " <> showT seconds <> " s"))
+      NotStarted why -> pure (failed ("could not be started: " <> why))
+  toolOutput r out err =
+    Text.intercalate "\n" $
+      safeLine ("output of " <> Text.unwords (fmap Text.pack (trTool r : trArgs r))
+        <> ":")
+        : (excerpt out <> excerpt err)
 
 -- | At most the first 40 lines of a tool's output, each cut to 500
 -- characters, escaped ('safeLine') and indented.
@@ -1029,9 +1624,9 @@ excerpt :: Text -> [Text]
 excerpt t =
   fmap (("  " <>) . safeLine . cut) shown
     <> ["  ... (" <> showT (length rest) <> " more lines)" | not (null rest)]
-  where
-    (shown, rest) = splitAt 40 (Text.lines t)
-    cut l = if Text.length l > 500 then Text.take 500 l <> " ..." else l
+ where
+  (shown, rest) = splitAt 40 (Text.lines t)
+  cut l = if Text.length l > 500 then Text.take 500 l <> " ..." else l
 
 -- | The first executable of that name in the directories of the
 -- environment's @PATH@, as an absolute path.
@@ -1039,10 +1634,10 @@ resolveTool :: Env -> String -> IO (Maybe FilePath)
 resolveTool environment name =
   tryIO (findExecutablesInDirectories dirs name >>= traverse makeAbsolute . listToMaybe)
     >>= either (const (pure Nothing)) pure
-  where
-    dirs =
-      fmap Text.unpack . filter (not . Text.null) . Text.splitOn ":" . Text.pack $
-        fromMaybe "" (lookup "PATH" environment)
+ where
+  dirs =
+    fmap Text.unpack . filter (not . Text.null) . Text.splitOn ":" . Text.pack $
+      fromMaybe "" (lookup "PATH" environment)
 
 data ToolResult
   = Finished !ExitCode !Text !Text
@@ -1057,25 +1652,30 @@ data ToolResult
 -- killed with @SIGKILL@, which also reaches processes the tool started that
 -- are still running after it exited.
 runTool :: Env -> FilePath -> Int -> FilePath -> [String] -> IO ToolResult
-runTool environment work seconds exe args =
+runTool = runToolWith []
+
+-- Extra variables are generated by the driver (currently only the private
+-- proof directory), never copied from a policy or the caller's environment.
+runToolWith :: Env -> Env -> FilePath -> Int -> FilePath -> [String] -> IO ToolResult
+runToolWith extra environment work seconds exe args =
   either (NotStarted . ioMessage) id <$> tryIO (withCreateProcess spec supervise)
-  where
-    spec =
-      (proc exe args)
-        { cwd = Just work
-        , env = Just (toolEnvironment environment)
-        , std_in = CreatePipe
-        , std_out = CreatePipe
-        , std_err = CreatePipe
-        , close_fds = True
-        , create_group = True
-        }
-    supervise (Just hin) (Just hout) (Just herr) ph = do
-      -- The process group has the leader's id, which must be read before
-      -- the leader is waited for: afterwards the handle no longer has it.
-      group <- getPid ph
-      superviseTool seconds group ph hin hout herr
-    supervise _ _ _ ph = NotStarted "no pipes to the process" <$ terminateProcess ph
+ where
+  spec =
+    (proc exe args)
+      { cwd = Just work
+      , env = Just (extra <> toolEnvironment environment)
+      , std_in = CreatePipe
+      , std_out = CreatePipe
+      , std_err = CreatePipe
+      , close_fds = True
+      , create_group = True
+      }
+  supervise (Just hin) (Just hout) (Just herr) ph = do
+    -- The process group has the leader's id, which must be read before
+    -- the leader is waited for: afterwards the handle no longer has it.
+    group <- getPid ph
+    superviseTool seconds group ph hin hout herr
+  supervise _ _ _ ph = NotStarted "no pipes to the process" <$ terminateProcess ph
 
 -- | What a tool sees of the environment: @PATH@, @HOME@ and @TMPDIR@ when
 -- present, and @LC_ALL=C@ for predictable messages. Nothing else from the
@@ -1085,7 +1685,8 @@ toolEnvironment environment =
   [(name, v) | name <- ["PATH", "HOME", "TMPDIR"], Just v <- [lookup name environment]]
     <> [("LC_ALL", "C")]
 
-superviseTool :: Int -> Maybe Pid -> ProcessHandle -> Handle -> Handle -> Handle -> IO ToolResult
+superviseTool ::
+  Int -> Maybe Pid -> ProcessHandle -> Handle -> Handle -> Handle -> IO ToolResult
 superviseTool seconds group ph hin hout herr = do
   ignoreIO (hClose hin)
   outVar <- newEmptyMVar
@@ -1097,7 +1698,8 @@ superviseTool seconds group ph hin hout herr = do
   void (forkIO (tryIO (waitForProcess ph) >>= putMVar exitVar))
   let collect = (,,) <$> readMVar exitVar <*> readMVar outVar <*> readMVar errVar
   ( awakeTimeout seconds collect >>= \case
-      Just (Right code, out, err) -> pure (Finished code (decodeOutput out) (decodeOutput err))
+      Just (Right code, out, err) ->
+        pure (Finished code (decodeOutput out) (decodeOutput err))
       Just (Left e, _, _) -> pure (NotStarted (ioMessage e))
       Nothing -> do
         -- A member still holds the output open or the leader still runs,
@@ -1109,9 +1711,10 @@ superviseTool seconds group ph hin hout herr = do
         TimedOut <$ timeout (2 * 1000000) (readMVar exitVar)
     )
     `finally` traverse_ killThread readers
-  where
-    forkReader h var = forkIO (tryIO (BS.hGetContents h) >>= putMVar var . fromRight BS.empty)
-    decodeOutput = Text.decodeUtf8Lenient
+ where
+  forkReader h var =
+    forkIO (tryIO (BS.hGetContents h) >>= putMVar var . fromRight BS.empty)
+  decodeOutput = Text.decodeUtf8Lenient
 
 -- | Wait for an action that only waits (such as reading an 'MVar' another
 -- thread fills) for at most the given number of seconds of time the system
@@ -1125,18 +1728,18 @@ superviseTool seconds group ph hin hout herr = do
 -- and repeat.
 awakeTimeout :: Int -> IO a -> IO (Maybe a)
 awakeTimeout seconds act = go 0
-  where
-    limit = fromIntegral seconds :: Double
-    go spent
-      | spent >= limit = pure Nothing
-      | otherwise = do
-          let slice = min 1 (limit - spent)
-          start <- getMonotonicTime
-          timeout (ceiling (slice * 1000000)) act >>= \case
-            Just a -> pure (Just a)
-            Nothing -> do
-              elapsed <- subtract start <$> getMonotonicTime
-              go (spent + max slice (min elapsed (2 * slice)))
+ where
+  limit = fromIntegral seconds :: Double
+  go spent
+    | spent >= limit = pure Nothing
+    | otherwise = do
+        let slice = min 1 (limit - spent)
+        start <- getMonotonicTime
+        timeout (ceiling (slice * 1000000)) act >>= \case
+          Just a -> pure (Just a)
+          Nothing -> do
+            elapsed <- subtract start <$> getMonotonicTime
+            go (spent + max slice (min elapsed (2 * slice)))
 
 ----------------------------------------------------------------------
 -- Helpers
@@ -1146,7 +1749,8 @@ awakeTimeout seconds act = go 0
 ioMessage :: IOException -> Text
 ioMessage e =
   showT (ioe_type e)
-    <> if null (ioe_description e) then "" else " (" <> Text.pack (ioe_description e) <> ")"
+    <> if null (ioe_description e) then "" else " (" <> Text.pack (ioe_description e)
+      <> ")"
 
 tryIO :: IO a -> IO (Either IOException a)
 tryIO = try
@@ -1161,8 +1765,8 @@ tryNonAsync act =
   try act >>= \case
     Left e | isAsync e -> throwIO e
     r -> pure r
-  where
-    isAsync e = isJust (fromException e :: Maybe SomeAsyncException)
+ where
+  isAsync e = isJust (fromException e :: Maybe SomeAsyncException)
 
 -- | Write a line, with every character that could control the terminal or
 -- hide text replaced by @?@ (newlines and tabs are kept), as UTF-8 whatever
@@ -1173,8 +1777,20 @@ putLine h t = putText h (t <> "\n")
 
 putText :: Handle -> Text -> IO ()
 putText h t = BS.hPut h (Text.encodeUtf8 (Text.map visible t)) >> hFlush h
-  where
-    visible c
-      | c == '\n' || c == '\t' = c
-      | invisible c = '?'
-      | otherwise = c
+ where
+  visible c
+    | c == '\n' || c == '\t' = c
+    | invisible c = '?'
+    | otherwise = c
+
+-- Optics use the same field-name + L convention as Gin.Core.
+makeFieldLenses ''MemoryOptions
+makeFieldLenses ''Inputs
+makeFieldLenses ''Outputs
+makeFieldLenses ''SimOptions
+makeFieldLenses ''ToolOptions
+makeFieldLenses ''ValidateOptions
+makeFieldLenses ''ToolRun
+makePrisms ''Command
+makePrisms ''Outcome
+makePrisms ''ToolResult

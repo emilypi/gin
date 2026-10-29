@@ -131,13 +131,13 @@ entity m =
   ["entity " <> modText <> " is", "  port ("]
     <> fmap ("    " <>) (punctuate ";" ports)
     <> ["  );", "end entity " <> modText <> ";"]
-  where
-    modText = unIdent (modName m)
-    ports =
-      [port i "in" HBit | i <- [modClock m, modReset m]]
-        <> [port (netName n) "in" (netType n) | n <- modInputs m]
-        <> [port (netName n) "out" (netType n) | n <- fmap outNet (modOutputs m)]
-    port i dir ty = unIdent i <> " : " <> dir <> " " <> vhdlType ty
+ where
+  modText = unIdent (modName m)
+  ports =
+    [port i "in" HBit | i <- [modClock m, modReset m]]
+      <> [port (netName n) "in" (netType n) | n <- modInputs m]
+      <> [port (netName n) "out" (netType n) | n <- fmap outNet (modOutputs m)]
+  port i dir ty = unIdent i <> " : " <> dir <> " " <> vhdlType ty
 
 architecture :: Module -> [Text]
 architecture m =
@@ -146,37 +146,39 @@ architecture m =
     <> ["begin"]
     <> fmap indent (intercalate [""] (filter (not . null) sections))
     <> ["end architecture gin_rtl;"]
-  where
-    groups = zip [0 :: Int ..] (chunksOf processSize (dependencyOrder assigns))
-    assigns = [(n, e) | DAssign n e <- modDecls m]
-    groupOf = Map.fromList [(netName n, g) | (g, as) <- groups, (n, _) <- as]
-    -- names read through a signal by a register, an output or another process
-    external =
-      Set.fromList $
-        [i | ORef i <- [o | DReg _ _ o <- modDecls m] <> fmap outDriver (modOutputs m)]
-          <> [ i
-             | (g, as) <- groups
-             , (_, e) <- as
-             , ORef i <- exprOperands e
-             , Map.lookup i groupOf /= Just g
-             ]
-    -- the elements each process needs to hold every net it computes
-    needs = [sum [fromIntegral (hwWidth (netType n)) | (n, _) <- as] | (_, as) <- groups]
-    budgets = shareByNeed variableBudget needs
-    processes = zipWith (combinational external) budgets (fmap snd groups)
-    -- registers, and the combinational nets a process assigns to a signal
-    assigned = Set.unions (fmap snd processes)
-    signals =
-      [declNet d | d <- modDecls m, isRegister d || netName (declNet d) `Set.member` assigned]
-    isRegister = \case
-      DReg {} -> True
-      DAssign {} -> False
-    -- the combinational processes, then one block per register, then the outputs
-    sections =
-      fmap fst processes
-        <> [process m n r o | DReg n r o <- modDecls m]
-        <> [[assign (netName (outNet o)) (operand signalName (outDriver o)) | o <- modOutputs m]]
-    indent l = if Text.null l then l else "  " <> l
+ where
+  groups = zip [0 :: Int ..] (chunksOf processSize (dependencyOrder assigns))
+  assigns = [(n, e) | DAssign n e <- modDecls m]
+  groupOf = Map.fromList [(netName n, g) | (g, as) <- groups, (n, _) <- as]
+  -- names read through a signal by a register, an output or another process
+  external =
+    Set.fromList $
+      [i | ORef i <- [o | DReg _ _ o <- modDecls m] <> fmap outDriver (modOutputs m)]
+        <> [ i
+           | (g, as) <- groups
+           , (_, e) <- as
+           , ORef i <- exprOperands e
+           , Map.lookup i groupOf /= Just g
+           ]
+  -- the elements each process needs to hold every net it computes
+  needs = [sum [fromIntegral (hwWidth (netType n)) | (n, _) <- as] | (_, as) <- groups]
+  budgets = shareByNeed variableBudget needs
+  processes = zipWith (combinational external) budgets (fmap snd groups)
+  -- registers, and the combinational nets a process assigns to a signal
+  assigned = Set.unions (fmap snd processes)
+  signals =
+    [declNet d | d <-
+      modDecls m, isRegister d || netName (declNet d) `Set.member` assigned]
+  isRegister = \case
+    DReg {} -> True
+    DAssign {} -> False
+  -- the combinational processes, then one block per register, then the outputs
+  sections =
+    fmap fst processes
+      <> [process m n r o | DReg n r o <- modDecls m]
+      <> [[assign (netName (outNet o)) (operand signalName (outDriver o)) | o <-
+        modOutputs m]]
+  indent l = if Text.null l then l else "  " <> l
 
 -- | Most combinational nets computed by one process. nvc 1.23 needs time
 -- quadratic in the length of a process to compile it (measured with the run
@@ -256,11 +258,11 @@ variableBudget = 2 ^ (23 :: Int)
 -- wide nets through their signals.
 shareByNeed :: Int -> [Int] -> [Int]
 shareByNeed total needs = IntMap.elems (snd (foldl' give (total, IntMap.empty) ordered))
-  where
-    ordered = zip [length needs, length needs - 1 ..] (sortOn snd (zip [0 ..] needs))
-    give (remaining, shares) (left, (i, need)) =
-      let share = min need (remaining `div` left)
-       in (remaining - share, IntMap.insert i share shares)
+ where
+  ordered = zip [length needs, length needs - 1 ..] (sortOn snd (zip [0 ..] needs))
+  give (remaining, shares) (left, (i, need)) =
+    let share = min need (remaining `div` left)
+     in (remaining - share, IntMap.insert i share shares)
 
 -- | The window @d@ of a process given its share @budget@ of
 -- 'variableBudget': the largest @d@ such that its @d@ widest nets together
@@ -277,8 +279,8 @@ shareByNeed total needs = IntMap.elems (snd (foldl' give (total, IntMap.empty) o
 window :: Int -> [(Net, HExpr)] -> Int
 window budget assigns =
   max 1 (length (takeWhile (<= budget) (scanl1 (+) (sortOn Down widths))))
-  where
-    widths = [fromIntegral (hwWidth (netType n)) | (n, _) <- assigns] :: [Int]
+ where
+  widths = [fromIntegral (hwWidth (netType n)) | (n, _) <- assigns] :: [Int]
 
 -- | Consecutive groups of @k@ elements (the last may be shorter), for
 -- @k >= 1@.
@@ -325,60 +327,61 @@ combinational external budget assigns
   | null assigns = ([], Set.empty)
   | otherwise =
       ( ["process (all)"]
-          <> ["  " <> declare "variable" (slotName j) ty | (j, ty) <- Map.toList slotTypes]
+          <> ["  " <> declare "variable" (slotName j) ty | (j, ty) <-
+            Map.toList slotTypes]
           <> ["begin"]
           <> ["  " <> l | (k, (n, e)) <- indexed, l <- statements k n e]
           <> ["end process;"]
       , inSignal
       )
-  where
-    indexed = zip [0 :: Int ..] assigns
-    d = window budget assigns
-    position = Map.fromList [(netName n, k) | (k, (n, _)) <- indexed]
-    types = Map.fromList [(netName n, netType n) | (n, _) <- assigns]
-    -- does the net at position k read net i from its variable?
-    near k i = case Map.lookup i position of
-      Just p -> k > p && k - p < d
-      Nothing -> False
-    localReads =
-      [(k, i) | (k, (_, e)) <- indexed, ORef i <- exprOperands e, i `Map.member` position]
-    inSlot = Set.fromList [i | (k, i) <- localReads, near k i]
-    inSignal =
-      Set.fromList $
-        [i | (k, i) <- localReads, not (near k i)]
-          <> [ i
-             | (n, _) <- assigns
-             , let i = netName n
-             , i `Set.member` external || i `Set.notMember` inSlot
-             ]
-    slotTypes =
-      Map.fromListWith
-        widen
-        [(k `mod` d, netType n) | (k, (n, _)) <- indexed, netName n `Set.member` inSlot]
-    widen a b
-      | a == HBit && b == HBit = HBit
-      | otherwise = HVec (max (hwWidth a) (hwWidth b))
-    slotName j = "gin_v" <> showT j
-    slotPlace i = case (Map.lookup i position, Map.lookup i types) of
-      (Just k, Just ty) ->
-        let j = k `mod` d
-            v = slotName j
-         in Place v (within v (Map.findWithDefault ty j slotTypes) ty)
-      _ -> signalPlace i
-    -- a net of type ty held in variable v of type held
-    within v held ty
-      | held == ty = v
-      | otherwise = case ty of
-          HBit -> v <> "(0)"
-          HVec w -> v <> "(" <> showT (w - 1) <> " downto 0)"
-    statements k n e
-      | i `Set.member` inSlot =
-          [held <> " := " <> rhs <> ";"] <> [assign i held | i `Set.member` inSignal]
-      | otherwise = [assign i rhs]
-      where
-        i = netName n
-        held = placeValue (slotPlace i)
-        rhs = expr (\r -> if near k r then slotPlace r else signalPlace r) (netType n) e
+ where
+  indexed = zip [0 :: Int ..] assigns
+  d = window budget assigns
+  position = Map.fromList [(netName n, k) | (k, (n, _)) <- indexed]
+  types = Map.fromList [(netName n, netType n) | (n, _) <- assigns]
+  -- does the net at position k read net i from its variable?
+  near k i = case Map.lookup i position of
+    Just p -> k > p && k - p < d
+    Nothing -> False
+  localReads =
+    [(k, i) | (k, (_, e)) <- indexed, ORef i <- exprOperands e, i `Map.member` position]
+  inSlot = Set.fromList [i | (k, i) <- localReads, near k i]
+  inSignal =
+    Set.fromList $
+      [i | (k, i) <- localReads, not (near k i)]
+        <> [ i
+           | (n, _) <- assigns
+           , let i = netName n
+           , i `Set.member` external || i `Set.notMember` inSlot
+           ]
+  slotTypes =
+    Map.fromListWith
+      widen
+      [(k `mod` d, netType n) | (k, (n, _)) <- indexed, netName n `Set.member` inSlot]
+  widen a b
+    | a == HBit && b == HBit = HBit
+    | otherwise = HVec (max (hwWidth a) (hwWidth b))
+  slotName j = "gin_v" <> showT j
+  slotPlace i = case (Map.lookup i position, Map.lookup i types) of
+    (Just k, Just ty) ->
+      let j = k `mod` d
+          v = slotName j
+       in Place v (within v (Map.findWithDefault ty j slotTypes) ty)
+    _ -> signalPlace i
+  -- a net of type ty held in variable v of type held
+  within v held ty
+    | held == ty = v
+    | otherwise = case ty of
+        HBit -> v <> "(0)"
+        HVec w -> v <> "(" <> showT (w - 1) <> " downto 0)"
+  statements k n e
+    | i `Set.member` inSlot =
+        [held <> " := " <> rhs <> ";"] <> [assign i held | i `Set.member` inSignal]
+    | otherwise = [assign i rhs]
+   where
+    i = netName n
+    held = placeValue (slotPlace i)
+    rhs = expr (\r -> if near k r then slotPlace r else signalPlace r) (netType n) e
 
 -- | Combinational assignments reordered so that each follows every
 -- combinational net it reads, keeping the declaration order wherever the
@@ -387,19 +390,20 @@ combinational external budget assigns
 -- acyclic, and should it not be, a reference back into a cycle is ignored.
 dependencyOrder :: [(Net, HExpr)] -> [(Net, HExpr)]
 dependencyOrder assigns = reverse (snd (foldl' visit (IntSet.empty, []) indexed))
-  where
-    indexed = zip [0 :: Int ..] assigns
-    byName = Map.fromList [(netName n, x) | x@(_, (n, _)) <- indexed]
-    -- depth first: an assignment is emitted after its dependencies
-    visit st@(seen, done) (i, a@(_, e))
-      | i `IntSet.member` seen = st
-      | otherwise =
-          let (seen', done') =
-                foldl' visit (IntSet.insert i seen, done) (mapMaybe dependency (exprOperands e))
-           in (seen', a : done')
-    dependency = \case
-      ORef i -> Map.lookup i byName
-      OConst _ -> Nothing
+ where
+  indexed = zip [0 :: Int ..] assigns
+  byName = Map.fromList [(netName n, x) | x@(_, (n, _)) <- indexed]
+  -- depth first: an assignment is emitted after its dependencies
+  visit st@(seen, done) (i, a@(_, e))
+    | i `IntSet.member` seen = st
+    | otherwise =
+        let (seen', done') =
+              foldl' visit (IntSet.insert i seen
+                , done) (mapMaybe dependency (exprOperands e))
+         in (seen', a : done')
+  dependency = \case
+    ORef i -> Map.lookup i byName
+    OConst _ -> Nothing
 
 -- | One register: rising edge, synchronous active-high reset.
 process :: Module -> Net -> HLit -> Operand -> [Text]
@@ -440,9 +444,9 @@ expr place ty = \case
   HConcat a b -> arg a <> " & " <> arg b
   HZext w o -> call "resize" [arg o, showT w]
   HBitToVec o -> "unsigned'(0 => " <> arg o <> ")"
-  where
-    arg = operand (placeValue . place)
-    isHigh c = arg c <> " = " <> literal (HLitBit True)
+ where
+  arg = operand (placeValue . place)
+  isHigh c = arg c <> " = " <> literal (HLitBit True)
 
 binary :: HwType -> BinOp -> Text -> Text -> Text
 binary ty op a b = case op of
@@ -455,9 +459,10 @@ binary ty op a b = case op of
   BEq -> flag (infixOp "=")
   BUlt -> flag (infixOp "<")
   BUle -> flag (infixOp "<=")
-  where
-    infixOp sym = a <> " " <> sym <> " " <> b
-    flag cond = literal (HLitBit True) <> " when " <> cond <> " else " <> literal (HLitBit False)
+ where
+  infixOp sym = a <> " " <> sym <> " " <> b
+  flag cond =
+    literal (HLitBit True) <> " when " <> cond <> " else " <> literal (HLitBit False)
 
 -- | Slices take a net, slicing the object holding it (see 'Place'). A
 -- slice of a constant (which the netlist builder folds away) is folded here
@@ -466,8 +471,8 @@ slice :: (Ident -> Text) -> Natural -> Natural -> Operand -> Text
 slice object hi lo = \case
   ORef i -> object i <> "(" <> showT hi <> " downto " <> showT lo <> ")"
   OConst l -> literal (HLitVec width (value l `shiftR` fromIntegral lo))
-  where
-    width = fromInteger (max 0 (toInteger hi - toInteger lo + 1))
-    value = \case
-      HLitBit b -> if b then 1 else 0
-      HLitVec _ x -> x
+ where
+  width = fromInteger (max 0 (toInteger hi - toInteger lo + 1))
+  value = \case
+    HLitBit b -> if b then 1 else 0
+    HLitVec _ x -> x

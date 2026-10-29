@@ -68,11 +68,13 @@ theorem swapped : ∀ x y t, Mac.mac x y t = Mac.spec y x t := by
   simp only [Mac.spec, Nat.mul_comm]
 
 /-- The input is fixed rather than quantified. -/
-theorem fixedInput : ∀ t, Counter.counter (Signal.pure true) t = Counter.spec (Signal.pure true) t :=
+theorem fixedInput : ∀ t, Counter.counter (Signal.pure true) t = Counter.spec
+  (Signal.pure true) t :=
   fun t => Counter.counter_correct _ t
 
 /-- The right-hand side is not a constant applied to the inputs. -/
-theorem lambdaSpec : ∀ en t, Counter.counter en t = (fun en t => Counter.spec en t) en t :=
+theorem lambdaSpec : ∀ en t, Counter.counter en t = (fun en t => Counter.spec en t) en
+  t :=
   fun en t => Counter.counter_correct en t
 
 /-- A projection of a pair instead of a constant. -/
@@ -82,13 +84,15 @@ theorem notAConstant : ∀ en t, Counter.counter en t = (Counter.spec en t, ()).
 /-! ## Statements that do -/
 
 /-- A circuit without inputs. -/
-def ticks : Signal System (BitVec 4) := mealy (fun (s : BitVec 4) (_ : Bool) => (s + 1, s)) 0 (Signal.pure true)
+def ticks : Signal System (BitVec 4) := mealy (fun (s : BitVec 4) (_ : Bool) => (s + 1,
+  s)) 0 (Signal.pure true)
 
 /-- Its specification. -/
 def ticksSpec (t : Nat) : BitVec 4 := BitVec.ofNat 4 t
 
 theorem ticks_state (t : Nat) :
-    mealyState (fun (s : BitVec 4) (_ : Bool) => (s + 1, s)) 0 (Signal.pure true : Signal System Bool) t
+    mealyState (fun (s : BitVec 4) (_ : Bool) => (s + 1, s)) 0 (Signal.pure true :
+      Signal System Bool) t
       = BitVec.ofNat 4 t := by
   induction t with
   | zero => rfl
@@ -141,15 +145,19 @@ end GinTest.Certificate
 -- with full names, and the specification's definition is listed.
 /--
 info: { theorem_ := "Counter.counter_correct",
-  statement := "forall (en : Gin.Signal Gin.System Bool) (t : Nat), Counter.counter en t = Counter.spec en t",
+  statement := "forall (en : Gin.Signal Gin.System Bool) (t : Nat), Counter.counter en
+t = Counter.spec en t",
   axioms := ["propext"],
   implAxioms := [],
   specDefinitions := [{ name := "Counter.spec",
-                        body := "Counter.spec : Gin.Signal Gin.System Bool -> Nat -> BitVec 8 := fun (en : Gin.Signal Gin.System Bool) (t : Nat) => BitVec.ofNat 8 (@List.countP Nat (fun (i : Nat) => en i) (List.range t))" }] }
+                        body := "Counter.spec : Gin.Signal Gin.System Bool -> Nat ->
+BitVec 8 := fun (en : Gin.Signal Gin.System Bool) (t : Nat) => BitVec.ofNat 8
+(@List.countP Nat (fun (i : Nat) => en i) (List.range t))" }] }
 -/
 #guard_msgs in
 run_meta do
-  let c ← Gin.Export.certify ``Counter.counter_correct ``Counter.counter [``Counter.counter]
+  let c ← Gin.Export.certify ``Counter.counter_correct ``Counter.counter
+    [``Counter.counter]
   Lean.logInfo m!"{repr c}"
 
 -- [lean-specdefs] Each example lists exactly its specification: the DSL
@@ -179,7 +187,8 @@ run_meta do
     "GinTest.Certificate.Mode.count", "GinTest.Certificate.Mode.hold",
     "GinTest.Certificate.Mode.casesOn", "GinTest.Certificate.Mode.step.match_1",
     "GinTest.Certificate.Mode.step", "GinTest.Certificate.base",
-    "GinTest.Certificate.left", "GinTest.Certificate.right", "GinTest.Certificate.diamond"]
+    "GinTest.Certificate.left", "GinTest.Certificate.right",
+      "GinTest.Certificate.diamond"]
   unless names == expected do
     throwError "spec definitions {names}, expected {expected}"
   let body (n : String) := (defs.find? (·.name == n)).map (·.body)
@@ -187,7 +196,8 @@ run_meta do
       "GinTest.Certificate.Mode.count : GinTest.Certificate.Mode" do
     throwError "constructor shown as {body "GinTest.Certificate.Mode.count"}"
   unless body "GinTest.Certificate.base" == some
-      "GinTest.Certificate.base : Nat -> Nat := fun (n : Nat) => @HMod.hMod Nat Nat Nat (@instHMod Nat Nat.instMod) n 256" do
+      "GinTest.Certificate.base : Nat -> Nat := fun (n : Nat) => @HMod.hMod Nat Nat Nat \
+        (@instHMod Nat Nat.instMod) n 256" do
     throwError "base shown as {body "GinTest.Certificate.base"}"
   -- deterministic: the same closure, computed again, in the same order
   let again ← Gin.Export.specDefinitions (← Lean.getEnv)
@@ -198,7 +208,8 @@ run_meta do
 -- lists nothing; the top definition itself is never listed.
 run_meta do
   let defs ← Gin.Export.specDefinitions (← Lean.getEnv)
-    (Lean.mkAppN (.const ``Counter.counter []) #[.const ``Gin.lift [], .const ``List.range []])
+    (Lean.mkAppN (.const ``Counter.counter []) #[.const ``Gin.lift [], .const
+      ``List.range []])
     ``Counter.counter
   unless defs.isEmpty do throwError "listed {defs.map (·.name)}"
 
@@ -221,13 +232,15 @@ run_meta do
     ["theorem GinTest.Certificate.callsImplementation", shape,
      "GinTest.Certificate.callsImpl refers to Counter.counter"]
   GinTest.expectError (certify ``swapped ``Mac.mac [``Mac.mac])
-    ["theorem GinTest.Certificate.swapped", shape, "right-hand side is not Mac.spec applied"]
+    ["theorem GinTest.Certificate.swapped", shape,
+      "right-hand side is not Mac.spec applied"]
   GinTest.expectError (certify ``fixedInput counter [counter])
     ["theorem GinTest.Certificate.fixedInput", shape, "left-hand side"]
   GinTest.expectError (certify ``lambdaSpec counter [counter])
     ["theorem GinTest.Certificate.lambdaSpec", shape, "not a constant"]
   GinTest.expectError (certify ``notAConstant counter [counter])
-    ["theorem GinTest.Certificate.notAConstant", shape, "right-hand side is not Prod.fst applied"]
+    ["theorem GinTest.Certificate.notAConstant", shape,
+      "right-hand side is not Prod.fst applied"]
   GinTest.expectError (certify ``unrelated counter [counter])
     ["theorem GinTest.Certificate.unrelated", shape]
   -- a correct theorem about another design
@@ -239,19 +252,22 @@ run_meta do
 open GinTest.Certificate in
 run_meta do
   let c ← Gin.Export.certify ``ticks_correct ``ticks [``ticks]
-  unless c.statement == "forall (t : Nat), GinTest.Certificate.ticks t = GinTest.Certificate.ticksSpec t" do
+  unless c.statement ==
+    "forall (t : Nat), GinTest.Certificate.ticks t = GinTest.Certificate.ticksSpec t" do
     throwError "statement {c.statement}"
   unless c.specDefinitions.map (·.name) == ["GinTest.Certificate.ticksSpec"] do
     throwError "spec definitions {c.specDefinitions.map (·.name)}"
   for (thm, top) in [(``Counter.counter_correct, ``Counter.counter),
-      (``Detector.detector_correct, ``Detector.detector), (``Mac.mac_correct, ``Mac.mac)] do
+      (``Detector.detector_correct, ``Detector.detector), (``Mac.mac_correct,
+        ``Mac.mac)] do
     let spec ← Gin.Export.checkShape thm top (← Lean.getConstInfo thm).type
     unless spec == top.getPrefix ++ `spec do throwError "{thm}: specification {spec}"
 
 run_meta do
   let certify := Gin.Export.certify
   -- an axiom in the proof
-  GinTest.expectError (certify ``GinTest.Certificate.fromAxiom ``Counter.counter [``Counter.counter])
+  GinTest.expectError (certify ``GinTest.Certificate.fromAxiom ``Counter.counter
+    [``Counter.counter])
     ["theorem GinTest.Certificate.fromAxiom", "GinTest.Certificate.counterClaim"]
   -- an axiom in an exported definition the theorem does not depend on
   GinTest.expectError
@@ -267,11 +283,13 @@ run_meta do
 #guard Gin.Export.allowedNote == "Allowed axioms: propext, Classical.choice, Quot.sound."
 run_meta do
   GinTest.expectError
-    (Gin.Export.certify ``GinTest.Certificate.fromAxiom ``Counter.counter [``Counter.counter])
+    (Gin.Export.certify ``GinTest.Certificate.fromAxiom ``Counter.counter
+      [``Counter.counter])
     ["disallowed axioms: GinTest.Certificate.counterClaim. " ++ Gin.Export.allowedNote]
 
 -- Hints for the axioms that usually signal an unchecked proof.
 #guard Gin.Export.axiomHint ``sorryAx == " (the proof is incomplete: it uses sorry)"
-#guard GinTest.containsStr (Gin.Export.axiomHint `Foo.bar._native.native_decide.ax_1_1) "native_decide"
+#guard GinTest.containsStr (Gin.Export.axiomHint `Foo.bar._native.native_decide.ax_1_1)
+  "native_decide"
 #guard GinTest.containsStr (Gin.Export.axiomHint ``Lean.ofReduceBool) "native_decide"
 #guard Gin.Export.axiomHint ``propext == ""

@@ -21,6 +21,18 @@ tested-with:        GHC ==9.14.1
 extra-doc-files:
   README.md
   LICENSE.md
+  docs/optimization.md
+  docs/memory-contract.md
+extra-source-files:
+  fourmolu.yaml
+  test/hdl/memory_tb.sv
+  test/check-types.sh
+  test/check-width.sh
+  test/compile-fail/*.hs
+  test/compile-pass/*.hs
+  examples/optimization/*.json
+  examples/memory-traffic.json
+  examples/memory-words.json
 
 common warnings
   ghc-options:
@@ -38,9 +50,6 @@ common lang
 library
   import:           warnings, lang
   hs-source-dirs:   src
-  other-modules:
-    Gin.Core.Optics
-    Gin.Core.Utils
   exposed-modules:
     Gin.Backend.SystemVerilog
     Gin.Backend.Types
@@ -49,22 +58,32 @@ library
     Gin.Backend.VHDL
     Gin.Backend.VHDL.Testbench
     Gin.Certificate
+    Gin.Core.Bounded
     Gin.Core.Check
     Gin.Core.Json
     Gin.Core.Normal
+    Gin.Core.Optics
     Gin.Core.Prim
     Gin.Core.Syntax
     Gin.Core.Type
+    Gin.Core.Utils
     Gin.Core.Value
     Gin.Driver
     Gin.Error
+    Gin.Evaluate.Memory
     Gin.Hash
     Gin.Limits
+    Gin.Memory
     Gin.Netlist.Build
     Gin.Netlist.Types
     Gin.Normalize
     Gin.Normalize.Internal
+    Gin.Optimize.Circuit
+    Gin.Optimize.Evidence
+    Gin.Optimize.Policy
+    Gin.Optimize.Portfolio
     Gin.Sim
+    Gin.Schedule
     Gin.Sim.Prim
     Gin.Vectors
 
@@ -75,6 +94,7 @@ library
     , containers            >=0.6  && <0.9
     , directory             >=1.3  && <1.4
     , filepath              >=1.4  && <1.6
+    , hkd
     , lens                  >=5.3  && <5.4
     , mtl                   >=2.3  && <2.4
     , optparse-applicative  >=0.18 && <0.20
@@ -83,8 +103,10 @@ library
     , template-haskell      >=2.22 && <2.25
     , temporary             >=1.3  && <1.4
     , text                  >=2.0  && <2.2
+    , transformers          >=0.6 && <0.7
     , unix                  >=2.8  && <2.9
     , vector                >=0.13 && <0.14
+    , yolk                  >=0.1 && <0.2
 
 executable gin
   import:           warnings, lang
@@ -107,17 +129,25 @@ test-suite gin-test
     Gin.Backend.VerilogSpec
     Gin.Backend.VHDLSpec
     Gin.CertificateSpec
+    Gin.Core.BoundedSpec
     Gin.Core.CheckSpec
     Gin.Core.JsonSpec
     Gin.DriverSpec
     Gin.E2ESpec
+    Gin.Evaluate.MemorySpec
     Gin.Examples
     Gin.ExamplesSpec
     Gin.HashSpec
     Gin.LeanExamplesSpec
+    Gin.MemorySpec
     Gin.Netlist.BuildSpec
     Gin.NormalizeSpec
+    Gin.Optimize.CircuitSpec
+    Gin.Optimize.EvidenceSpec
+    Gin.Optimize.PolicySpec
+    Gin.Optimize.PortfolioSpec
     Gin.SimSpec
+    Gin.ScheduleSpec
     Gin.TestUtil
 
   build-depends:
@@ -134,3 +164,4 @@ test-suite gin-test
     , QuickCheck            >=2.14 && <2.17
     , temporary
     , text
+    , yolk

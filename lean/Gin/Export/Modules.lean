@@ -62,7 +62,8 @@ def isDslConst (env : Environment) (c : Name) : Bool :=
 /-- Project modules named like toolchain modules, given each imported
 module with the file it was loaded from. A toolchain module must come from
 `libDir`, the toolchain's library directory. -/
-def shadowedCoreModules (libDir : System.FilePath) (modules : Array (Name × System.FilePath)) :
+def shadowedCoreModules (libDir : System.FilePath) (modules : Array (Name ×
+  System.FilePath)) :
     Array Name :=
   let prefix_ := libDir.toString ++ "/"
   modules.filterMap fun (m, file) =>
@@ -81,7 +82,8 @@ def initializers (env : Environment) : Array (Name × Array Name) := Id.run do
     let idx : ModuleIdx := i
     let mut decls : Array Name := #[]
     for attr in [regularInitAttr, builtinInitAttr] do
-      for (d, _) in attr.ext.getModuleEntries env idx ++ attr.ext.getModuleIREntries env idx do
+      for (d, _) in attr.ext.getModuleEntries env idx ++ attr.ext.getModuleIREntries
+        env idx do
         unless decls.contains d do
           decls := decls.push d
     unless decls.isEmpty do
@@ -95,7 +97,8 @@ def isRejectModule (m : Name) : Bool := m.getRoot == `GinReject
 order of `env.header.moduleNames`; empty if `m` is not imported in `env`. -/
 def importClosure (env : Environment) (m : Name) : Array Name := Id.run do
   let names := env.header.moduleNames
-  let idx : Std.HashMap Name Nat := names.size.fold (init := {}) fun i _ acc => acc.insert names[i] i
+  let idx : Std.HashMap Name Nat := names.size.fold (init := {}) fun i _ acc =>
+    acc.insert names[i] i
   let mut seen : Std.HashSet Name := {}
   let mut todo := #[m]
   while h : todo.size > 0 do

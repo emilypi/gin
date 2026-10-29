@@ -26,7 +26,8 @@ def viaImplementedBy (x : Signal System (BitVec 8)) : Signal System (BitVec 8) :
 @[extern "gin_test_inc"] def incExtern (x : BitVec 8) : BitVec 8 := x + 1
 
 /-- Uses `incExtern`. -/
-def viaExtern (x : Signal System (BitVec 8)) : Signal System (BitVec 8) := lift incExtern x
+def viaExtern (x : Signal System (BitVec 8)) : Signal System (BitVec 8) := lift
+  incExtern x
 
 /-- Adds one. -/
 def incSlow (x : BitVec 8) : BitVec 8 := x + 1
